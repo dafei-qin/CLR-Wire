@@ -1,11 +1,11 @@
-resume_training: false
-from_start: true
+resume_training: true
+from_start: false
 
 epochs: 400
-batch_size: 1024
+batch_size: 768
 lr: 0.0003
-num_workers: 64
-num_gpus: 8
+num_workers: 48
+num_gpus: 6
 
 grad_accum_every: 2
 ema_update_every: 20
@@ -15,16 +15,16 @@ val_every_epoch: 1
 save_every_epoch: 10
 log_every_step: 10
 
-use_wandb_tracking: false
-wandb_project_name: curve_vae
-wandb_run_name: test
+use_wandb_tracking: true
+wandb_project_name: CLR-wire
+wandb_run_name: try_run_2
 
 
 DATA:
-    train_set_file_path: /studio/datasets/abc/dataset/curve_dataset/curve_train_dataset.npy
-    val_set_file_path: /studio/datasets/abc/dataset/curve_dataset/curve_val_dataset.npy
+    train_set_file_path: /home/qindafei/CAD/curve_wireframe_split/edge_points_concat_train.npy
+    val_set_file_path: /home/qindafei/CAD/curve_wireframe_split/edge_points_concat_val.npy
     replication: 1
-    recon_dir_path: /studio/datasets/abc/recon/curves
+    recon_dir_path: /home/qindafei/CAD/curve_wireframe_split/edge_points_concat_train.npy
 
 MODEL:
     in_channels: 3
@@ -50,4 +50,4 @@ MODEL:
     kl_weight: 0.000005
 
     checkpoint_folder: checkpoints/checkpoints_curve_vae
-    checkpoint_file_name: model-40.pt
+    checkpoint_file_name: model-04.pt

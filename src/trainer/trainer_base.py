@@ -6,6 +6,7 @@ from torch.nn import Module
 from torch.utils.data import Dataset, DataLoader
 from torch.optim.lr_scheduler import LRScheduler
 from contextlib import nullcontext
+import time
 
 from beartype import beartype
 from beartype.typing import Optional, Type
@@ -75,6 +76,8 @@ class BaseTrainer(Module):
         **kwargs  
     ):
         super().__init__()
+        self.start_time = time.time()  # Initialize start time for training
+        
         # experiment tracker
 
         self.use_wandb_tracking = use_wandb_tracking
@@ -379,7 +382,13 @@ class BaseTrainer(Module):
                         total_val_loss += (loss / num_val_batches)
 
                 self.print(get_current_time() + f' valid loss: {total_val_loss:.3f}')    
-
+                # Calculate and print estimated finishing time
+                steps_remaining = self.num_train_steps - step
+                time_per_step = (time.time() - self.start_time) / (step + 1)
+                estimated_time_remaining = steps_remaining * time_per_step
+                estimated_finish_time = time.time() + estimated_time_remaining
+                self.print(get_current_time() + f' estimated finish time: {time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(estimated_finish_time))}')
+                
                 self.log(val_loss = total_val_loss)
 
             self.wait()
