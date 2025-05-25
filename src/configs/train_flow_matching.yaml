@@ -14,7 +14,7 @@ val_every_epoch: 2
 save_every_epoch: 1
 log_every_step: 20
 
-use_wandb_tracking: false
+use_wandb_tracking: true
 wandb_project_name: flow_matching
 wandb_run_name: test
 

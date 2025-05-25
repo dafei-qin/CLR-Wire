@@ -134,12 +134,38 @@ def interpolate_2d(
     # Calculate interpolation weights
     alpha = t[..., 0] - left.float()
     beta = t[..., 1] - top.float()
+    alpha = alpha.unsqueeze(1)
+    beta = beta.unsqueeze(1)
 
-    # Get values at the four corners
-    left_top = data[..., left, top]
-    right_top = data[..., right, top]
-    left_bottom = data[..., left, bottom]
-    right_bottom = data[..., right, bottom]
+    # Get values at the four corners using torch.gather to maintain correct shapes
+    bs, c, h, w = data.shape
+    
+    # Flatten spatial dimensions for gathering
+    left_flat = left.view(bs, -1)  # (bs, h*w)
+    right_flat = right.view(bs, -1)
+    top_flat = top.view(bs, -1)
+    bottom_flat = bottom.view(bs, -1)
+    
+    # Create linear indices for 2D gathering
+    left_top_idx = left_flat * w + top_flat  # (bs, h*w)
+    right_top_idx = right_flat * w + top_flat
+    left_bottom_idx = left_flat * w + bottom_flat
+    right_bottom_idx = right_flat * w + bottom_flat
+    
+    # Reshape data for gathering: (bs, c, h*w)
+    data_flat = data.view(bs, c, -1)
+    
+    # Expand indices for all channels: (bs, c, h*w)
+    left_top_idx = left_top_idx.unsqueeze(1).expand(-1, c, -1)
+    right_top_idx = right_top_idx.unsqueeze(1).expand(-1, c, -1)
+    left_bottom_idx = left_bottom_idx.unsqueeze(1).expand(-1, c, -1)
+    right_bottom_idx = right_bottom_idx.unsqueeze(1).expand(-1, c, -1)
+    
+    # Gather values and reshape back to (bs, c, h, w)
+    left_top = torch.gather(data_flat, 2, left_top_idx).view(bs, c, h, w)
+    right_top = torch.gather(data_flat, 2, right_top_idx).view(bs, c, h, w)
+    left_bottom = torch.gather(data_flat, 2, left_bottom_idx).view(bs, c, h, w)
+    right_bottom = torch.gather(data_flat, 2, right_bottom_idx).view(bs, c, h, w)
 
     # Perform bilinear interpolation
     interpolated = (

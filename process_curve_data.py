@@ -422,9 +422,20 @@ def process_curve_data(data_path):
 
 
 if __name__ == "__main__":
-    data_path = ['../abc_split/points_train.npy', '../abc_split/points_val.npy', '../abc_split/points_test.npy']    
+    '''
+    This script processes the curve data and saves the normalized curves and vertices.
+    '''
+    # data_path = ['../abc_split/points_train.npy', '../abc_split/points_val.npy', '../abc_split/points_test.npy']    
+    data_path = ['../curve_wireframe_split/edge_points_concat_train.npy', '../curve_wireframe_split/edge_points_concat_val.npy', '../curve_wireframe_split/edge_points_concat_test.npy']    
     
+
+    # for path in data_path:
+    #     normalized_curves, vertices = process_curve_data(path)
+    #     np.save(path.replace('points', 'normalized_points'), normalized_curves)
+    #     np.save(path.replace('points', 'vertices'), vertices)
+
+
     for path in data_path:
         normalized_curves, vertices = process_curve_data(path)
-        np.save(path.replace('points', 'normalized_points'), normalized_curves)
-        np.save(path.replace('points', 'vertices'), vertices)
+        np.save(path.replace('edge_points_concat', 'normalized_edge_points_concat'), normalized_curves)
+        # np.save(path.replace('points', 'vertices'), vertices)

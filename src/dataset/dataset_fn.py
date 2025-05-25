@@ -64,6 +64,26 @@ def curve_yz_scale(vertices, interval=(0.9, 1.1), jitter=0.1):
     
     return vertices
 
+def surface_scale_and_jitter(vertices, interval=(0.9, 1.1), jitter=0.1):
+    scale_ratio = np.random.rand(3)
+    scale_ratio = scale_ratio[np.newaxis, np.newaxis, :]
+    vertices *= scale_ratio * (interval[1] - interval[0]) + interval[0]
+   
+    shift = np.random.rand(3) * 2 - 1
+    shift = shift[np.newaxis, np.newaxis, :]
+
+    vertices += shift * jitter
+    
+    return vertices
+
+def surface_rotate(vertices):
+    theta_x, theta_y, theta_z = np.random.rand(3) * 360
+    rotation_matrix = rotation_matrix_x(theta_x) @ rotation_matrix_y(theta_y) @ rotation_matrix_z(theta_z)
+    vertices = vertices @ rotation_matrix.T
+    return vertices
+
+
+
 def scale_and_jitter_wireframe_set(vertices, interval=(0.85, 1.15), jitter=0.1):
     scale_ratio = np.random.rand()
     vertices *= scale_ratio * (interval[1] - interval[0]) + interval[0]
@@ -71,7 +91,7 @@ def scale_and_jitter_wireframe_set(vertices, interval=(0.85, 1.15), jitter=0.1):
     shift = np.random.rand(3) * 2 - 1
     vertices += shift * jitter
     
-    vertices = np.clip(vertices, -0.999, 0.999)
+    # vertices = np.clip(vertices, -0.999, 0.999)
     
     return vertices
 

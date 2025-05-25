@@ -11,6 +11,8 @@ from src.dataset.dataset_fn import (
     scale_and_jitter_pc, scale_and_jitter_wireframe_set, curve_yz_scale,
     random_viewpoint, hidden_point_removal,
     aug_pc_by_idx,
+    surface_scale_and_jitter,
+    surface_rotate,
 )
 
 class LatentDataset(Dataset):
@@ -258,3 +260,22 @@ class CurveDataset(Dataset):
         vertices = torch.from_numpy(vertices).to(torch.float32)
 
         return vertices
+
+class SurfaceDataset(CurveDataset):
+    def __init__(self, dataset_file_path, transform=surface_scale_and_jitter, is_train=True, replication=1, num_samples=32):
+        super().__init__(dataset_file_path, transform, is_train, replication)
+        self.num_samples = num_samples
+
+    def __getitem__(self, idx):
+        vertices = super().__getitem__(idx)
+        if vertices.shape[0] > self.num_samples:
+            assert vertices.shape[1] % self.num_samples == 0
+            step = vertices.shape[1] // self.num_samples
+            vertices = vertices[::step, ::step]
+        elif vertices.shape[0] < self.num_samples:
+            raise ValueError(f'vertices.shape[0] ({vertices.shape[0]}) < num_samples ({self.num_samples})')
+        else:
+            pass
+        return vertices
+
+

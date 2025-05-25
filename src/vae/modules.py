@@ -14,6 +14,8 @@ from x_transformers.x_transformers import AttentionLayers
 from diffusers.models.unets.unet_1d_blocks import ResConvBlock, SelfAttention1d, Upsample1d
 from diffusers.models.autoencoders.vae import DiagonalGaussianDistribution
 from diffusers.utils import BaseOutput
+from diffusers.models.unets.unet_2d_blocks import ResnetBlock2D, UpDecoderBlock2D
+from diffusers.models.attention_processor import Attention
 
 import einx
 from einops import reduce, pack, rearrange
@@ -276,7 +278,16 @@ class MPConv(torch.nn.Module):
     def __init__(self, in_channels, out_channels, kernel):
         super().__init__()
         self.out_channels = out_channels
-        self.weight = torch.nn.Parameter(torch.randn(out_channels, in_channels, *kernel))
+        # Ensure kernel is a tuple or list of two integers for 2D conv
+        if len(kernel) == 0:
+             # Handle case where kernel is empty for MLP-like operation
+             self.kernel_size = None
+             self.weight = torch.nn.Parameter(torch.randn(out_channels, in_channels))
+        elif len(kernel) == 2:
+            self.kernel_size = tuple(kernel)
+            self.weight = torch.nn.Parameter(torch.randn(out_channels, in_channels, *self.kernel_size))
+        else:
+            raise ValueError("Kernel for MPConv must be empty or a tuple/list of 2 integers for 2D convolution.")
 
     def forward(self, x, gain=1):
         w = self.weight.to(torch.float32)
@@ -286,10 +297,16 @@ class MPConv(torch.nn.Module):
         w = normalize(w) # traditional weight normalization
         w = w * (gain / np.sqrt(w[0].numel())) # magnitude-preserving scaling
         w = w.to(x.dtype)
-        if w.ndim == 2:
-            return x @ w.t()
+        
+        if self.kernel_size is None: # Handle MLP-like operation
+             assert w.ndim == 2
+             return x @ w.t()
+
         assert w.ndim == 4
-        return torch.nn.functional.conv2d(x, w, padding=(w.shape[-1]//2,))
+        # Correct padding for 2D convolution (assuming odd kernel size for simplicity)
+        padding_h = self.kernel_size[0] // 2
+        padding_w = self.kernel_size[1] // 2
+        return torch.nn.functional.conv2d(x, w, padding=(padding_h, padding_w))
 
 
 class PointEmbed(nn.Module):
@@ -355,6 +372,24 @@ class RandomFourierEmbed(Module):
         return fourier_embed
 
 
+class RandomFourierEmbed2D(Module):
+    def __init__(self, dim):
+        super().__init__()
+        assert divisible_by(dim, 4)
+        self.dim = dim
+        self.register_buffer('weights', torch.randn(dim // 4))
+
+    def forward(
+        self,
+        times, # (b, n)
+    ): 
+        # output shape is (b, n, self.dim + 1)
+
+        freqs = einx.multiply('... i, j -> ... i j', times, self.weights) * 2 * torch.pi
+        fourier_embed, _ = pack((times, freqs.sin(), freqs.cos()), 'b n m *') # 2D patch 
+        # fourier_embed = rearrange(fourier_embed, 'b n m d -> b d n m')
+        return fourier_embed
+    
 
 class UpBlock1D(nn.Module):
     def __init__(self, in_channels, out_channels, mid_channels=None):
@@ -409,6 +444,64 @@ class UNetMidBlock1D(nn.Module):
             hidden_states = resnet(hidden_states)
             hidden_states = attn(hidden_states)
 
+        return hidden_states
+
+
+class UNetMidBlock2D(nn.Module):
+    def __init__(self, mid_channels: int, in_channels: int, out_channels: Optional[int] = None):
+        super().__init__()
+
+        out_channels = in_channels if out_channels is None else out_channels
+
+        # there is always at least one resnet
+        resnets = [
+            ResnetBlock2D(in_channels=in_channels, out_channels=mid_channels, temb_channels=None),
+            ResnetBlock2D(in_channels=mid_channels, out_channels=mid_channels, temb_channels=None),
+            ResnetBlock2D(in_channels=mid_channels, out_channels=mid_channels, temb_channels=None),
+            ResnetBlock2D(in_channels=mid_channels, out_channels=mid_channels, temb_channels=None),
+            ResnetBlock2D(in_channels=mid_channels, out_channels=mid_channels, temb_channels=None),
+            ResnetBlock2D(in_channels=mid_channels, out_channels=out_channels, temb_channels=None),
+        ]
+        attentions = [
+            Attention(query_dim=mid_channels, heads=mid_channels // 32),
+            Attention(query_dim=mid_channels, heads=mid_channels // 32),
+            Attention(query_dim=mid_channels, heads=mid_channels // 32),
+            Attention(query_dim=mid_channels, heads=mid_channels // 32),
+            Attention(query_dim=mid_channels, heads=mid_channels // 32),
+            Attention(query_dim=out_channels, heads=out_channels // 32),
+        ]
+
+        self.attentions = nn.ModuleList(attentions)
+        self.resnets = nn.ModuleList(resnets)
+
+    def forward(self, hidden_states: torch.FloatTensor, temb: Optional[torch.FloatTensor] = None) -> torch.FloatTensor:
+        for attn, resnet in zip(self.attentions, self.resnets):
+            hidden_states = resnet(hidden_states, temb)
+            hidden_states = attn(hidden_states)
+
+        return hidden_states
+
+
+class UpBlock2D(nn.Module):
+    def __init__(self, in_channels, out_channels, mid_channels=None):
+        super().__init__()
+        mid_channels = in_channels if mid_channels is None else mid_channels
+
+        resnets = [
+            ResnetBlock2D(in_channels=in_channels, out_channels=mid_channels, temb_channels=None),
+            ResnetBlock2D(in_channels=mid_channels, out_channels=mid_channels, temb_channels=None),
+            ResnetBlock2D(in_channels=mid_channels, out_channels=out_channels, temb_channels=None),
+        ]
+
+        self.resnets = nn.ModuleList(resnets)
+        self.up = UpDecoderBlock2D(out_channels, out_channels)
+
+    def forward(self, hidden_states, res_hidden_states, temb=None):
+        for resnet in self.resnets:
+            hidden_states = resnet(hidden_states, temb)
+        
+        hidden_states = self.up(hidden_states)
+        
         return hidden_states
 
 

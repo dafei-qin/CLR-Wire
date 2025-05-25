@@ -2,13 +2,13 @@ import os
 import sys
 from argparse import ArgumentParser
 
-from src.vae.vae_curve import AutoencoderKL1D as MyModel
-from src.dataset.dataset import CurveDataset as MyDataset
+from src.vae.vae_surface import AutoencoderKL2D as MyModel
+from src.dataset.dataset import SurfaceDataset as MyDataset
 from src.trainer.trainer_vae import Trainer as MyTrainer
 from src.utils.config import NestedDictToClass, load_config
 
 # Arguments
-program_parser = ArgumentParser(description='Train curve vae model.')
+program_parser = ArgumentParser(description='Train surface vae model.')
 program_parser.add_argument('--config', type=str, default='', help='Path to config file.')
 args, unknown = program_parser.parse_known_args()
 
@@ -18,19 +18,22 @@ args = NestedDictToClass(cfg)
 isDebug = True if sys.gettrace() else False
 
 if isDebug:
-    args.use_wandb_tracking = False
+    args.use_wandb_tracking = True
     args.batch_size = 2
     args.num_workers = 1
 
 train_dataset = MyDataset(
     dataset_file_path = args.data.train_set_file_path,
     replication=args.data.replication,
+    num_samples=args.model.sample_points_num,
     is_train=True
 )
+
 
 val_dataset = MyDataset(
     dataset_file_path = args.data.val_set_file_path,
     is_train=False,
+    num_samples=args.model.sample_points_num,
 )   
 
 model = MyModel(

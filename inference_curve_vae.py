@@ -175,4 +175,20 @@ def main():
     avg_mse_loss, avg_weighted_mse_loss, avg_relative_mse_loss = evaluate(model, test_dataloader, device, cfg.model.sample_points_num, save_file_path=args.save_file)
 
 if __name__ == '__main__':
+    # If no arguments are provided (only script name), use default example arguments.
+    if len(sys.argv) == 1:
+        print("No command-line arguments provided. Using default example arguments.")
+        # These are example paths/values. Adjust them if your default files are different.
+        default_args = [
+            '--config', 'config.yaml',          # Example config file name
+            '--checkpoint', 'model.pth',        # Example checkpoint file name
+            '--test_set_path', 'test_set.npy', # Example test set file name
+            '--batch_size', '128',
+            '--num_workers', '8',
+            '--num_eval', '100',
+            '--save_file', 'reconstructions.npz' # Example output file name
+        ]
+        sys.argv.extend(default_args)
+        print(f"Running with: python inference_curve_vae.py {' '.join(default_args)}")
+    
     main() 
