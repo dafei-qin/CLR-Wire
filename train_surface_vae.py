@@ -10,9 +10,10 @@ from src.utils.config import NestedDictToClass, load_config
 # Arguments
 program_parser = ArgumentParser(description='Train surface vae model.')
 program_parser.add_argument('--config', type=str, default='', help='Path to config file.')
-args, unknown = program_parser.parse_known_args()
+program_parser.add_argument('--resume_lr', type=float, default=None, help='New learning rate to use when resuming from a checkpoint.')
+cli_args, unknown = program_parser.parse_known_args()
 
-cfg = load_config(args.config)
+cfg = load_config(cli_args.config)
 args = NestedDictToClass(cfg)
 
 isDebug = True if sys.gettrace() else False
@@ -55,7 +56,9 @@ batch_size = args.batch_size
 num_gpus = args.num_gpus
 num_step_per_epoch = int(train_dataset.__len__() / (batch_size * num_gpus))
 num_train_steps = epochs * num_step_per_epoch
-num_warmup_steps = int(0.1*num_train_steps)
+
+# Determine initial learning rate: use resume_lr if provided and resuming, else use config LR
+initial_lr = cli_args.resume_lr if args.resume_training and cli_args.resume_lr is not None else args.lr
 
 trainer = MyTrainer(
     model,
@@ -84,5 +87,35 @@ trainer = MyTrainer(
     visual_eval_every_step=getattr(args, 'visual_eval_every_step', 5000),
     num_visual_samples=getattr(args, 'num_visual_samples', 4),
 )
+
+# <<<< Add this section to modify LR after loading checkpoint >>>>
+if args.resume_training and cli_args.resume_lr is not None:
+    new_lr = cli_args.resume_lr
+    if trainer.is_main: # Ensure this runs only on the main process
+        trainer.print(f"Resuming training. Attempting to set new learning rate to: {new_lr}")
+
+    # Wait for everyone to ensure checkpoint is loaded if distributed
+    trainer.wait()
+
+    actual_optimizer = trainer.optimizer.optimizer 
+    for param_group in actual_optimizer.param_groups:
+        param_group['lr'] = new_lr
+        if 'initial_lr' in param_group: # Good practice to update this too
+             param_group['initial_lr'] = new_lr
+
+    actual_scheduler = trainer.optimizer.scheduler
+    if hasattr(actual_scheduler, 'base_lrs'):
+        actual_scheduler.base_lrs = [new_lr] * len(actual_scheduler.base_lrs)
+    
+    # If your scheduler has a warmup phase and you're significantly changing LR,
+    # you *might* consider re-initializing the scheduler or adjusting its state,
+    # but for LambdaLR (cosine), just updating base_lrs is usually sufficient.
+    # The warmup phase will have already passed if resuming from step > num_warmup_steps.
+
+    if trainer.is_main:
+        trainer.print(f"Successfully set new learning rate to {new_lr} for optimizer and scheduler.")
+        current_lr_after_set = actual_optimizer.param_groups[0]['lr']
+        trainer.print(f"Current LR in optimizer after manual set: {current_lr_after_set}")
+# <<<< End of section >>>>
 
 trainer(project=args.wandb_project_name, run=args.wandb_run_name, hps=cfg)

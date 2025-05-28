@@ -16,12 +16,12 @@ save_every_epoch: 10
 log_every_step: 10
 
 # Visual evaluation settings
-visual_eval_every_step: 5000  # Visualize every 5000 steps
-num_visual_samples: 4  # Number of samples to visualize
+visual_eval_every_step: 1000  # Visualize every 5000 steps
+num_visual_samples: 8  # Number of samples to visualize
 
 use_wandb_tracking: true
 wandb_project_name: CLR-wire
-wandb_run_name: normalized_sample_16
+wandb_run_name: normalized_vis
 
 
 DATA:
@@ -49,9 +49,9 @@ MODEL:
     layers_per_block: 2
     act_fn: 'silu'
     norm_num_groups: 16
-    sample_points_num: 16
+    sample_points_num: 64
 
     kl_weight: 0.000005
 
-    checkpoint_folder: checkpoints/checkpoints_normalized_curve_vae_sample_16
+    checkpoint_folder: checkpoints/normalized_curve_vis_sample64
     checkpoint_file_name: model-04.pt

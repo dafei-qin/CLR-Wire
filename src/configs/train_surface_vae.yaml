@@ -1,13 +1,13 @@
-resume_training: false
+resume_training: true
 from_start: false
 
-epochs: 400
-batch_size: 1024 # 1024
-lr: 0.0003
+epochs: 1000
+batch_size: 256 # 1024
+lr: 0.00001
 num_workers: 48
 num_gpus: 6
 
-grad_accum_every: 2
+grad_accum_every: 4
 ema_update_every: 20
 max_grad_norm: 5.
 
@@ -16,12 +16,12 @@ save_every_epoch: 10
 log_every_step: 10
 
 # Visual evaluation settings
-visual_eval_every_step: 500  # Visualize every 5000 steps
+visual_eval_every_step: 100  # Visualize every 5000 steps
 num_visual_samples: 8  # Number of samples to visualize
 
 use_wandb_tracking: true
 wandb_project_name: CLR-surface
-wandb_run_name: normalized_sample_16
+wandb_run_name: normalized_sample_16_3block_kl_warm_kl_clamp
 
 
 DATA:
@@ -33,17 +33,17 @@ DATA:
 MODEL:
     in_channels: 3
     out_channels: 3
-    latent_channels: 3
+    latent_channels: 8
 
     down_block_types: [
-      'DownEncoderBlock2D', 'DownEncoderBlock2D', 'DownEncoderBlock2D', 'DownEncoderBlock2D'
+      'DownEncoderBlock2D', 'DownEncoderBlock2D', 'DownEncoderBlock2D', 
     ]
     up_block_types: [
-      'UpDecoderBlock2D', 'UpDecoderBlock2D', 'UpDecoderBlock2D', 'UpDecoderBlock2D'
+      'UpDecoderBlock2D', 'UpDecoderBlock2D','UpDecoderBlock2D',
     ]
     
     block_out_channels: [
-      64, 128, 256, 512
+       64, 128, 256
     ]
 
     layers_per_block: 2
@@ -51,7 +51,7 @@ MODEL:
     norm_num_groups: 8
     sample_points_num: 16
 
-    kl_weight: 0.000005
+    kl_weight: 0.0005
 
-    checkpoint_folder: checkpoints/checkpoints_normalized_surface_vae_sample_16
-    checkpoint_file_name: model-04.pt
+    checkpoint_folder: checkpoints/checkpoints_normalized_surface_vae_sample_16_3block_kl_warm_kl_clamp
+    checkpoint_file_name: model-46.pt

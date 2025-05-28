@@ -92,6 +92,9 @@ class Trainer(BaseTrainer):
         
         batch_size = min(self.num_visual_samples, gt_samples.shape[0])
         
+        # Fixed axis limits for consistent scaling across all plots
+        axis_limit = 1.5  # Slightly larger than the normalized range [-1, 1]
+        
         fig, axes = plt.subplots(2, batch_size, figsize=(4*batch_size, 8))
         if batch_size == 1:
             axes = axes.reshape(2, 1)
@@ -108,10 +111,17 @@ class Trainer(BaseTrainer):
                 ax_gt.set_xlabel('X')
                 ax_gt.set_ylabel('Y')
                 ax_gt.set_zlabel('Z')
+                # Set fixed axis limits for 3D plot
+                ax_gt.set_xlim([-axis_limit, axis_limit])
+                ax_gt.set_ylim([-axis_limit, axis_limit])
+                ax_gt.set_zlim([-axis_limit, axis_limit])
             else:  # 2D curve
                 ax_gt.plot(gt_curve[:, 0], gt_curve[:, 1], 'b-', linewidth=2, label='GT')
                 ax_gt.set_xlabel('X')
                 ax_gt.set_ylabel('Y')
+                # Set fixed axis limits for 2D plot
+                ax_gt.set_xlim([-axis_limit, axis_limit])
+                ax_gt.set_ylim([-axis_limit, axis_limit])
             ax_gt.set_title(f'Ground Truth {i+1}')
             ax_gt.grid(True)
             ax_gt.legend()
@@ -124,10 +134,17 @@ class Trainer(BaseTrainer):
                 ax_recon.set_xlabel('X')
                 ax_recon.set_ylabel('Y')
                 ax_recon.set_zlabel('Z')
+                # Set fixed axis limits for 3D plot
+                ax_recon.set_xlim([-axis_limit, axis_limit])
+                ax_recon.set_ylim([-axis_limit, axis_limit])
+                ax_recon.set_zlim([-axis_limit, axis_limit])
             else:  # 2D curve
                 ax_recon.plot(recon_curve[:, 0], recon_curve[:, 1], 'r-', linewidth=2, label='Recon')
                 ax_recon.set_xlabel('X')
                 ax_recon.set_ylabel('Y')
+                # Set fixed axis limits for 2D plot
+                ax_recon.set_xlim([-axis_limit, axis_limit])
+                ax_recon.set_ylim([-axis_limit, axis_limit])
             ax_recon.set_title(f'Reconstruction {i+1}')
             ax_recon.grid(True)
             ax_recon.legend()
@@ -147,39 +164,53 @@ class Trainer(BaseTrainer):
         
         batch_size = min(self.num_visual_samples, gt_samples.shape[0])
         
+        # Fixed axis limits for consistent scaling across all plots
+        axis_limit = 1.5  # Slightly larger than the normalized range [-1, 1]
+        
         fig = plt.figure(figsize=(6*batch_size, 12))
         
         for i in range(batch_size):
             gt_surface = gt_samples[i].cpu().numpy()  # (H, W, 3)
             recon_surface = reconstructed[i].cpu().numpy()  # (H, W, 3)
             
-            # Create meshgrid for plotting
-            h, w = gt_surface.shape[:2]
-            x = np.linspace(0, 1, w)
-            y = np.linspace(0, 1, h)
-            X, Y = np.meshgrid(x, y)
+            # Use actual X, Y, Z coordinates from the surface data
+            X_gt = gt_surface[:, :, 0]  # Actual X coordinates
+            Y_gt = gt_surface[:, :, 1]  # Actual Y coordinates  
+            Z_gt = gt_surface[:, :, 2]  # Actual Z coordinates
+            
+            X_recon = recon_surface[:, :, 0]  # Actual X coordinates
+            Y_recon = recon_surface[:, :, 1]  # Actual Y coordinates
+            Z_recon = recon_surface[:, :, 2]  # Actual Z coordinates
             
             # Plot ground truth surface
             ax_gt = fig.add_subplot(2, batch_size, i+1, projection='3d')
-            ax_gt.plot_surface(X, Y, gt_surface[:, :, 2], 
-                             facecolors=plt.cm.viridis((gt_surface[:, :, 2] - gt_surface[:, :, 2].min()) / 
-                                                      (gt_surface[:, :, 2].max() - gt_surface[:, :, 2].min() + 1e-8)),
+            ax_gt.plot_surface(X_gt, Y_gt, Z_gt, 
+                             facecolors=plt.cm.viridis((Z_gt - Z_gt.min()) / 
+                                                      (Z_gt.max() - Z_gt.min() + 1e-8)),
                              alpha=0.8)
             ax_gt.set_title(f'Ground Truth Surface {i+1}')
             ax_gt.set_xlabel('X')
             ax_gt.set_ylabel('Y')
             ax_gt.set_zlabel('Z')
+            # Set fixed axis limits for 3D surface plot - all axes use normalized surface data
+            ax_gt.set_xlim([-axis_limit, axis_limit])
+            ax_gt.set_ylim([-axis_limit, axis_limit])
+            ax_gt.set_zlim([-axis_limit, axis_limit])
             
             # Plot reconstruction surface
             ax_recon = fig.add_subplot(2, batch_size, batch_size+i+1, projection='3d')
-            ax_recon.plot_surface(X, Y, recon_surface[:, :, 2],
-                                facecolors=plt.cm.plasma((recon_surface[:, :, 2] - recon_surface[:, :, 2].min()) / 
-                                                        (recon_surface[:, :, 2].max() - recon_surface[:, :, 2].min() + 1e-8)),
+            ax_recon.plot_surface(X_recon, Y_recon, Z_recon,
+                                facecolors=plt.cm.plasma((Z_recon - Z_recon.min()) / 
+                                                        (Z_recon.max() - Z_recon.min() + 1e-8)),
                                 alpha=0.8)
             ax_recon.set_title(f'Reconstruction Surface {i+1}')
             ax_recon.set_xlabel('X')
             ax_recon.set_ylabel('Y')
             ax_recon.set_zlabel('Z')
+            # Set fixed axis limits for 3D surface plot - all axes use normalized surface data
+            ax_recon.set_xlim([-axis_limit, axis_limit])
+            ax_recon.set_ylim([-axis_limit, axis_limit])
+            ax_recon.set_zlim([-axis_limit, axis_limit])
         
         plt.tight_layout()
         plt.suptitle(f'Surface VAE - Step {step}', y=1.02)
@@ -303,7 +334,7 @@ class Trainer(BaseTrainer):
                 total_norm = self.optimizer.total_norm
                                                         
                 self.log_loss(total_loss, loss_dict, cur_lr, total_norm, step)
-                    
+            
             self.optimizer.step()
             self.optimizer.zero_grad()
             

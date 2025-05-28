@@ -6,6 +6,7 @@ from torch import nn
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LambdaLR, _LRScheduler
 from accelerate import Accelerator
+import torch
 
 from src.utils.helpers import exists
 
@@ -96,20 +97,32 @@ class OptimizerWithScheduler(nn.Module):
         self.optimizer.load_state_dict(pkg['optimizer'])
         self.scheduler.load_state_dict(pkg['scheduler'])
 
-    def zero_grad(self):
+    def zero_grad(self, current_step: int = -1):
         self.optimizer.zero_grad()
 
-    def step(self):
+    def step(self, current_step: int = -1):
         if exists(self.max_grad_norm):
             # for param_group in self.optimizer.param_groups:
-            all_params = [p for param_group in self.optimizer.param_groups for p in param_group['params']]
+            all_params = [p for param_group in self.optimizer.param_groups for p in param_group['params'] if p.grad is not None] # Ensure p.grad is not None
+            
+            if all_params: # Only proceed if there are parameters with gradients
+                # Calculate norm before clipping for logging
+                norm_before_clip = torch.norm(torch.stack([torch.norm(p.grad.detach(), 2.0) for p in all_params]), 2.0).item()
+                # if self.accelerator.is_main_process: # Log only on main process
+                #     print(f"Step {current_step}: Grad norm BEFORE clip: {norm_before_clip:.4f}, max_grad_norm: {self.max_grad_norm}")
+
+                total_norm = self.accelerator.clip_grad_norm_(all_params, self.max_grad_norm)
                 
-            total_norm = self.accelerator.clip_grad_norm_(all_params, self.max_grad_norm)
-            # print(self.max_grad_norm)
-            # print(total_norm)
-            self.total_norm = total_norm
+                # if self.accelerator.is_main_process: # Log only on main process
+                #     print(f"Step {current_step}: Grad norm AFTER clip: {total_norm.item() if isinstance(total_norm, torch.Tensor) else total_norm:.4f}")
+                self.total_norm = total_norm.item() if isinstance(total_norm, torch.Tensor) else total_norm # Store the scalar value
+            else:
+                self.total_norm = 0.0 # No gradients to clip
 
         self.optimizer.step()
 
         if not self.accelerator.optimizer_step_was_skipped:
             self.scheduler.step()
+        else:
+            if self.accelerator.is_main_process:
+                print(f"Step {current_step}: Optimizer step SKIPPED due to inf/NaN gradients")

@@ -98,7 +98,7 @@ class Encoder2D(nn.Module):
 
 class SimpleUpBlock2D(nn.Module):
     """Simplified 2D up block without residual connections."""
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, up=True):
         super().__init__()
         from diffusers.models.unets.unet_2d_blocks import ResnetBlock2D, UpDecoderBlock2D
         
@@ -107,12 +107,16 @@ class SimpleUpBlock2D(nn.Module):
             ResnetBlock2D(in_channels=in_channels, out_channels=in_channels, temb_channels=None),
             ResnetBlock2D(in_channels=in_channels, out_channels=out_channels, temb_channels=None),
         ])
-        self.up = UpDecoderBlock2D(out_channels, out_channels)
+        if up:
+            self.up = UpDecoderBlock2D(out_channels, out_channels)
+        else:
+            self.up = None
 
     def forward(self, hidden_states):
         for resnet in self.resnets:
             hidden_states = resnet(hidden_states, temb=None)
-        hidden_states = self.up(hidden_states)
+        if self.up is not None:
+            hidden_states = self.up(hidden_states)
         return hidden_states
 
 
@@ -151,10 +155,11 @@ class Decoder2D(nn.Module):
         for i, up_block_type in enumerate(up_block_types):
             prev_output_channel = output_channel
             output_channel = reversed_block_out_channels[i]
-            
+            is_first_block = i == 0
             up_block = SimpleUpBlock2D(
                 in_channels=prev_output_channel,
                 out_channels=output_channel,
+                up=not is_first_block,
             )
             self.up_blocks.append(up_block)
 
@@ -168,13 +173,16 @@ class Decoder2D(nn.Module):
 
         self.query_embed = nn.Sequential(
             RandomFourierEmbed2D(block_out_channels[0]),
-            Linear(block_out_channels[0] + 2, block_out_channels[0]),  # +2 for 2D coordinates
+            Linear(block_out_channels[0] + 2, block_out_channels[0] * 2),  # Increased capacity
+            nn.SiLU(),
+            nn.Dropout(0.1),  # Add dropout for regularization
+            Linear(block_out_channels[0] * 2, block_out_channels[0]),
             nn.SiLU()
         )
 
         self.cross_attend = AttentionLayers(
             dim = block_out_channels[0],
-            depth=2,
+            depth=4,  # Increased depth for better modeling
             heads = 8,
             cross_attend=True,
             rotary_pos_emb=True,
@@ -193,7 +201,7 @@ class Decoder2D(nn.Module):
         sample = self.mid_block(sample) # (3 --> 512), TODO
         
         # up
-        for up_block in self.up_blocks:  # (512, 4, 4) --> (64, 64, 64)
+        for up_block in self.up_blocks:  
             sample = up_block(sample)
         
         # cross-attention
@@ -203,7 +211,9 @@ class Decoder2D(nn.Module):
         queries_embeddings = rearrange(queries_embeddings, 'b n m d -> b (n m) d')    
         sample = self.cross_attend(queries_embeddings, context=sample)
 
-        sample = rearrange(sample, 'b (h w) d -> b d h w', h=int(sample.shape[1]**0.5))
+        # Fix: output should match query dimensions, not assume square latent features
+        n, m = queries.shape[1], queries.shape[2]
+        sample = rearrange(sample, 'b (n m) d -> b d n m', n=n, m=m)
 
         # post-process
         sample = self.conv_norm_out(sample)
@@ -308,6 +318,7 @@ class AutoencoderKL2D(ModelMixin, ConfigMixin):
         return_dict: bool = True,
         generator: Optional[torch.Generator] = None,
         return_loss: bool = False,
+        training_step: Optional[int] = None,  # Add training step for KL annealing
         **kwargs,
     ) -> Union[DecoderOutput, torch.FloatTensor]:
         """
@@ -318,6 +329,7 @@ class AutoencoderKL2D(ModelMixin, ConfigMixin):
             return_dict: Whether to return a DecoderOutput
             generator: Random generator for sampling
             return_loss: Whether to return loss values
+            training_step: Current training step for KL annealing
         """
         data = rearrange(data, "b h w c -> b c h w")  # for conv2d input
 
@@ -326,7 +338,7 @@ class AutoencoderKL2D(ModelMixin, ConfigMixin):
         posterior = self.encode(data).latent_dist
         
         if sample_posterior:
-            z = posterior.sample(generator=generator) # (b, 3, 4, 4)
+            z = posterior.sample(generator=generator)
         else:
             z = posterior.mode()
         
@@ -362,10 +374,22 @@ class AutoencoderKL2D(ModelMixin, ConfigMixin):
             return (dec,)
         
         if return_loss:
-            kl_loss = 0.5 * torch.sum(
-                torch.pow(posterior.mean, 2) + posterior.var - 1.0 - posterior.logvar,
-                dim=[1, 2, 3],
-            ).mean()
+            # Calculate KL loss with Free-Bits technique to prevent posterior collapse
+            kl_loss_per_dim = 0.5 * (
+                torch.pow(posterior.mean, 2) + posterior.var - 1.0 - posterior.logvar
+            )
+            
+            # Free-Bits: ensure minimum KL loss per dimension
+            free_bits = 0.5  # Minimum bits per latent dimension
+            kl_loss_per_dim = torch.clamp(kl_loss_per_dim, min=free_bits)
+            kl_loss = torch.sum(kl_loss_per_dim, dim=[1, 2, 3]).mean()
+
+            # KL annealing: gradually increase KL weight during training
+            if training_step is not None:
+                # Warm up KL loss over first 10k steps
+                kl_warmup_steps = 10000
+                kl_beta = min(1.0, training_step / kl_warmup_steps)
+                kl_loss = kl_beta * kl_loss
 
             gt_samples = interpolate_2d(t, data)
 

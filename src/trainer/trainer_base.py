@@ -116,11 +116,11 @@ class BaseTrainer(Module):
             batch_size = batch_size, 
             shuffle=True,
             # sampler=self.train_sampler,
-            pin_memory = True, 
-            num_workers=num_workers,
+            pin_memory = False,  # Disable pin_memory to reduce RAM usage
+            num_workers=min(num_workers, 8),  # Limit workers to prevent memory explosion
             collate_fn=collate_fn,
-            prefetch_factor=2,
-            persistent_workers=True,
+            prefetch_factor=1,  # Reduce prefetch to save memory
+            persistent_workers=False,  # Disable persistent workers to allow cleanup
         )
 
         self.train_dl = self.accelerator.prepare(self.train_dl)
@@ -137,12 +137,12 @@ class BaseTrainer(Module):
                 val_dataset, 
                 batch_size = batch_size, 
                 shuffle = True,
-                pin_memory = True, 
+                pin_memory = False,  # Disable pin_memory to reduce RAM usage
                 drop_last=True,
-                num_workers=num_workers,
+                num_workers=min(num_workers, 4),  # Even fewer workers for validation
                 collate_fn=collate_fn,
-                prefetch_factor=4,
-                persistent_workers=True,
+                prefetch_factor=1,  # Reduce prefetch to save memory
+                persistent_workers=False,  # Disable persistent workers to allow cleanup
             )
             # self.val_dl = self.accelerator.prepare(self.val_dl)
             self.val_dl_iter = cycle(self.val_dl)
@@ -281,17 +281,22 @@ class BaseTrainer(Module):
         else:
             model = self.ema
         
+        # Get current step for KL annealing
+        current_step = self.step.item() if hasattr(self, 'step') else 0
+        
         if isinstance(forward_kwargs, dict):
             loss, loss_dict = model(
                 **forward_kwargs,
                 sample_posterior=True,
-                return_loss=True
+                return_loss=True,
+                training_step=current_step  # Pass training step for KL annealing
             )
         elif isinstance(forward_kwargs, torch.Tensor):
             loss, loss_dict = model(
                 forward_kwargs,
                 sample_posterior=True,
-                return_loss=True
+                return_loss=True,
+                training_step=current_step  # Pass training step for KL annealing
             )   
         else:
             raise ValueError(f'unknown forward_kwargs')
@@ -397,12 +402,24 @@ class BaseTrainer(Module):
                 checkpoint_num = step // self.checkpoint_every_step 
                 milestone = str(checkpoint_num).zfill(2)
                 self.save(milestone)
-
                 self.print(get_current_time() + f' checkpoint saved at {self.checkpoint_folder / f"model-{milestone}.pt"}')
+                
+                # Force garbage collection after checkpoint save to prevent memory buildup
+                import gc
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
             if divisible_by(step, self.num_step_per_epoch):
                 if self.is_main:
-                    print(get_current_time() + f' {step // self.num_step_per_epoch} epoch at ', step)                    
+                    print(get_current_time() + f' {step // self.num_step_per_epoch} epoch at ', step)
+                    
+                    # Periodic memory cleanup every epoch
+                    if (step // self.num_step_per_epoch) % 5 == 0:  # Every 5 epochs
+                        import gc
+                        gc.collect()
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
 
             self.wait()
 

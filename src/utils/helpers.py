@@ -20,9 +20,34 @@ def get_current_time():
     return formatted_time
 
 def cycle(dl):
+    """
+    Cycle through a dataloader infinitely with proper memory management.
+    Recreates the iterator every few epochs to prevent memory accumulation.
+    """
+    epoch_count = 0
+    max_epochs_before_reset = 5  # Reset every 5 epochs to prevent memory accumulation
+    
     while True:
-        for data in dl:
-            yield data
+        iterator = iter(dl)
+        current_epoch_count = 0
+        
+        try:
+            while True:
+                data = next(iterator)
+                yield data
+                current_epoch_count += 1
+        except StopIteration:
+            # End of dataset reached, increment epoch counter
+            epoch_count += 1
+            
+            # Periodically force garbage collection and reset
+            if epoch_count % max_epochs_before_reset == 0:
+                import gc
+                del iterator
+                gc.collect()
+            
+            # Continue to next epoch
+            continue
 
 def divisible_by(num, den):
     return (num % den) == 0

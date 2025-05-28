@@ -59,7 +59,7 @@ class Encoder1D(nn.Module):
                 num_layers=self.layers_per_block,
                 in_channels=input_channel,
                 out_channels=output_channel,
-                add_downsample=not is_final_block,
+                add_downsample=not is_final_block, # This is not effective for downblock1d
                 temb_channels=None,
             )
             self.down_blocks.append(down_block)
