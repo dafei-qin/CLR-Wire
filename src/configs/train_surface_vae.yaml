@@ -1,4 +1,4 @@
-resume_training: true
+resume_training: false
 from_start: false
 
 epochs: 1000
@@ -21,7 +21,7 @@ num_visual_samples: 8  # Number of samples to visualize
 
 use_wandb_tracking: true
 wandb_project_name: CLR-surface
-wandb_run_name: normalized_sample_16_3block_kl_warm_kl_clamp
+wandb_run_name: normalized_surface_vae_sample16_3block_klWarnClamp_64latent
 
 
 DATA:
@@ -33,7 +33,7 @@ DATA:
 MODEL:
     in_channels: 3
     out_channels: 3
-    latent_channels: 8
+    latent_channels: 64
 
     down_block_types: [
       'DownEncoderBlock2D', 'DownEncoderBlock2D', 'DownEncoderBlock2D', 
@@ -43,7 +43,7 @@ MODEL:
     ]
     
     block_out_channels: [
-       64, 128, 256
+       128, 256, 512
     ]
 
     layers_per_block: 2
@@ -53,5 +53,5 @@ MODEL:
 
     kl_weight: 0.0005
 
-    checkpoint_folder: checkpoints/checkpoints_normalized_surface_vae_sample_16_3block_kl_warm_kl_clamp
+    checkpoint_folder: checkpoints/normalized_surface_vae_sample16_3block_klWarnClamp_64latent
     checkpoint_file_name: model-46.pt
