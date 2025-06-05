@@ -65,6 +65,7 @@ class BaseTrainer(Module):
         num_step_per_epoch = 100,
         optimizer_kwargs: dict = dict(),
         resume_training = False,
+        load_checkpoint_from_file = None,
         from_start = False,
         scheduler: Optional[Type[LRScheduler]] = None,
         scheduler_kwargs: dict = dict(),
@@ -190,6 +191,10 @@ class BaseTrainer(Module):
         self.checkpoint_folder = Path(checkpoint_folder)
         self.checkpoint_folder.mkdir(exist_ok = True, parents = True)
 
+        if load_checkpoint_from_file is not None:
+            print("loading checkpoint from the file: ", load_checkpoint_from_file)
+            self.load_model_only(load_checkpoint_from_file, strict=False)
+
         if resume_training:
             print("loading checkpoint from the file: ", checkpoint_file_name)
             self.load(checkpoint_file_name, from_start=from_start)
@@ -273,6 +278,21 @@ class BaseTrainer(Module):
             self.accelerator.scaler.load_state_dict(pkg['scaler'])
             
         print(f"loaded checkpoint from {self.checkpoint_folder / file_name}")
+
+    def load_model_only(self, file_path: str, strict=True):
+        accelerator = self.accelerator
+        device = accelerator.device
+
+        pkg = torch.load(str(file_path), map_location=device)
+        model = self.accelerator.unwrap_model(self.model)
+        if strict == False:
+            print('Load checkpoint with strict=False, some keys may not match, please check the output')
+            print(model.load_state_dict(pkg['model'], strict=strict))
+        else:
+            model.load_state_dict(pkg['model'], strict=strict)
+
+        print(f"loaded model from {file_path}")
+
     
     def train_step(self, forward_kwargs, is_train=True):
         

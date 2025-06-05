@@ -278,4 +278,17 @@ class SurfaceDataset(CurveDataset):
             pass
         return vertices
 
+class BSplineSurfaceDataset(SurfaceDataset):
+    def __init__(self, bs_path, points_path, transform=surface_scale_and_jitter, is_train=True, replication=1, num_samples=32):
+        super().__init__(points_path, transform, is_train, replication, num_samples)
+        print("Transform Disabled")
+        self.transform = None
+        self.bs_data = np.load(bs_path, allow_pickle=True)
+
+    def __getitem__(self, idx):
+        vertices = super().__getitem__(idx)
+        idx = idx % len(self.data)
+        bs_data = self.bs_data[idx]
+        bs_data = torch.from_numpy(bs_data).to(torch.float32)
+        return {'data': vertices, 'control_points': bs_data}
 

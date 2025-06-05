@@ -1,4 +1,4 @@
-resume_training: false
+resume_training: true
 from_start: false
 
 epochs: 1000
@@ -54,4 +54,4 @@ MODEL:
     kl_weight: 0.0005
 
     checkpoint_folder: checkpoints/normalized_surface_vae_sample16_3block_klWarnClamp_64latent
-    checkpoint_file_name: model-46.pt
+    checkpoint_file_name: model-17.pt
