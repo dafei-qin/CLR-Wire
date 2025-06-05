@@ -41,6 +41,7 @@ class Trainer(BaseTrainer):
         num_train_steps = 100000,
         num_step_per_epoch = 100,
         resume_training = False,
+        load_checkpoint_from_file = None,
         from_start = False,
         use_wandb_tracking: bool = False,
         collate_fn: Optional[Callable] = None,
@@ -69,6 +70,7 @@ class Trainer(BaseTrainer):
             num_train_steps=num_train_steps,
             num_step_per_epoch=num_step_per_epoch,
             resume_training=resume_training,
+            load_checkpoint_from_file=load_checkpoint_from_file,
             from_start=from_start,
             collate_fn=collate_fn,
             use_wandb_tracking=use_wandb_tracking,
@@ -358,6 +360,8 @@ class Trainer(BaseTrainer):
             if self.is_main and self.should_validate and divisible_by(step, self.val_every_step):
 
                 total_val_loss = 0.
+                total_val_recon_loss = 0.
+                total_val_kl_loss = 0.
                 self.ema.eval()
 
                 num_val_batches = self.val_num_batches * self.grad_accum_every
@@ -374,8 +378,23 @@ class Trainer(BaseTrainer):
                         loss, loss_dict = self.train_step(forward_kwargs, is_train=False)
 
                         total_val_loss += (loss / num_val_batches)
+                        
+                        # Debug: Print what's in loss_dict to see available keys
+                        if _ == 0:  # Only print for first validation batch to avoid spam
+                            self.print(f"Debug - loss_dict keys: {list(loss_dict.keys()) if isinstance(loss_dict, dict) else 'loss_dict is not a dict'}")
+                            self.print(f"Debug - loss_dict contents: {loss_dict}")
+                        
+                        # Extract individual loss components if available
+                        if 'recon_loss' in loss_dict:
+                            total_val_recon_loss += (loss_dict['recon_loss'] / num_val_batches)
+                        if 'kl_loss' in loss_dict:
+                            total_val_kl_loss += (loss_dict['kl_loss'] / num_val_batches)
 
-                self.print(get_current_time() + f' valid loss: {total_val_loss:.3f}')    
+                self.print(get_current_time() + f' valid loss: {total_val_loss:.3f}')
+                if total_val_recon_loss > 0:
+                    self.print(get_current_time() + f' valid recon_loss: {total_val_recon_loss:.3f}')
+                if total_val_kl_loss > 0:
+                    self.print(get_current_time() + f' valid kl_loss: {total_val_kl_loss:.3f}')
                 # Calculate and print estimated finishing time
                 steps_remaining = self.num_train_steps - step
                 time_per_step = (time.time() - self.start_time) / (step + 1)
@@ -383,7 +402,15 @@ class Trainer(BaseTrainer):
                 estimated_finish_time = time.time() + estimated_time_remaining
                 self.print(get_current_time() + f' estimated finish time: {time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(estimated_finish_time))}')
                 
-                self.log(val_loss = total_val_loss)
+                # Log validation losses
+                val_log_dict = {"val_loss": total_val_loss}
+                if total_val_recon_loss > 0:
+                    val_log_dict["val_recon_loss"] = total_val_recon_loss
+                if total_val_kl_loss > 0:
+                    val_log_dict["val_kl_loss"] = total_val_kl_loss
+                
+                self.print(f"Debug - val_log_dict being sent to wandb: {val_log_dict}")
+                self.log(**val_log_dict)
 
             self.wait()
 

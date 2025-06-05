@@ -17,6 +17,7 @@ from x_transformers.x_transformers import AttentionLayers
 from einops import rearrange
 
 from src.vae.modules import AutoencoderKLOutput, RandomFourierEmbed2D, UNetMidBlock2D
+from src.vae.layers import BSplineSurfaceLayer
 from src.utils.torch_tools import interpolate_2d, calculate_surface_area, sample_surface_points
 
 
@@ -527,3 +528,337 @@ class AutoencoderKL2DFastDecode(ModelMixin, ConfigMixin):
         decoded = self._decode(z, t)
 
         return decoded  # DecoderOutput instance, use .sample to get tensor 
+
+
+class AutoencoderKLBS2D(AutoencoderKL2D):
+
+    @register_to_config
+    def __init__(
+        self,
+        in_channels: int = 3,
+        out_channels: int = 3,
+        down_block_types: Tuple[str] = ("DownBlock2D",),
+        up_block_types: Tuple[str] = ("UpBlock2D",),
+        block_out_channels: Tuple[int] = (64,),
+        layers_per_block: int = 1,
+        act_fn: str = "silu",
+        latent_channels: int = 4,
+        norm_num_groups: int = 32,
+        sample_points_num: int = 16,
+        kl_weight: float = 1e-6,
+        # B-spline branch parameters
+        bspline_resolution: int = 32,
+        bspline_cp_weight: float = 1.0,
+        bspline_surface_weight: float = 1.0,
+        mlp_hidden_dim: int = 256,
+        **kwargs,
+    ):
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            down_block_types=down_block_types,
+            up_block_types=up_block_types,
+            block_out_channels=block_out_channels,
+            layers_per_block=layers_per_block,
+            act_fn=act_fn,
+            latent_channels=latent_channels,
+            norm_num_groups=norm_num_groups,
+            sample_points_num=sample_points_num,
+            kl_weight=kl_weight,
+        )
+
+        # B-spline branch components
+        self.bspline_cp_weight = bspline_cp_weight
+        self.bspline_surface_weight = bspline_surface_weight
+        self.bspline_resolution = bspline_resolution
+        
+        # MLP to transform latent features to B-spline control points
+        # We'll initialize the MLP later after we know the actual latent dimensions
+        self.control_point_mlp = None
+        self.mlp_hidden_dim = mlp_hidden_dim
+        self.act_fn = act_fn
+        
+        # B-spline surface layer
+        self.bspline_layer = BSplineSurfaceLayer(resolution=bspline_resolution)
+        self.total_latent_dim = latent_channels * (sample_points_num // 2 ** (len(down_block_types) - 1)) ** 2
+        self._init_control_point_mlp(self.total_latent_dim)
+
+    
+    def _init_control_point_mlp(self, latent_dim):
+        """Initialize the control point MLP with the correct input dimension."""
+        if self.control_point_mlp is not None:
+            return  # Already initialized
+            
+        # Get activation function
+        if self.act_fn == "silu":
+            activation = nn.SiLU()
+        elif self.act_fn == "relu":
+            activation = nn.ReLU()
+        elif self.act_fn == "gelu":
+            activation = nn.GELU()
+        else:
+            activation = nn.SiLU()  # default
+        
+        self.control_point_mlp = nn.Sequential(
+            nn.Linear(latent_dim, self.mlp_hidden_dim),
+            activation,
+            nn.Dropout(0.1),
+            nn.Linear(self.mlp_hidden_dim, self.mlp_hidden_dim),
+            activation,
+            nn.Dropout(0.1),
+            nn.Linear(self.mlp_hidden_dim, self.mlp_hidden_dim // 2),
+            activation,
+            nn.Linear(self.mlp_hidden_dim // 2, 16 * 3),  # 16 control points, each with 3 coordinates
+        ).to(next(self.parameters()).device)
+
+    def _decode_bspline(
+        self,
+        z: torch.FloatTensor,
+        t: torch.FloatTensor,
+    ) -> Tuple[torch.FloatTensor, torch.FloatTensor]:
+        """
+        Decode using B-spline branch.
+        
+        Args:
+            z: Latent tensor (B, D, H, W)
+            t: Query points (B, N, M, 2)
+            return_dict: Whether to return DecoderOutput
+            
+        Returns:
+            Decoded surface points at query locations
+        """
+        bs = z.shape[0]
+        
+        # Initialize MLP if not done yet
+        if self.control_point_mlp is None:
+            latent_dim = z.shape[1] * z.shape[2] * z.shape[3]  # D * H * W
+            self._init_control_point_mlp(latent_dim)
+        
+        # Transform latent codes to control points
+        z_flat = z.view(bs, -1)  # Flatten to (B, D*H*W)
+        control_points_flat = self.control_point_mlp(z_flat)  # (B, 16*3)
+        control_points = control_points_flat.view(bs, 16, 3)  # (B, 16, 3)
+        
+        # Generate surface points using B-spline
+        bspline_surface = self.bspline_layer(control_points)  # (B, resolution, resolution, 3)
+        
+        # Sample from the B-spline surface at the query points
+        # surface_indices = t * (self.bspline_resolution - 1)  # (B, N, M, 2)
+
+        # bspline_dec = self._sample_from_surface(bspline_surface, surface_indices)
+        bspline_dec = interpolate_2d(t, rearrange(bspline_surface, 'b h w c -> b c h w'))
+
+        return (control_points, bspline_dec,)
+    # def _sample_from_surface(self, surface, indices):
+    #     """
+    #     Sample from B-spline surface using bilinear interpolation.
+        
+    #     Args:
+    #         surface: (B, H, W, 3) - B-spline surface points
+    #         indices: (B, N, M, 2) - sampling coordinates in [0, H-1] x [0, W-1]
+            
+    #     Returns:
+    #         sampled_points: (B, N, M, 3) - interpolated surface points
+    #     """
+    #     B, H, W, _ = surface.shape
+    #     _, N, M, _ = indices.shape
+        
+    #     # Clamp indices to valid range
+    #     indices = torch.clamp(indices, 0.0, float(H - 1))
+        
+    #     # Get integer and fractional parts
+    #     indices_floor = torch.floor(indices).long()
+    #     indices_frac = indices - indices_floor.float()
+        
+    #     # Get corner indices
+    #     x0 = indices_floor[:, :, :, 0]  # (B, N, M)
+    #     y0 = indices_floor[:, :, :, 1]  # (B, N, M)
+    #     x1 = torch.clamp(x0 + 1, 0, H - 1)
+    #     y1 = torch.clamp(y0 + 1, 0, W - 1)
+        
+    #     # Get fractional parts
+    #     dx = indices_frac[:, :, :, 0:1]  # (B, N, M, 1)
+    #     dy = indices_frac[:, :, :, 1:2]  # (B, N, M, 1)
+        
+    #     # Use more robust gathering approach
+    #     def gather_points(x_idx, y_idx):
+    #         # Flatten surface for easier indexing
+    #         surface_flat = surface.reshape(B, H * W, 3)  # (B, H*W, 3)
+            
+    #         # Create linear indices
+    #         linear_idx = x_idx * W + y_idx  # (B, N, M)
+            
+    #         # Expand indices for batch dimension
+    #         batch_idx = torch.arange(B, device=surface.device).view(B, 1, 1).expand(B, N, M)
+            
+    #         # Gather points using advanced indexing
+    #         gathered = surface_flat[batch_idx, linear_idx]  # (B, N, M, 3)
+            
+    #         return gathered
+        
+    #     # Get corner values
+    #     p00 = gather_points(x0, y0)
+    #     p01 = gather_points(x0, y1)
+    #     p10 = gather_points(x1, y0)
+    #     p11 = gather_points(x1, y1)
+        
+    #     # Bilinear interpolation
+    #     p0 = p00 * (1 - dy) + p01 * dy
+    #     p1 = p10 * (1 - dy) + p11 * dy
+    #     interpolated = p0 * (1 - dx) + p1 * dx
+        
+    #     return interpolated
+
+    @apply_forward_hook
+    def decode_both_branches(
+        self,
+        z: torch.FloatTensor,
+        t: torch.FloatTensor,
+    ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+        """
+        Decode using both cross-attention and B-spline branches.
+        
+        Returns:
+            Tuple of (cross_attention_output, bspline_output)
+        """
+        # Cross-attention branch
+        cross_attention_dec = self._decode(z, t).sample
+        
+        # B-spline branch
+        control_points, sampled_surface = self._decode_bspline(z, t).values()
+        # Convert B-spline output from (B, H, W, 3) to (B, 3, H, W) to match cross-attention format
+        # bspline_dec = rearrange(bspline_dec, 'b h w c -> b c h w')
+        
+        # if not return_dict:
+        #     return (cross_attention_dec, bspline_dec)
+            
+        # return DecoderOutput(sample=cross_attention_dec), DecoderOutput(sample=bspline_dec)
+        return (control_points, sampled_surface, cross_attention_dec)
+
+    def forward(
+        self,
+        data: torch.FloatTensor,
+        control_points: torch.FloatTensor,
+        t: Optional[torch.FloatTensor] = None,
+        sample_posterior: bool = False,
+        return_dict: bool = True,
+        generator: Optional[torch.Generator] = None,
+        return_loss: bool = False,
+        training_step: Optional[int] = None,  # Add training step for KL annealing
+        return_both_branches: bool = False,  # Whether to return both branches
+        **kwargs,
+    ) -> Union[DecoderOutput, torch.FloatTensor]:
+        """
+        Args:
+            data: Input surface data
+            t: Query points for sampling  
+            sample_posterior: Whether to sample from the posterior
+            return_dict: Whether to return a DecoderOutput
+            generator: Random generator for sampling
+            return_loss: Whether to return loss values
+            training_step: Current training step for KL annealing
+            return_both_branches: Whether to return outputs from both branches
+        """
+        data = rearrange(data, "b h w c -> b c h w")  # for conv2d input
+
+        bs = data.shape[0]
+
+        posterior = self.encode(data).latent_dist
+        
+        if sample_posterior:
+            z = posterior.sample(generator=generator)
+        else:
+            z = posterior.mode()
+        
+        if t is None:
+            # Generate grid-like random points (jittered grid)
+            # Create grid cell boundaries
+            grid_size = 1.0 / self.sample_points_num
+            
+            # Generate random offsets within each grid cell
+            random_offsets = torch.rand(bs, self.sample_points_num, self.sample_points_num, 2, device=data.device)
+            
+            # Create base grid coordinates for each cell
+            i_coords = torch.arange(self.sample_points_num, device=data.device).float()
+            j_coords = torch.arange(self.sample_points_num, device=data.device).float()
+            
+            # Create meshgrid for base coordinates
+            i_grid, j_grid = torch.meshgrid(i_coords, j_coords, indexing='ij')
+            base_grid = torch.stack([i_grid, j_grid], dim=-1)  # (sample_points_num, sample_points_num, 2)
+            
+            # Add random jitter within each grid cell
+            # t = (base_grid.unsqueeze(0) + random_offsets) * grid_size  # (bs, sample_points_num, sample_points_num, 2)
+            t = base_grid.unsqueeze(0) * grid_size
+            t = t.repeat(bs, 1, 1, 1)
+            # Clamp to ensure values stay in [0, 1]
+            t = torch.clamp(t, 0.0, 1.0)
+        else:
+            assert t.shape[1] == self.sample_points_num and t.shape[2] == self.sample_points_num, \
+                   "t should have the same number of self.sample_points_num"
+
+        # Cross-attention branch (existing)
+        dec = self.decode(z, t).sample
+
+        # B-spline branch (new)
+        dec_control_points, dec_sampled_surface = self._decode_bspline(z, t)
+        # Convert B-spline output from (B, H, W, 3) to (B, 3, H, W) to match cross-attention format
+        # bspline_dec = rearrange(bspline_dec, 'b h w c -> b c h w')
+
+        if not return_dict:
+            if return_both_branches:
+                return (dec_control_points, dec_sampled_surface, dec)
+            return (dec,)
+        
+
+        if return_loss:
+            # Calculate KL loss with Free-Bits technique to prevent posterior collapse
+            kl_loss_per_dim = 0.5 * (
+                torch.pow(posterior.mean, 2) + posterior.var - 1.0 - posterior.logvar
+            )
+            
+            # Free-Bits: ensure minimum KL loss per dimension
+            free_bits = 0.5  # Minimum bits per latent dimension
+            kl_loss_per_dim = torch.clamp(kl_loss_per_dim, min=free_bits)
+            kl_loss = torch.sum(kl_loss_per_dim, dim=[1, 2, 3]).mean()
+
+            # KL annealing: gradually increase KL weight during training
+            if training_step is not None:
+                # Warm up KL loss over first 10k steps
+                kl_warmup_steps = 10000
+                kl_beta = min(1.0, training_step / kl_warmup_steps)
+                kl_loss = kl_beta * kl_loss
+
+            gt_samples = interpolate_2d(t, data)
+
+            data = rearrange(data, 'b c h w -> b h w c')
+            batch_areas = calculate_surface_area(data)
+            batch_areas = torch.clamp(batch_areas, min=2.0, max=torch.pi * 100)
+
+            weights = torch.log(batch_areas + 0.2)  # reduce influence of large surfaces
+            
+            # Cross-attention branch loss
+            batch_loss = F.mse_loss(dec, gt_samples, reduction='none').mean(dim=[1, 2, 3])
+            recon_loss = (batch_loss * weights).mean()
+            
+            # B-spline branch loss
+            bspline_cp_loss = F.mse_loss(dec_control_points, control_points, reduction='none').mean(dim=[1, 2])
+            bspline_surface_loss = F.mse_loss(dec_sampled_surface, gt_samples, reduction='none').mean(dim=[1, 2, 3])
+            bspline_cp_loss = (bspline_cp_loss * weights).mean()
+            bspline_surface_loss = (bspline_surface_loss * weights).mean()
+            # bspline_batch_loss = F.mse_loss(bspline_dec, gt_samples, reduction='none').mean(dim=[1, 2, 3])
+            # bspline_recon_loss = (bspline_batch_loss * weights).mean()
+            
+            # Combined loss
+            total_loss = recon_loss + self.bspline_cp_weight * bspline_cp_loss + self.bspline_surface_weight * bspline_surface_loss + self.kl_weight * kl_loss
+
+            return total_loss, dict(
+                recon_loss=recon_loss,
+                bspline_cp_loss=bspline_cp_loss,
+                bspline_surface_loss=bspline_surface_loss,
+                kl_loss=kl_loss
+            )
+
+        if return_both_branches:
+            return dec_control_points, dec_sampled_surface, dec
+        
+        return dec
