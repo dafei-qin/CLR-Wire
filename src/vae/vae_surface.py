@@ -738,7 +738,7 @@ class AutoencoderKLBS2D(AutoencoderKL2D):
     def forward(
         self,
         data: torch.FloatTensor,
-        control_points: torch.FloatTensor,
+        control_points: Optional[torch.FloatTensor] = None,
         t: Optional[torch.FloatTensor] = None,
         sample_posterior: bool = False,
         return_dict: bool = True,
@@ -811,6 +811,7 @@ class AutoencoderKLBS2D(AutoencoderKL2D):
         
 
         if return_loss:
+            assert control_points is not None, "control_points must be provided for loss calculation"
             # Calculate KL loss with Free-Bits technique to prevent posterior collapse
             kl_loss_per_dim = 0.5 * (
                 torch.pow(posterior.mean, 2) + posterior.var - 1.0 - posterior.logvar
