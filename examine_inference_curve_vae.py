@@ -16,6 +16,10 @@ data_gt_all = None
 data_recon_all = None
 num_samples_total = 0
 current_sample_indices = [] # Stores the data sample_idx for each displayed curve pair
+eval_onthefly = False # Added: flag to determine if we should reconstruct on-the-fly
+npz_points_num = None # Added: number of points in the original .npz data
+model_points_num = None # Added: number of points expected by the model
+skip_factor = None # Added: skip factor for sampling
 
 # Polyscope structure references (lists to hold multiple structures)
 ps_gt_curve_structures = []
@@ -36,27 +40,127 @@ ui_source_slot_for_sampling = [0] # Added
 ui_num_variations = [5] # Added
 ui_sigma_scale = [0.5] # Added
 
+# --- Function to apply skipped sampling to curve data ---
+def apply_skipped_sampling(curve_data_cxn):
+    """
+    Apply skipped sampling to curve data if model expects fewer points than npz provides.
+    
+    Args:
+        curve_data_cxn: numpy array of shape (C, N_points_npz) - original curve data
+        
+    Returns:
+        numpy array of shape (C, N_points_model) - sampled curve data
+    """
+    global skip_factor, model_points_num, npz_points_num
+    
+    if skip_factor is None or skip_factor == 1:
+        return curve_data_cxn  # No sampling needed
+    
+    # Apply skipped sampling along the points dimension (last dimension)
+    sampled_curve = curve_data_cxn[..., ::skip_factor]
+    
+    # Ensure we get exactly the expected number of points
+    if sampled_curve.shape[-1] > model_points_num:
+        sampled_curve = sampled_curve[..., :model_points_num]
+    elif sampled_curve.shape[-1] < model_points_num:
+        print(f"Warning: Skipped sampling resulted in {sampled_curve.shape[-1]} points, but model expects {model_points_num}")
+    
+    return sampled_curve
+
 # --- Load Data --- 
-def load_npz_data(npz_file_path): # Renamed for clarity
-    global data_gt_all, data_recon_all, num_samples_total
+def load_npz_data(npz_file_path, use_onthefly_eval=False): # Modified to accept eval_onthefly flag
+    global data_gt_all, data_recon_all, num_samples_total, eval_onthefly
+    global npz_points_num, model_points_num, skip_factor
+    eval_onthefly = use_onthefly_eval
+    
     try:
         data = np.load(npz_file_path) 
     except FileNotFoundError:
         print(f"Error: Data file '{npz_file_path}' not found. Please check the path.")
         exit()
     
-    if 'ground_truth' not in data or 'reconstructions' not in data:
-        print(f"Error: 'ground_truth' or 'reconstructions' not found in {npz_file_path}.")
+    if 'ground_truth' not in data:
+        print(f"Error: 'ground_truth' not found in {npz_file_path}.")
         exit()
 
-    data_gt_all = data['ground_truth']      
-    data_recon_all = data['reconstructions'] 
-    num_samples_total = data_gt_all.shape[0]
+    data_gt_all_raw = data['ground_truth']
+    npz_points_num = data_gt_all_raw.shape[-1]  # Get number of points in npz data
+    print(f"NPZ file contains {npz_points_num} points per curve.")
+    
+    if eval_onthefly:
+        print("Using on-the-fly evaluation mode - reconstructions will be computed using the VAE model.")
+        data_recon_all = None  # Will be computed on-demand
+    else:
+        if 'reconstructions' not in data:
+            print(f"Error: 'reconstructions' not found in {npz_file_path}.")
+            exit()
+        data_recon_all_raw = data['reconstructions']
+        
+    num_samples_total = data_gt_all_raw.shape[0]
 
     if num_samples_total == 0:
         print("Error: No samples found in the data file.")
         exit()
-    print(f"Loaded {num_samples_total} samples successfully from {npz_file_path}.")
+    
+    # Store raw data initially - will be processed after model config is loaded
+    data_gt_all = data_gt_all_raw
+    if not eval_onthefly:
+        data_recon_all = data_recon_all_raw
+    
+    if eval_onthefly:
+        print(f"Loaded {num_samples_total} ground truth samples for on-the-fly reconstruction from {npz_file_path}.")
+    else:
+        print(f"Loaded {num_samples_total} samples successfully from {npz_file_path}.")
+
+# --- Function to process data after model config is loaded ---
+def process_data_with_model_config():
+    """
+    Process the loaded data based on model configuration.
+    Apply skipped sampling if necessary.
+    """
+    global data_gt_all, data_recon_all, npz_points_num, model_points_num, skip_factor, vae_cfg
+    
+    if vae_cfg is None:
+        print("Error: VAE config not loaded. Cannot process data.")
+        return
+    
+    model_points_num = vae_cfg.model.sample_points_num
+    print(f"Model expects {model_points_num} points per curve.")
+    
+    if npz_points_num == model_points_num:
+        skip_factor = 1
+        print("NPZ and model point counts match. No sampling needed.")
+    elif npz_points_num > model_points_num:
+        if npz_points_num % model_points_num == 0:
+            print("Skip downsampling")
+            return 
+            skip_factor = npz_points_num // model_points_num
+            print(f"Applying skipped sampling with factor {skip_factor} ({npz_points_num} -> {model_points_num} points).")
+            
+            # Apply skipped sampling to ground truth data
+            print("Processing ground truth data...")
+            data_gt_all = apply_skipped_sampling(data_gt_all)
+            
+            # Apply skipped sampling to reconstruction data if available
+            if data_recon_all is not None:
+                print("Processing reconstruction data...")
+                data_recon_all = apply_skipped_sampling(data_recon_all)
+        else:
+            print(f"Warning: NPZ points ({npz_points_num}) not evenly divisible by model points ({model_points_num}).")
+            skip_factor = npz_points_num // model_points_num
+            if skip_factor == 0:
+                skip_factor = 1
+            print(f"Using skip factor {skip_factor}, may result in approximate point count.")
+            
+            # Apply skipped sampling
+            data_gt_all = apply_skipped_sampling(data_gt_all)
+            if data_recon_all is not None:
+                data_recon_all = apply_skipped_sampling(data_recon_all)
+    else:
+        print(f"Error: NPZ has fewer points ({npz_points_num}) than model expects ({model_points_num}). Cannot proceed.")
+        exit()
+    
+    print(f"Data processing complete. Final data shape: {data_gt_all.shape}")
 
 # --- VAE Model Loading ---
 def calculate_latent_spatial_dim(cfg_model_vae): # Renamed arg for clarity
@@ -80,6 +184,9 @@ def load_vae_model_and_config(config_path, checkpoint_path):
     except Exception as e:
         print(f"Error loading VAE config: {e}")
         exit()
+
+    # Process data with model config after loading config
+    process_data_with_model_config()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -129,17 +236,76 @@ def get_new_random_sample_idx(exclude_indices):
         new_idx = random.randint(0, num_samples_total - 1)
     return new_idx
 
+# --- Function to reconstruct a single curve using the VAE model ---
+def reconstruct_curve_with_vae(curve_data_cxn):
+    """
+    Reconstruct a single curve using the loaded VAE model.
+    
+    Args:
+        curve_data_cxn: numpy array of shape (C, N_points) - the ground truth curve (already processed)
+        
+    Returns:
+        numpy array of shape (N_out, C) - the reconstructed curve points
+    """
+    global vae_model, vae_cfg, device, model_points_num
+    
+    if vae_model is None or vae_cfg is None or device is None:
+        print("VAE model not loaded. Cannot reconstruct curve.")
+        return curve_data_cxn.transpose()  # Return original as fallback
+    
+    # Ensure we're using the correct number of points
+    expected_points = model_points_num if model_points_num is not None else vae_cfg.model.sample_points_num
+    if curve_data_cxn.shape[-1] != expected_points:
+        print(f"Warning: Input curve has {curve_data_cxn.shape[-1]} points, but model expects {expected_points}")
+    
+    # Add batch dimension: (1, C, N_points)
+    input_tensor = torch.from_numpy(curve_data_cxn).float().unsqueeze(0).to(device)
+    
+    with torch.no_grad():
+        # Encode to latent space
+        posterior = vae_model.encode(input_tensor).latent_dist
+        z = posterior.mode()  # Use mode instead of sampling for deterministic reconstruction
+        
+        # Generate query points for decoding - use the model's expected number of output points
+        t_queries = torch.rand(1, expected_points, device=device)
+        t_queries, _ = torch.sort(t_queries, dim=-1)
+        
+        # Decode back to curve
+        reconstructed = vae_model.decode(z, t_queries).sample  # (1, C, N_out)
+        
+        # Remove batch dimension and transpose to (N_out, C)
+        reconstructed_curve = reconstructed[0].cpu().numpy().transpose()
+        
+    return reconstructed_curve
+
+# --- Get reconstruction data (either from file or computed on-the-fly) ---
+def get_reconstruction_data(sample_idx):
+    """
+    Get reconstruction data for a given sample index.
+    If eval_onthefly is True, compute reconstruction using VAE model.
+    Otherwise, return pre-computed reconstruction from data_recon_all.
+    """
+    global data_recon_all, data_gt_all, eval_onthefly
+    
+    if eval_onthefly:
+        # Reconstruct on-the-fly using VAE model
+        curve_gt_data = data_gt_all[sample_idx]  # Shape: (C, N_points)
+        return reconstruct_curve_with_vae(curve_gt_data)
+    else:
+        # Use pre-computed reconstruction
+        return data_recon_all[sample_idx].transpose()  # (N_out, C)
+
 # --- Polyscope Plotting/Updating a single curve pair ---
 def display_or_update_single_curve_pair(slot_idx, sample_idx):
     global ps_gt_curve_structures, ps_recon_curve_structures
 
-    # Ensure data_gt_all and data_recon_all are populated
-    if data_gt_all is None or data_recon_all is None:
+    # Ensure data_gt_all is populated
+    if data_gt_all is None:
         print("Data not loaded. Cannot display curves.")
         return
 
     curve_gt_points = data_gt_all[sample_idx].transpose() # (N_out, C)
-    curve_recon_points = data_recon_all[sample_idx].transpose() # (N_out, C)
+    curve_recon_points = get_reconstruction_data(sample_idx)  # Modified to use new function
 
     gt_name = f"ground_truth_curve_{slot_idx}"
     recon_name = f"reconstructed_curve_{slot_idx}"
@@ -262,7 +428,7 @@ def register_manual_xyz_axes(length=1.0, radius=0.02):
 
 # --- Core VAE Sampling Function ---
 def generate_latent_variations(source_curve_data_cxn, num_variations, sigma_val):
-    global vae_model, vae_cfg, device, latent_spatial_dim_global
+    global vae_model, vae_cfg, device, latent_spatial_dim_global, model_points_num
     if vae_model is None or vae_cfg is None or device is None or latent_spatial_dim_global is None:
         print("VAE model not loaded. Cannot generate variations.")
         return []
@@ -271,9 +437,12 @@ def generate_latent_variations(source_curve_data_cxn, num_variations, sigma_val)
         print("Sigma scale must be positive.")
         return []
 
-    # Input curve_data is expected as (C, N_points) from data_gt_all[idx]
+    # Input curve_data is expected as (C, N_points) from data_gt_all[idx] (already processed)
     # Add batch dim: (1, C, N_points)
     input_tensor = torch.from_numpy(source_curve_data_cxn).float().unsqueeze(0).to(device)
+    
+    # Ensure we're using the correct number of points
+    expected_points = model_points_num if model_points_num is not None else vae_cfg.model.sample_points_num
     
     generated_curves_list = []
     with torch.no_grad():
@@ -295,8 +464,8 @@ def generate_latent_variations(source_curve_data_cxn, num_variations, sigma_val)
         if not z_samples_list: return []
         z_to_decode = torch.cat(z_samples_list, dim=0) # (num_variations, latent_C, latent_N_spatial)
         
-        # Prepare query points 't' for the decoder
-        t_queries = torch.rand(num_variations, vae_cfg.model.sample_points_num, device=device)
+        # Prepare query points 't' for the decoder - use the model's expected number of points
+        t_queries = torch.rand(num_variations, expected_points, device=device)
         t_queries, _ = torch.sort(t_queries, dim=-1)
         
         decoded_curves_batch = vae_model.decode(z_to_decode, t_queries).sample # (num_variations, C, N_out)
@@ -312,6 +481,22 @@ def generate_latent_variations(source_curve_data_cxn, num_variations, sigma_val)
 def my_ui_callback():
     global num_curves_to_display_ui, current_sample_indices, data_gt_all
     global ui_source_slot_for_sampling, ui_num_variations, ui_sigma_scale, ps_sampled_variation_structures
+    global eval_onthefly, npz_points_num, model_points_num, skip_factor  # Added sampling info
+    
+    # --- Display current evaluation mode ---
+    if eval_onthefly:
+        ps.imgui.TextColored((0.2, 0.8, 0.2, 1), "Mode: On-the-fly VAE Reconstruction")
+    else:
+        ps.imgui.TextColored((0.8, 0.8, 0.2, 1), "Mode: Pre-computed Reconstructions")
+    
+    # --- Display sampling information ---
+    if npz_points_num is not None and model_points_num is not None:
+        if skip_factor == 1:
+            ps.imgui.TextColored((0.7, 0.7, 0.7, 1), f"Points: {npz_points_num} (NPZ) = {model_points_num} (Model) - No sampling")
+        else:
+            ps.imgui.TextColored((0.9, 0.7, 0.3, 1), f"Points: {npz_points_num} (NPZ) -> {model_points_num} (Model), Skip: {skip_factor}")
+    
+    ps.imgui.Separator()
     
     # --- GT/Recon Display Management ---
     ps.imgui.PushItemWidth(100)
@@ -383,10 +568,11 @@ def my_ui_callback():
 # --- Main Execution ---
 if __name__ == '__main__':
     parser = ArgumentParser(description="Visualize VAE Reconstructions and Sample Latent Variations.")
-    parser.add_argument('--npz_file', type=str, required=True, help="Path to the .npz file containing 'ground_truth' and 'reconstructions'.")
+    parser.add_argument('--npz_file', type=str, required=True, help="Path to the .npz file containing 'ground_truth' and optionally 'reconstructions' (not needed with --eval_onthefly).")
     parser.add_argument('--config', type=str, required=True, help="Path to the VAE model config file.")
     parser.add_argument('--checkpoint', type=str, required=True, help="Path to the VAE model checkpoint file.")
     parser.add_argument('--seed', type=int, default=None, help="Random seed for reproducibility.")
+    parser.add_argument('--eval_onthefly', action='store_true', help="Reconstruct ground truth data using the VAE model instead of using pre-computed reconstructions.")
     args = parser.parse_args()
 
     if args.seed is not None:
@@ -397,7 +583,7 @@ if __name__ == '__main__':
             torch.cuda.manual_seed_all(args.seed)
         print(f"Using random seed: {args.seed}")
 
-    load_npz_data(args.npz_file) # Load ground truth and reconstruction data
+    load_npz_data(args.npz_file, args.eval_onthefly) # Load ground truth and reconstruction data
     load_vae_model_and_config(args.config, args.checkpoint) # Load VAE model
 
     # Initialize Polyscope
