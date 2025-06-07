@@ -1,0 +1,55 @@
+resume_training: true
+from_start: false
+
+epochs: 1000
+batch_size: 256  # Adjusted for B-spline model
+lr: 0.00001
+num_workers: 48
+num_gpus: 5
+
+grad_accum_every: 1
+ema_update_every: 20
+max_grad_norm: 5.
+
+val_every_epoch: 1
+save_every_epoch: 10
+log_every_step: 10
+
+# Visual evaluation settings
+visual_eval_every_step: 1000  # Visualize every 100 steps for B-spline debugging
+num_visual_samples: 16  # Number of samples to visualize
+
+use_wandb_tracking: true
+wandb_project_name: CLR-surface_flow
+wandb_run_name: train
+
+DATA:
+    replication: 10
+    mask_prob: 0
+    # bs_path: /home/qindafei/CAD/abc_surfaces_cp/balanced_data/approx_train.npy
+    # points_path: /home/qindafei/CAD/abc_surfaces_cp/balanced_data/re_evaluate_points_train.npy
+    train_set_file_path: /home/qindafei/CAD/abc_surfaces_cp/balanced_data/normalized_approx_train.npy
+    # points_path: /home/qindafei/CAD/abc_surfaces_cp/balanced_data/normalized_sampled_surface_train.npy
+    val_set_file_path: /home/qindafei/CAD/abc_surfaces_cp/normalized_approx_val.npy
+
+
+MODEL:
+    sample_points_num: 16
+    depth: 24
+    dim: 512
+    latent_dim: 3 # Input & Output dimension
+    heads: 8
+    pe: true
+    res: 32
+    block_out_channels: [
+        32, 64, 128
+    ]
+
+
+
+    checkpoint_folder: checkpoints/surface_flow_bs
+    checkpoint_file_name: model-58.pt
+    load_checkpoint_from_file: checkpoints/surface_flow_bs/model-pretrained.pt
+
+scheduler_type: ddpm
+prediction_type: sample
