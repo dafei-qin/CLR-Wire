@@ -47,7 +47,7 @@ class surface_dataset_flow_cp(Dataset):
         else:
             mask = np.zeros_like(cp)[..., 0:1]
         if self.pc is not None:
-            pc = pc[idx]
+            pc = self.pc[idx]
         else:
             pc = self.cp2surfaceLayer(torch.from_numpy(cp).float().to(self.cp2surfaceLayer.device).unsqueeze(0)).squeeze(0)
 

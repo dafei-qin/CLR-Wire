@@ -89,7 +89,7 @@ class TrainerFlowSurface(BaseTrainer):
         self.visual_eval_every_step = visual_eval_every_step
         self.num_visual_samples = num_visual_samples
         self.scheduler = get_new_scheduler(prediction_type)
-        self.pipe = ZLDMPipeline(self.model, self.scheduler, dtype=torch.float32) # Here we use ema instead of model for inference
+        self.pipe = ZLDMPipeline(self.model, self.scheduler, dtype=torch.float32) # Model will be replaced with EMA during inference
         self.cp2surfaceLayer = BSplineSurfaceLayer(resolution=model.res)
 
     def create_surface_visualization_bs(self, gt_samples, cross_attention_recon, bspline_recon, control_points, step):
@@ -242,7 +242,8 @@ class TrainerFlowSurface(BaseTrainer):
             # else:
             #     output = model(forward_kwargs, sample_posterior=False, return_loss=True, return_both_branches=True)
             device = forward_kwargs['data'].device
-            sample  = self.pipe(pc=forward_kwargs['pc'], num_latents=3, sample=forward_kwargs['data'], sample_mask=forward_kwargs['mask'], num_samples=forward_kwargs['data'].shape[0], device=device)
+            #   sample  = self.pipe(pc=forward_kwargs['pc'], num_latents=3, sample=forward_kwargs['data'], sample_mask=forward_kwargs['mask'], num_samples=forward_kwargs['data'].shape[0], device=device, num_inference_steps=50)
+            sample  = self.pipe(pc=forward_kwargs['pc'], num_latents=3, sample=None, sample_mask=None, num_samples=forward_kwargs['data'].shape[0], device=device, num_inference_steps=50)
             # loss, loss_dict = self.train_step(forward_kwargs, is_train=False)
             # loss = torch.nn.functional.mse_loss(sample, forward_kwargs['data'], weight=(1-forward_kwargs['mask']))
             # total_val_loss += (loss / num_val_batches)
@@ -346,13 +347,15 @@ class TrainerFlowSurface(BaseTrainer):
 
                     noisy_sample = self.scheduler.add_noise(gt_sample, noise, timesteps)
                     noisy_sample = noisy_sample * (1 - mask_sample) + gt_sample * mask_sample
-
-                    # target = self.scheduler.get_velocity(gt_sample, noise, timesteps)
+                    if self.scheduler.prediction_type == 'v_prediction':
+                        target = self.scheduler.get_velocity(gt_sample, noise, timesteps)
+                    else:
+                        target = gt_sample
 
                     # forward pass
                     output = model(sample=noisy_sample, t = timesteps, pc_cond=pc_cond)
 
-                    loss = torch.nn.functional.mse_loss(output, gt_sample, reduction='none')
+                    loss = torch.nn.functional.mse_loss(output, target, reduction='none')
                     loss = loss * (1-mask_sample)
 
                     loss = loss.mean()
@@ -415,7 +418,9 @@ class TrainerFlowSurface(BaseTrainer):
                             forward_kwargs = {k: v.to(self.device) for k, v in forward_kwargs.items()}
                         else:
                             forward_kwargs = forward_kwargs.to(self.device)
-                        sample  = self.pipe(pc=forward_kwargs['pc'], num_latents=3, sample=forward_kwargs['data'], sample_mask=forward_kwargs['mask'], num_samples=forward_kwargs['data'].shape[0], device=self.device)
+                        # sample  = self.pipe(pc=forward_kwargs['pc'], num_latents=3, sample=forward_kwargs['data'], sample_mask=forward_kwargs['mask'], num_samples=forward_kwargs['data'].shape[0], device=self.device, num_inference_steps=50)
+                        sample  = self.pipe(pc=forward_kwargs['pc'], num_latents=3, sample=None, sample_mask=None, num_samples=forward_kwargs['data'].shape[0], device=self.device, num_inference_steps=50)
+                        # sample  = self.pipe(pc=forward_kwargs['pc'], num_latents=3,  num_samples=forward_kwargs['data'].shape[0], device=self.device)
                         # loss, loss_dict = self.train_step(forward_kwargs, is_train=False)
 
                         # Here we predict the clean sample directly.

@@ -21,7 +21,7 @@ num_visual_samples: 16  # Number of samples to visualize
 
 use_wandb_tracking: true
 wandb_project_name: CLR-surface_flow
-wandb_run_name: train
+wandb_run_name: train_vpred
 
 DATA:
     replication: 10
@@ -40,16 +40,16 @@ MODEL:
     latent_dim: 3 # Input & Output dimension
     heads: 8
     pe: true
-    res: 32
+    res: 16
     block_out_channels: [
         32, 64, 128
     ]
 
 
 
-    checkpoint_folder: checkpoints/surface_flow_bs
-    checkpoint_file_name: model-58.pt
+    checkpoint_folder: checkpoints/surface_flow_bs_vpred
+    checkpoint_file_name: model-29.pt
     load_checkpoint_from_file: checkpoints/surface_flow_bs/model-pretrained.pt
 
 scheduler_type: ddpm
-prediction_type: sample
+prediction_type: v_prediction

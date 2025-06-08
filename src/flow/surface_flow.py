@@ -221,7 +221,7 @@ class ZLDMPipeline:
 
     @torch.no_grad()
     def __call__(self, pc=None, cfg=7.5, num_inference_steps=50, generator: torch.Generator = None, num_latents=512, num_samples=1, sample=None, sample_mask=None,\
-                  tgt_key_padding_mask=None, show_progress=True, device='cpu'
+                  tgt_key_padding_mask=None, show_progress=True, device='cpu',
                 ):
         # device = self.Z.device
         # device = self.denoiser.device
