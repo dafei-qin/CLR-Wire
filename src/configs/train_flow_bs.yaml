@@ -28,12 +28,21 @@ DATA:
     mask_prob: 0
     transform_cp: true
     transform_pc: true
+    
+    # Multiple dataset support: Use lists to specify multiple datasets that will be concatenated
+    # Control points datasets (required)
+    train_set_file_path: [/home/qindafei/CAD/abc_surfaces_cp/balanced_data/normalized_approx_train.npy, /home/qindafei/CAD/abc_surfaces_cp/balanced_data/approx_train.npy]
+    val_set_file_path: [/home/qindafei/CAD/abc_surfaces_cp/normalized_approx_val.npy, /home/qindafei/CAD/abc_surfaces_cp/approx_val.npy]
+    
+    # Point cloud datasets (optional) - if not provided, points will be generated from control points
+    # train_pc_path: [/path/to/pc_dataset1.npy, /path/to/pc_dataset2.npy]
+    # val_pc_path: [/path/to/val_pc_dataset1.npy, /path/to/val_pc_dataset2.npy]
+    
+    # Legacy single dataset paths (commented out for reference)
+    # train_set_file_path: /home/qindafei/CAD/abc_surfaces_cp/balanced_data/approx_train.npy
+    # val_set_file_path: /home/qindafei/CAD/abc_surfaces_cp/balanced_data/approx_val.npy
     # bs_path: /home/qindafei/CAD/abc_surfaces_cp/balanced_data/approx_train.npy
     # points_path: /home/qindafei/CAD/abc_surfaces_cp/balanced_data/re_evaluate_points_train.npy
-    # train_set_file_path: /home/qindafei/CAD/abc_surfaces_cp/balanced_data/normalized_approx_train.npy
-    train_set_file_path: /home/qindafei/CAD/abc_surfaces_cp/balanced_data/approx_train.npy.npy
-    # points_path: /home/qindafei/CAD/abc_surfaces_cp/balanced_data/normalized_sampled_surface_train.npy
-    val_set_file_path: /home/qindafei/CAD/abc_surfaces_cp/approx_val.npy
 
 
 MODEL:
