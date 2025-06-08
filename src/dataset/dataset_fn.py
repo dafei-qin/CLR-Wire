@@ -82,6 +82,22 @@ def surface_rotate(vertices):
     vertices = vertices @ rotation_matrix.T
     return vertices
 
+def surface_control_points_scale_and_rotate(control_points, interval=(0.8, 1.2)):
+    # Control points: (N, 3)
+    scale_ratio = np.random.rand(3) * (interval[1] - interval[0]) + interval[0]
+    scale_ratio = scale_ratio[np.newaxis, :]
+    control_points *= scale_ratio
+
+    theta_x, theta_y, theta_z = np.random.rand(3) * 360
+    rotation_matrix = rotation_matrix_x(theta_x) @ rotation_matrix_y(theta_y) @ rotation_matrix_z(theta_z)
+    control_points = control_points @ rotation_matrix.T
+    return control_points
+
+
+def surface_samples_add_noise(samples, intensity=0.01):
+    noise = np.random.normal(scale=intensity, size=samples.shape)
+    samples += noise
+    return samples
 
 
 def scale_and_jitter_wireframe_set(vertices, interval=(0.85, 1.15), jitter=0.1):

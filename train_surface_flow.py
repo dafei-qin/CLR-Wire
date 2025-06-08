@@ -6,6 +6,7 @@ from src.flow.surface_flow import ZLDM as MyModel
 from src.dataset.dataset_flow_cp import surface_dataset_flow_cp as MyDataset
 from src.trainer.trainer_flow_surface import TrainerFlowSurface as MyTrainer
 from src.utils.config import NestedDictToClass, load_config
+from src.dataset.dataset_fn import surface_control_points_scale_and_rotate, surface_samples_add_noise
 
 # Arguments
 program_parser = ArgumentParser(description='Train surface vae model.')
@@ -30,7 +31,9 @@ train_dataset = MyDataset(
     mask_pattern=getattr(args.data, 'mask_pattern', None),
     replication=args.data.replication,
     num_samples=args.model.sample_points_num,
-    is_train=True
+    is_train=True,
+    transform_cp=surface_control_points_scale_and_rotate if args.data.transform_cp else None,
+    transform_pc=surface_samples_add_noise if args.data.transform_pc else None
 )
 
 

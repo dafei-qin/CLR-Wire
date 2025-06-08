@@ -1,5 +1,5 @@
-resume_training: true
-from_start: false
+resume_training: false
+from_start: true
 
 epochs: 1000
 batch_size: 256  # Adjusted for B-spline model
@@ -21,16 +21,19 @@ num_visual_samples: 16  # Number of samples to visualize
 
 use_wandb_tracking: true
 wandb_project_name: CLR-surface_flow
-wandb_run_name: train_vpred
+wandb_run_name: train_vpred_cp_pc_aug
 
 DATA:
     replication: 10
     mask_prob: 0
+    transform_cp: true
+    transform_pc: true
     # bs_path: /home/qindafei/CAD/abc_surfaces_cp/balanced_data/approx_train.npy
     # points_path: /home/qindafei/CAD/abc_surfaces_cp/balanced_data/re_evaluate_points_train.npy
-    train_set_file_path: /home/qindafei/CAD/abc_surfaces_cp/balanced_data/normalized_approx_train.npy
+    # train_set_file_path: /home/qindafei/CAD/abc_surfaces_cp/balanced_data/normalized_approx_train.npy
+    train_set_file_path: /home/qindafei/CAD/abc_surfaces_cp/balanced_data/approx_train.npy.npy
     # points_path: /home/qindafei/CAD/abc_surfaces_cp/balanced_data/normalized_sampled_surface_train.npy
-    val_set_file_path: /home/qindafei/CAD/abc_surfaces_cp/normalized_approx_val.npy
+    val_set_file_path: /home/qindafei/CAD/abc_surfaces_cp/approx_val.npy
 
 
 MODEL:
@@ -47,7 +50,7 @@ MODEL:
 
 
 
-    checkpoint_folder: checkpoints/surface_flow_bs_vpred
+    checkpoint_folder: checkpoints/surface_flow_bs_vpred_cp_pc_aug
     checkpoint_file_name: model-29.pt
     load_checkpoint_from_file: checkpoints/surface_flow_bs/model-pretrained.pt
 
