@@ -105,13 +105,21 @@ class surface_dataset_flow_cp(Dataset):
             cp = self.transform_cp(cp)
         if torch.rand(1) < self.mask_prob:
             mask = self.mask_pattern
+            if isinstance(mask, np.ndarray):
+                mask = torch.from_numpy(mask).float()
+            elif not isinstance(mask, torch.Tensor):
+                mask = torch.tensor(mask, dtype=torch.float32)
         else:
             mask = np.zeros_like(cp)[..., 0:1]
+            mask = torch.from_numpy(mask).float()
         if self.pc is not None:
+            assert self.transform_pc is None, "transform_pc is not None when pc is not None"
             pc = self.pc[idx]
+            if isinstance(pc, np.ndarray):
+                pc = torch.from_numpy(pc).float()
         else:
             pc = self.cp2surfaceLayer(torch.from_numpy(cp).float().to(self.cp2surfaceLayer.device).unsqueeze(0)).squeeze(0)
         if self.transform_pc is not None:
-            pc = self.transform_pc(pc)
+            pc = self.transform_pc(pc).float()
 
-        return {'data': cp, 'mask': mask, 'pc': pc.squeeze()}
+        return {'data': torch.from_numpy(cp).float(), 'mask': mask, 'pc': pc.squeeze().float()}

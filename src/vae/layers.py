@@ -47,6 +47,9 @@ class BSplineSurfaceLayer(nn.Module):
         Returns:
             surface_points: (B, M, M, 3) tensor of evaluated surface points
         """
+        # Ensure control points are on the same device as the layer
+        control_points = control_points.to(self.device)
+        
         batch_size = control_points.shape[0]
         
         # Replace einsum with matrix multiplication using rearrange

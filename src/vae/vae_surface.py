@@ -649,65 +649,7 @@ class AutoencoderKLBS2D(AutoencoderKL2D):
         bspline_dec = interpolate_2d(t, rearrange(bspline_surface, 'b h w c -> b c h w'))
 
         return (control_points, bspline_dec,)
-    # def _sample_from_surface(self, surface, indices):
-    #     """
-    #     Sample from B-spline surface using bilinear interpolation.
-        
-    #     Args:
-    #         surface: (B, H, W, 3) - B-spline surface points
-    #         indices: (B, N, M, 2) - sampling coordinates in [0, H-1] x [0, W-1]
-            
-    #     Returns:
-    #         sampled_points: (B, N, M, 3) - interpolated surface points
-    #     """
-    #     B, H, W, _ = surface.shape
-    #     _, N, M, _ = indices.shape
-        
-    #     # Clamp indices to valid range
-    #     indices = torch.clamp(indices, 0.0, float(H - 1))
-        
-    #     # Get integer and fractional parts
-    #     indices_floor = torch.floor(indices).long()
-    #     indices_frac = indices - indices_floor.float()
-        
-    #     # Get corner indices
-    #     x0 = indices_floor[:, :, :, 0]  # (B, N, M)
-    #     y0 = indices_floor[:, :, :, 1]  # (B, N, M)
-    #     x1 = torch.clamp(x0 + 1, 0, H - 1)
-    #     y1 = torch.clamp(y0 + 1, 0, W - 1)
-        
-    #     # Get fractional parts
-    #     dx = indices_frac[:, :, :, 0:1]  # (B, N, M, 1)
-    #     dy = indices_frac[:, :, :, 1:2]  # (B, N, M, 1)
-        
-    #     # Use more robust gathering approach
-    #     def gather_points(x_idx, y_idx):
-    #         # Flatten surface for easier indexing
-    #         surface_flat = surface.reshape(B, H * W, 3)  # (B, H*W, 3)
-            
-    #         # Create linear indices
-    #         linear_idx = x_idx * W + y_idx  # (B, N, M)
-            
-    #         # Expand indices for batch dimension
-    #         batch_idx = torch.arange(B, device=surface.device).view(B, 1, 1).expand(B, N, M)
-            
-    #         # Gather points using advanced indexing
-    #         gathered = surface_flat[batch_idx, linear_idx]  # (B, N, M, 3)
-            
-    #         return gathered
-        
-    #     # Get corner values
-    #     p00 = gather_points(x0, y0)
-    #     p01 = gather_points(x0, y1)
-    #     p10 = gather_points(x1, y0)
-    #     p11 = gather_points(x1, y1)
-        
-    #     # Bilinear interpolation
-    #     p0 = p00 * (1 - dy) + p01 * dy
-    #     p1 = p10 * (1 - dy) + p11 * dy
-    #     interpolated = p0 * (1 - dx) + p1 * dx
-        
-    #     return interpolated
+
 
     @apply_forward_hook
     def decode_both_branches(
@@ -818,8 +760,8 @@ class AutoencoderKLBS2D(AutoencoderKL2D):
             )
             
             # Free-Bits: ensure minimum KL loss per dimension
-            free_bits = 0.5  # Minimum bits per latent dimension
-            kl_loss_per_dim = torch.clamp(kl_loss_per_dim, min=free_bits)
+            # free_bits = 0.5  # Minimum bits per latent dimension
+            # kl_loss_per_dim = torch.clamp(kl_loss_per_dim, min=free_bits)
             kl_loss = torch.sum(kl_loss_per_dim, dim=[1, 2, 3]).mean()
 
             # KL annealing: gradually increase KL weight during training

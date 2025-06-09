@@ -96,7 +96,7 @@ class TrainerBS(BaseTrainer):
         batch_size = min(self.num_visual_samples, gt_samples.shape[0])
         
         # Fixed axis limits for consistent scaling across all plots
-        axis_limit = 1.5  # Slightly larger than the normalized range [-1, 1]
+        axis_limit = 1.05 # Slightly larger than the normalized range [-1, 1]
         
         fig = plt.figure(figsize=(8*batch_size, 24))  # Increased height for 4 rows
         

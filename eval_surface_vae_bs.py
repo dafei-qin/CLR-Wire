@@ -29,13 +29,13 @@ def evaluate_model(model, dataloader, device, num_samples=None):
             if num_samples and i >= num_samples:
                 break
                 
-            # Prepare data
-            data = batch['data'].to(device)  # Surface points
-            control_points = batch['control_points'].to(device)  # B-spline control points
+            # Prepare data - ensure float32 dtype
+            data = batch['data'].to(device, dtype=torch.float32)  # Surface points
+            control_points = batch['control_points'].to(device, dtype=torch.float32)  # B-spline control points
             
             # Generate grid coordinates for decoding
             bs, h, w, c = data.shape
-            t_1d = torch.linspace(0, 1, h, device=device)
+            t_1d = torch.linspace(0, 1, h, device=device, dtype=torch.float32)
             t_grid = torch.stack(torch.meshgrid(t_1d, t_1d, indexing='ij'), dim=-1)
             t = t_grid.unsqueeze(0).repeat(bs, 1, 1, 1)
             
@@ -114,6 +114,8 @@ def main():
         print("Loaded raw model state_dict.")
     
     model.to(device)
+    # Ensure model uses float32
+    model = model.float()
     print("Model loaded successfully.")
     
     # Prepare dataset
