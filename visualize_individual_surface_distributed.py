@@ -325,7 +325,7 @@ class DistributedSurfaceVisualizer:
         
         print(f"\n=== Visualizing UID {current_uid}, Surface {self.current_surface_idx} ===")
         print(f"Surface Type: {surface_type}")
-        print(f"Control points: {len(surface_cp) if surface_cp else 0}")
+        print(f"Control points: {len(surface_cp) if type(surface_cp) == list else 0}")
         print(f"Curves: {len(curves_cp)}")
         
         # Visualize surface (same logic as original visualizer)
@@ -409,112 +409,115 @@ class DistributedSurfaceVisualizer:
                     ps_curve.set_color(self.curve_color)
                     ps_curve.set_radius(0.005)
                     self.curve_objects.append(curve_name)
+        
+        # Automatically fit camera to the new surface
+        ps.reset_camera_to_home_view()
 
     def create_gui_callback(self):
         """Create GUI callback for polyscope"""
         def gui_callback():
             # UID navigation
-            psim.text("UID Navigation")
-            psim.text(f"Total UIDs: {self.total_uids}")
+            psim.Text("UID Navigation")
+            psim.Text(f"Total UIDs: {self.total_uids}")
             
             if self.total_uids > 0:
                 current_uid = self.available_uids[self.current_uid_idx] if self.current_uid_idx < len(self.available_uids) else "N/A"
-                psim.text(f"Current UID: {current_uid} ({self.current_uid_idx + 1}/{self.total_uids})")
-                psim.text(f"Surfaces in UID: {self.surfaces_in_current_uid}")
+                psim.Text(f"Current UID: {current_uid} ({self.current_uid_idx + 1}/{self.total_uids})")
+                psim.Text(f"Surfaces in UID: {self.surfaces_in_current_uid}")
                 
-                # UID navigation buttons
-                if psim.button("Previous UID"):
+                # UID navigation Buttons
+                if psim.Button("Previous UID"):
                     new_idx = max(0, self.current_uid_idx - 1)
                     if new_idx != self.current_uid_idx:
                         self.change_uid(new_idx)
                 
-                psim.same_line()
-                if psim.button("Next UID"):
+                psim.SameLine()
+                if psim.Button("Next UID"):
                     new_idx = min(self.total_uids - 1, self.current_uid_idx + 1)
                     if new_idx != self.current_uid_idx:
                         self.change_uid(new_idx)
                 
                 # UID slider
-                changed, new_uid_idx = psim.slider_int("UID Index", self.current_uid_idx, 0, self.total_uids - 1)
+                changed, new_uid_idx = psim.SliderInt("UID Index", self.current_uid_idx, 0, self.total_uids - 1)
                 if changed:
                     self.change_uid(new_uid_idx)
                 
-                psim.separator()
+                psim.Separator()
                 
                 # Surface navigation within current UID
-                psim.text("Surface Navigation")
+                psim.Text("Surface Navigation")
                 if self.surfaces_in_current_uid > 0:
                     surface_type = self.surface_types[self.current_surface_idx] if self.current_surface_idx < len(self.surface_types) else "N/A"
                     num_curves = len(self.curve_cp_lists[self.current_surface_idx]) if self.current_surface_idx < len(self.curve_cp_lists) else 0
                     
-                    psim.text(f"Current Surface: {self.current_surface_idx + 1}/{self.surfaces_in_current_uid}")
-                    psim.text(f"Surface Type: {surface_type}")
-                    psim.text(f"Curves: {num_curves}")
+                    psim.Text(f"Current Surface: {self.current_surface_idx + 1}/{self.surfaces_in_current_uid}")
+                    psim.Text(f"Surface Type: {surface_type}")
+                    psim.Text(f"Curves: {num_curves}")
                     
-                    # Surface navigation buttons
-                    if psim.button("Previous Surface"):
+                    # Surface navigation Buttons
+                    if psim.Button("Previous Surface"):
                         new_idx = max(0, self.current_surface_idx - 1)
                         if new_idx != self.current_surface_idx:
                             self.current_surface_idx = new_idx
                             self.visualize_current_surface()
                     
-                    psim.same_line()
-                    if psim.button("Next Surface"):
+                    psim.SameLine()
+                    if psim.Button("Next Surface"):
                         new_idx = min(self.surfaces_in_current_uid - 1, self.current_surface_idx + 1)
                         if new_idx != self.current_surface_idx:
                             self.current_surface_idx = new_idx
                             self.visualize_current_surface()
                     
                     # Surface slider
-                    changed, new_surface_idx = psim.slider_int("Surface Index", self.current_surface_idx, 0, self.surfaces_in_current_uid - 1)
+                    changed, new_surface_idx = psim.SliderInt("Surface Index", self.current_surface_idx, 0, self.surfaces_in_current_uid - 1)
                     if changed:
                         self.current_surface_idx = new_surface_idx
                         self.visualize_current_surface()
                 
-                psim.separator()
+                psim.Separator()
                 
                 # Visualization settings (same as original)
-                psim.text("Visualization Settings")
+                psim.Text("Visualization Settings")
                 
-                changed, self.show_control_points = psim.checkbox("Show Control Points", self.show_control_points)
+                changed, self.show_control_points = psim.Checkbox("Show Control Points", self.show_control_points)
                 if changed:
                     self.visualize_current_surface()
                 
-                changed, self.show_wireframe = psim.checkbox("Show Wireframe", self.show_wireframe)
+                changed, self.show_wireframe = psim.Checkbox("Show Wireframe", self.show_wireframe)
                 if changed:
                     self.visualize_current_surface()
                 
-                changed, self.surface_transparency = psim.slider_float("Surface Transparency", self.surface_transparency, 0.0, 1.0)
+                changed, self.surface_transparency = psim.SliderFloat("Surface Transparency", self.surface_transparency, 0.0, 1.0)
                 if changed:
                     if self.surface_object:
                         ps.get_surface_mesh(self.surface_object).set_transparency(self.surface_transparency)
                 
-                changed, self.control_point_size = psim.slider_float("Control Point Size", self.control_point_size, 0.001, 0.1)
+                changed, self.control_point_size = psim.SliderFloat("Control Point Size", self.control_point_size, 0.001, 0.1)
                 if changed:
                     for obj_name in self.control_point_objects:
                         ps.get_point_cloud(obj_name).set_radius(self.control_point_size)
                 
-                psim.separator()
+                psim.Separator()
                 
                 # Resolution settings
-                psim.text("Resolution Settings")
+                psim.Text("Resolution Settings")
                 
-                changed, self.surface_resolution = psim.slider_int("Surface Resolution", self.surface_resolution, 8, 64)
+                changed, self.surface_resolution = psim.SliderInt("Surface Resolution", self.surface_resolution, 8, 64)
                 if changed:
                     self.visualize_current_surface()
                 
-                changed, self.curve_resolution = psim.slider_int("Curve Resolution", self.curve_resolution, 16, 128)
+                changed, self.curve_resolution = psim.SliderInt("Curve Resolution", self.curve_resolution, 16, 128)
                 if changed:
                     self.visualize_current_surface()
                 
-                psim.separator()
+                psim.Separator()
                 
                 # Surface type color legend
-                psim.text("Surface Type Colors:")
+                psim.Text("Surface Type Colors:")
                 for surf_type, color in self.surface_type_colors.items():
-                    psim.text(f"  {surf_type}")
-                    psim.same_line()
-                    psim.text(f"RGB({color[0]:.1f}, {color[1]:.1f}, {color[2]:.1f})")
+                    psim.Text(f"  {surf_type}")
+                    psim.SameLine()
+                    psim.Text(f"RGB({color[0]:.1f}, {color[1]:.1f}, {color[2]:.1f})")
         
         return gui_callback
 
