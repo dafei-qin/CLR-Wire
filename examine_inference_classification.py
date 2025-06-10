@@ -58,8 +58,8 @@ def load_npy_data(points_path, labels_path):
         exit()
     
     # Validate data shapes
-    if data_points_all.ndim != 3 or data_points_all.shape[-1] != 3:
-        print(f"Error: Expected points shape (M, N, 3), got {data_points_all.shape}")
+    if data_points_all.ndim != 4 or data_points_all.shape[-1] != 3:
+        print(f"Error: Expected points shape (B, M, M, 3), got {data_points_all.shape}")
         exit()
     
     if len(data_labels_all) != len(data_points_all):
@@ -244,23 +244,24 @@ def classify_point_cloud(points):
     autocast_context = torch.cuda.amp.autocast() if use_fp16 and device.type == "cuda" else torch.no_grad()
     
     with autocast_context:
-        # Get model predictions
-        logits = classification_model(points_tensor)  # (1, N*N, num_classes)
-        
-        # Global average pooling if output is sequence
-        if logits.dim() == 3:
-            logits = logits.mean(dim=1)  # (1, num_classes)
-        
-        # Get probabilities
-        probabilities = torch.softmax(logits, dim=-1)
-        
-        # Get predicted class and confidence
-        confidence, predicted_class = torch.max(probabilities, dim=-1)
-        
-        # Convert to numpy (ensure float32 for numpy compatibility)
-        predicted_class = predicted_class[0].cpu().numpy().item()
-        confidence = confidence[0].float().cpu().numpy().item()
-        all_probabilities = probabilities[0].float().cpu().numpy()
+        with torch.no_grad():
+            # Get model predictions
+            logits = classification_model(points_tensor)  # (1, N*N, num_classes)
+            
+            # Global average pooling if output is sequence
+            if logits.dim() == 3:
+                logits = logits.mean(dim=1)  # (1, num_classes)
+            
+            # Get probabilities
+            probabilities = torch.softmax(logits, dim=-1)
+            
+            # Get predicted class and confidence
+            confidence, predicted_class = torch.max(probabilities, dim=-1)
+            
+            # Convert to numpy (ensure float32 for numpy compatibility)
+            predicted_class = predicted_class[0].cpu().numpy().item()
+            confidence = confidence[0].float().cpu().numpy().item()
+            all_probabilities = probabilities[0].float().cpu().numpy()
         
     return predicted_class, confidence, all_probabilities
 
