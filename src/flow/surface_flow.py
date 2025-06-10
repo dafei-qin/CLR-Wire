@@ -91,7 +91,40 @@ class ControlNetConditioningEmbedding(nn.Module):
 
         return embedding
 
+class Encoder(ModelMixin, ConfigMixin):
+    @register_to_config
+    def __init__(self, in_dim, out_dim, depth=24, dim=512, heads=8, res=32):
+        super().__init__()
 
+        self.depth = depth
+        self.dim = dim
+        self.in_dim = in_dim
+        self.out_dim = out_dim
+        self.heads = heads
+        self.res = res
+
+        self.proj_in = nn.Linear(in_dim, dim, bias=False)
+        self.proj_out = nn.Linear(dim, out_dim, bias=False)
+        self.pe = PointEmbd2D(dim=dim)
+        self.layers = nn.TransformerEncoder(
+            nn.TransformerEncoderLayer(dim, heads, dim_feedforward=dim * 4, dropout=0, activation=F.gelu, batch_first=True, norm_first=True, layer_norm_eps=1e-4),
+            depth
+        )
+
+    def forward(self, x):
+        t_1d = torch.linspace(0, 1, self.res, device=x.device)
+        t_grid = torch.stack(torch.meshgrid(t_1d, t_1d, indexing='ij'), dim=-1)
+        x_pe = t_grid.unsqueeze(0).repeat(x.shape[0], 1, 1, 1)
+        x_pe = rearrange(x_pe, 'b h w c -> b (h w) c')
+        x_pe = self.pe(x_pe)
+        x = rearrange(x, 'b h w c -> b (h w) c', h=self.res, w=self.res)
+        x = self.proj_in(x)
+        x = x + x_pe
+        x = self.layers(x)
+        x = self.proj_out(x)
+        return x
+
+    
 class ZLDM(ModelMixin, ConfigMixin):
     @register_to_config
     def __init__(
