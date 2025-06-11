@@ -114,6 +114,145 @@ class SurfaceTransformationConverter:
         
         return result
 
+    def analyze_cylinder_from_points(self, surface_data):
+        """
+        Analyze actual surface points to determine better cylinder transformation.
+        This provides improved scale and translation by analyzing the actual point distribution.
+        
+        The method:
+        1. Projects all surface points onto the cylinder axis to determine actual height
+        2. Calculates the true center of the cylinder along its axis
+        3. Estimates the actual radius from point-to-axis distances
+        4. Updates scaling to match the actual height (z-scaling = actual_height / 2)
+        5. Updates translation to use the calculated center
+        
+        Args:
+            surface_data (dict): Surface data containing points, location, direction, radius
+            
+        Returns:
+            dict: Updated surface data with improved transformation parameters
+        """
+        # Get the basic conversion first as fallback
+        basic_result = self.convert_cylinder(surface_data)
+        
+        # Check if we have actual surface points to analyze
+        points = surface_data.get("points")
+        if points is None or len(points) == 0:
+            print("Warning: No surface points available for cylinder analysis, using basic conversion")
+            return basic_result
+        
+        try:
+            # Convert points to numpy array
+            points_array = np.array(points)
+            if len(points_array.shape) == 3 and points_array.shape[2] == 3:
+                # Reshape from (height, width, 3) to (n_points, 3)
+                points_flat = points_array.reshape(-1, 3)
+            elif len(points_array.shape) == 2 and points_array.shape[1] == 3:
+                points_flat = points_array
+            else:
+                print(f"Warning: Unexpected points shape {points_array.shape}, using basic conversion")
+                return basic_result
+            
+            # Validate we have enough points
+            if len(points_flat) < 4:
+                print("Warning: Too few points for reliable analysis, using basic conversion")
+                return basic_result
+            
+            # Get cylinder parameters
+            location = np.array(surface_data["location"][0])
+            direction = np.array(surface_data["direction"][0])
+            radius = surface_data["scalar"][0]
+            
+            # Normalize the direction vector
+            direction_norm = np.linalg.norm(direction)
+            if direction_norm < 1e-10:
+                print("Warning: Invalid direction vector, using basic conversion")
+                return basic_result
+            direction = direction / direction_norm
+            
+            # Project all points onto the cylinder axis to find height range
+            # Vector from cylinder location to each point
+            vectors_to_points = points_flat - location
+            
+            # Project onto the cylinder axis direction
+            projections = np.dot(vectors_to_points, direction)
+            
+            # Find the range of projections (this gives us the height of the actual cylinder)
+            min_projection = np.min(projections)
+            max_projection = np.max(projections)
+            actual_height = max_projection - min_projection
+            
+            # Validate height calculation
+            if actual_height < 1e-6:
+                print("Warning: Calculated height is too small, using basic conversion")
+                return basic_result
+            
+            # Find the center point along the axis
+            center_projection = (min_projection + max_projection) / 2
+            
+            # Calculate the actual center of the cylinder
+            actual_center = location + center_projection * direction
+            
+            # Calculate actual radius from points
+            # Distance from each point to the cylinder axis
+            axis_projections = np.outer(projections, direction)
+            closest_points_on_axis = location + axis_projections
+            radial_vectors = points_flat - closest_points_on_axis
+            radial_distances = np.linalg.norm(radial_vectors, axis=1)
+            
+            # Use median for more robust radius estimation
+            actual_radius_estimate = np.median(radial_distances)
+            radius_std = np.std(radial_distances)
+            
+            # Validate radius calculation
+            if actual_radius_estimate < 1e-6:
+                print("Warning: Calculated radius is too small, using basic conversion")
+                return basic_result
+            
+            print(f"Cylinder analysis:")
+            print(f"  Given radius: {radius:.4f}, Estimated from points: {actual_radius_estimate:.4f} (±{radius_std:.4f})")
+            print(f"  Actual height from points: {actual_height:.4f}")
+            print(f"  Height range: [{min_projection:.4f}, {max_projection:.4f}]")
+            print(f"  Original center: {location}")
+            print(f"  Calculated center: {actual_center}")
+            
+            # Decide whether to use given or estimated radius
+            # If they're close, use the given radius (more reliable)
+            # If they differ significantly, warn and use estimated
+            radius_ratio = abs(actual_radius_estimate - radius) / max(radius, actual_radius_estimate)
+            if radius_ratio > 0.1:  # More than 10% difference
+                print(f"  Warning: Large radius discrepancy ({radius_ratio:.1%}), using estimated radius")
+                improved_radius = actual_radius_estimate
+            else:
+                improved_radius = radius
+            
+            # Update transformation parameters
+            # Use the calculated center as translation
+            improved_translation = actual_center.tolist()
+            
+            # Set height scaling to match the actual height
+            # Since standard cylinder in our sampler uses v_coords range [-1, 1] = height 2
+            # Scale factor should be actual_height / 2
+            height_scaling = actual_height / 2.0
+            
+            improved_scaling = [improved_radius, improved_radius, height_scaling]
+            
+            # Create the improved result
+            improved_result = surface_data.copy()
+            improved_result["converted_transformation"] = {
+                "translation": improved_translation,
+                "rotation": basic_result["converted_transformation"]["rotation"],
+                "scaling": improved_scaling,
+                "extra_params": [actual_height, actual_radius_estimate, radius_std],  # Store additional info
+            }
+            
+            return improved_result
+            
+        except Exception as e:
+            print(f"Error in cylinder analysis: {e}")
+            print("Falling back to basic conversion")
+            return basic_result
+
     def convert_cone(self, surface_data):
         """
         Convert cone data to transformation parameters.
@@ -218,7 +357,7 @@ class SurfaceTransformationConverter:
         if surface_type == "plane":
             return self.convert_plane(surface_data)
         elif surface_type == "cylinder":
-            return self.convert_cylinder(surface_data)
+            return self.analyze_cylinder_from_points(surface_data)
         elif surface_type == "cone":
             return self.convert_cone(surface_data)
         elif surface_type == "sphere":
