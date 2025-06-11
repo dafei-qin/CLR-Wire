@@ -34,4 +34,4 @@ MODEL:
     heads: 8
     res: 16
     checkpoint_folder: checkpoints/classification
-    checkpoint_file_name: model-10.pt 
+    checkpoint_file_name: model-62.pt 

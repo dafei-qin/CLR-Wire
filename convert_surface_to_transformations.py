@@ -73,14 +73,16 @@ class SurfaceTransformationConverter:
         # Scaling: planes don't have intrinsic scale, so uniform scaling of 1
         scaling = [1.0, 1.0, 1.0]
         
-        return {
-            "type": "plane",
-            "idx": surface_data["idx"],
+        # Create a copy of the original data and add transformation
+        result = surface_data.copy()
+        result["converted_transformation"] = {
             "translation": translation,
             "rotation": rotation_matrix,
             "scaling": scaling,
             "extra_params": [],
         }
+        
+        return result
 
     def convert_cylinder(self, surface_data):
         """
@@ -100,14 +102,16 @@ class SurfaceTransformationConverter:
         # Scaling: radius affects x,y scaling, z scaling is 1 (height is arbitrary for infinite cylinder)
         scaling = [radius, radius, 1.0]
         
-        return {
-            "type": "cylinder",
-            "idx": surface_data["idx"],
+        # Create a copy of the original data and add transformation
+        result = surface_data.copy()
+        result["converted_transformation"] = {
             "translation": translation,
             "rotation": rotation_matrix,
             "scaling": scaling,
             "extra_params": [],
         }
+        
+        return result
 
     def convert_cone(self, surface_data):
         """
@@ -130,14 +134,16 @@ class SurfaceTransformationConverter:
         height_scale = radius / math.tan(semi_angle) if semi_angle > 0 else 1.0
         scaling = [radius, radius, height_scale]
         
-        return {
-            "type": "cone",
-            "idx": surface_data["idx"],
+        # Create a copy of the original data and add transformation
+        result = surface_data.copy()
+        result["converted_transformation"] = {
             "translation": translation,
             "rotation": rotation_matrix,
             "scaling": scaling,
             "extra_params": [semi_angle],  # Keep semi-angle as additional parameter
         }
+        
+        return result
 
     def convert_sphere(self, surface_data):
         """
@@ -156,14 +162,16 @@ class SurfaceTransformationConverter:
         # Scaling: uniform scaling by radius
         scaling = [radius, radius, radius]
         
-        return {
-            "type": "sphere",
-            "idx": surface_data["idx"],
+        # Create a copy of the original data and add transformation
+        result = surface_data.copy()
+        result["converted_transformation"] = {
             "translation": translation,
             "rotation": rotation_matrix,
             "scaling": scaling,
             "extra_params": [],
         }
+        
+        return result
 
     def convert_torus(self, surface_data):
         """
@@ -187,14 +195,16 @@ class SurfaceTransformationConverter:
         # Additional parameter: ratio of minor to major radius
         radius_ratio = minor_radius / major_radius if major_radius > 0 else 0.0
         
-        return {
-            "type": "torus",
-            "idx": surface_data["idx"],
+        # Create a copy of the original data and add transformation
+        result = surface_data.copy()
+        result["converted_transformation"] = {
             "translation": translation,
             "rotation": rotation_matrix,
             "scaling": scaling,
             "extra_params": [radius_ratio],
         }
+        
+        return result
 
     def convert_surface(self, surface_data):
         """
