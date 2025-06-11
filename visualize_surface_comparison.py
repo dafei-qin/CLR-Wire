@@ -48,6 +48,7 @@ class SurfaceComparisonVisualizer:
         self.surface_transparency = 0.7  # Less transparent by default
         self.wireframe_mode = False
         self.overlay_mode = True  # Show surfaces at same position for overlay comparison
+        self.use_aabb_filtering = True  # Use AABB for constrained surface sampling
         
         # Surface type filtering
         self.show_all_types = True
@@ -188,23 +189,37 @@ class SurfaceComparisonVisualizer:
         # Set appropriate parameter ranges for each surface type
         num_u, num_v = self.surface_resolution, self.surface_resolution
         
-        if surface_type == "plane":
-            u_coords = np.linspace(-2, 2, num_u)
-            v_coords = np.linspace(-2, 2, num_v)
-        elif surface_type == "cylinder":
-            u_coords = np.linspace(0, 2*np.pi, num_u)
-            v_coords = np.linspace(-1, 1, num_v)
-        elif surface_type == "sphere":
-            u_coords = np.linspace(0, 2*np.pi, num_u)
-            v_coords = np.linspace(0, np.pi, num_v)
-        elif surface_type == "cone":
-            u_coords = np.linspace(0, 2*np.pi, num_u)
-            v_coords = np.linspace(0, 1, num_v)
-        elif surface_type == "torus":
-            u_coords = np.linspace(0, 2*np.pi, num_u)
-            v_coords = np.linspace(0, 2*np.pi, num_v)
+        # Check if AABB information is available for constrained sampling
+        uv_min = transformed_data.get("uv_min")
+        uv_max = transformed_data.get("uv_max")
+        use_aabb_filtering = (self.use_aabb_filtering and 
+                            uv_min is not None and uv_max is not None)
+        
+        if use_aabb_filtering:
+            # Use UV AABB to constrain parameter ranges
+            u_coords = np.linspace(uv_min[0], uv_max[0], num_u)
+            v_coords = np.linspace(uv_min[1], uv_max[1], num_v)
+            print(f"Using AABB filtering for {surface_type}: UV range U[{uv_min[0]:.3f}, {uv_max[0]:.3f}], V[{uv_min[1]:.3f}, {uv_max[1]:.3f}]")
         else:
-            return None
+            # Use default parameter ranges for full surface
+            if surface_type == "plane":
+                u_coords = np.linspace(-2, 2, num_u)
+                v_coords = np.linspace(-2, 2, num_v)
+            elif surface_type == "cylinder":
+                u_coords = np.linspace(0, 2*np.pi, num_u)
+                v_coords = np.linspace(-1, 1, num_v)
+            elif surface_type == "sphere":
+                u_coords = np.linspace(0, 2*np.pi, num_u)
+                v_coords = np.linspace(0, np.pi, num_v)
+            elif surface_type == "cone":
+                u_coords = np.linspace(0, 2*np.pi, num_u)
+                v_coords = np.linspace(0, 1, num_v)
+            elif surface_type == "torus":
+                u_coords = np.linspace(0, 2*np.pi, num_u)
+                v_coords = np.linspace(0, 2*np.pi, num_v)
+            else:
+                return None
+            print(f"Using default parameter ranges for {surface_type}")
         
         try:
             # Sample the transformed surface
@@ -417,6 +432,11 @@ class SurfaceComparisonVisualizer:
             if changed:
                 self.visualize_current_file()
             
+            # AABB filtering
+            changed, self.use_aabb_filtering = psim.Checkbox("Use AABB Filtering", self.use_aabb_filtering)
+            if changed:
+                self.visualize_current_file()
+            
             psim.Separator()
             
             # Surface Type Filtering
@@ -522,6 +542,8 @@ class SurfaceComparisonVisualizer:
             psim.Text("'Cones Only' button useful for debugging cones")
             psim.Text("Overlay mode: surfaces at same position for comparison")
             psim.Text("Non-overlay: transformed surfaces offset by +5 in X")
+            psim.Text("AABB Filtering: use 3D bounds to constrain sampling")
+            psim.Text("  (when off: shows full infinite surfaces)")
             
         return gui_callback
     
