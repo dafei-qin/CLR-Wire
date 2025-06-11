@@ -92,6 +92,7 @@ class SurfaceTransformationConverter:
         location = surface_data["location"][0]  # [x, y, z]
         direction = surface_data["direction"][0]  # [dx, dy, dz]
         radius = surface_data["scalar"][0]
+        direction = [direction[0], direction[1], direction[2]] 
         
         # Translation: position of the cylinder
         translation = location
@@ -120,6 +121,8 @@ class SurfaceTransformationConverter:
         """
         location = surface_data["location"][0]  # [x, y, z]
         direction = surface_data["direction"][0]  # [dx, dy, dz]
+        print('cone direction', direction)
+        direction = [direction[0], -direction[1], direction[2]] 
         semi_angle = surface_data["scalar"][0]
         radius = surface_data["scalar"][1]  # reference radius
         

@@ -17,6 +17,8 @@ import json
 import math
 import numpy as np
 import os
+import glob
+import re
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
 import polyscope as ps
@@ -43,8 +45,21 @@ class SurfaceComparisonVisualizer:
         self.surface_resolution = 32
         self.show_original = True
         self.show_transformed = True
-        self.surface_transparency = 0.8
+        self.surface_transparency = 0.7  # Less transparent by default
         self.wireframe_mode = False
+        self.overlay_mode = True  # Show surfaces at same position for overlay comparison
+        
+        # Surface type filtering
+        self.show_all_types = True
+        self.surface_type_filters = {
+            "plane": True,
+            "cylinder": True,
+            "sphere": True,
+            "cone": True,
+            "torus": True,
+            "bezier_surface": True,
+            "bspline_surface": True
+        }
         
         # Basic surface types that support transformation
         self.basic_surface_types = {
@@ -67,16 +82,23 @@ class SurfaceComparisonVisualizer:
         self.original_objects = []
         self.transformed_objects = []
     
+    def should_show_surface_type(self, surface_type: str) -> bool:
+        """Check if a surface type should be displayed based on current filters"""
+        if self.show_all_types:
+            return True
+        return self.surface_type_filters.get(surface_type, False)
+    
     def find_json_files(self, directory: str) -> List[str]:
-        """Find all JSON files in the directory"""
+        """Find all JSON files in the directory and subdirectories"""
         json_files = []
         directory_path = Path(directory)
         
         if directory_path.is_file() and directory_path.suffix == '.json':
             json_files.append(str(directory_path))
         elif directory_path.is_dir():
-            for json_file in directory_path.glob("*.json"):
-                json_files.append(str(json_file))
+            # Search for JSON files recursively in all subdirectories
+            json_pattern = os.path.join(directory, "**", "*.json")
+            json_files = glob.glob(json_pattern, recursive=True)
         
         return sorted(json_files)
     
@@ -222,7 +244,13 @@ class SurfaceComparisonVisualizer:
             surface_type = surface_data.get("type", "unknown")
             surface_idx = surface_data.get("idx", i)
             
+            # Skip if this surface type is filtered out
+            if not self.should_show_surface_type(surface_type):
+                continue
+            
             print(f"Processing surface {i}: type={surface_type}, idx={surface_idx}")
+            
+
             
             # Visualize original surface
             if self.show_original:
@@ -243,7 +271,9 @@ class SurfaceComparisonVisualizer:
                         color = self.surface_colors.get(surface_type, self.surface_colors["unknown"])
                         ps_mesh.set_color(color)
                         
-                        if hasattr(ps_mesh, 'set_transparency'):
+                        if self.overlay_mode:
+                            ps_mesh.set_transparency(0.5)  # Moderate transparency in overlay mode
+                        else:
                             ps_mesh.set_transparency(self.surface_transparency)
                         
                         if self.wireframe_mode and hasattr(ps_mesh, 'set_edge_width'):
@@ -259,20 +289,30 @@ class SurfaceComparisonVisualizer:
                 if transformed_points is not None:
                     vertices, faces = self.create_surface_mesh(transformed_points)
                     if vertices is not None and faces is not None:
-                        # Apply spatial offset to separate from original surface
-                        offset = np.array([5.0, 0.0, 0.0])  # 5 units offset in X direction
-                        vertices_offset = vertices + offset
+                        # Apply spatial offset only if not in overlay mode
+                        if self.overlay_mode:
+                            vertices_final = vertices  # Same position as original
+                        else:
+                            offset = np.array([5.0, 0.0, 0.0])  # 5 units offset in X direction
+                            vertices_final = vertices + offset
                         
                         # Create mesh name
                         mesh_name = f"transformed_{surface_type}_{i}"
-                        ps_mesh = ps.register_surface_mesh(mesh_name, vertices_offset, faces)
+                        ps_mesh = ps.register_surface_mesh(mesh_name, vertices_final, faces)
                         
-                        # Set slightly different color (darker) for transformed surface
+                        # Set different visual properties for transformed surface
                         color = self.surface_colors.get(surface_type, self.surface_colors["unknown"])
-                        darker_color = [c * 0.7 for c in color]  # Make it darker
-                        ps_mesh.set_color(darker_color)
-                        
-                        if hasattr(ps_mesh, 'set_transparency'):
+                        if self.overlay_mode:
+                            # In overlay mode, use darker color with wireframe
+                            darker_color = [c * 0.5 for c in color]  # Darker for contrast
+                            ps_mesh.set_color(darker_color)
+                            ps_mesh.set_edge_width(1.5)
+                            ps_mesh.set_edge_color([0.0, 0.0, 0.0])  # Black edges
+                            ps_mesh.set_transparency(0.3)  # Less transparent for visibility
+                        else:
+                            # In separated mode, use darker color
+                            darker_color = [c * 0.7 for c in color]  # Make it darker
+                            ps_mesh.set_color(darker_color)
                             ps_mesh.set_transparency(self.surface_transparency)
                         
                         if self.wireframe_mode:
@@ -294,8 +334,10 @@ class SurfaceComparisonVisualizer:
         # Update camera to fit all objects
         try:
             ps.reset_camera_to_home_view()
-        except:
-            pass
+            # Also try to set a reasonable camera position
+            ps.look_at((0., 0., 3.), (0., 0., 0.))
+        except Exception as e:
+            print(f"Camera reset warning: {e}")
     
     def load_file(self, file_index: int):
         """Load a specific JSON file by index"""
@@ -309,9 +351,9 @@ class SurfaceComparisonVisualizer:
         """Create the polyscope GUI callback"""
         def gui_callback():
             # File navigation
-            psim.text("File Navigation")
+            psim.Text("File Navigation")
             if len(self.current_json_files) > 1:
-                changed, new_index = psim.slider_int(
+                changed, new_index = psim.SliderInt(
                     "File Index", 
                     self.current_file_index, 
                     0, 
@@ -321,32 +363,32 @@ class SurfaceComparisonVisualizer:
                     self.load_file(new_index)
                 
                 # Previous/Next buttons
-                if psim.button("Previous File") and self.current_file_index > 0:
+                if psim.Button("Previous File") and self.current_file_index > 0:
                     self.load_file(self.current_file_index - 1)
-                psim.same_line()
-                if psim.button("Next File") and self.current_file_index < len(self.current_json_files) - 1:
+                psim.SameLine()
+                if psim.Button("Next File") and self.current_file_index < len(self.current_json_files) - 1:
                     self.load_file(self.current_file_index + 1)
             
             # Current file info
-            psim.text(f"Current file: {Path(self.current_file_path).name}")
-            psim.text(f"File {self.current_file_index + 1} of {len(self.current_json_files)}")
+            psim.Text(f"Current file: {Path(self.current_file_path).name}")
+            psim.Text(f"File {self.current_file_index + 1} of {len(self.current_json_files)}")
             
-            psim.separator()
+            psim.Separator()
             
             # Visualization controls
-            psim.text("Visualization Settings")
+            psim.Text("Visualization Settings")
             
             # Show/hide toggles
-            changed, self.show_original = psim.checkbox("Show Original Surfaces", self.show_original)
+            changed, self.show_original = psim.Checkbox("Show Original Surfaces", self.show_original)
             if changed:
                 self.visualize_current_file()
             
-            changed, self.show_transformed = psim.checkbox("Show Transformed Surfaces", self.show_transformed)
+            changed, self.show_transformed = psim.Checkbox("Show Transformed Surfaces", self.show_transformed)
             if changed:
                 self.visualize_current_file()
             
             # Surface resolution
-            changed, self.surface_resolution = psim.slider_int(
+            changed, self.surface_resolution = psim.SliderInt(
                 "Surface Resolution", 
                 self.surface_resolution, 
                 8, 
@@ -356,7 +398,7 @@ class SurfaceComparisonVisualizer:
                 self.visualize_current_file()
             
             # Transparency
-            changed, self.surface_transparency = psim.slider_float(
+            changed, self.surface_transparency = psim.SliderFloat(
                 "Surface Transparency", 
                 self.surface_transparency, 
                 0.0, 
@@ -366,18 +408,80 @@ class SurfaceComparisonVisualizer:
                 self.visualize_current_file()
             
             # Wireframe mode
-            changed, self.wireframe_mode = psim.checkbox("Wireframe Mode", self.wireframe_mode)
+            changed, self.wireframe_mode = psim.Checkbox("Wireframe Mode", self.wireframe_mode)
             if changed:
                 self.visualize_current_file()
             
-            psim.separator()
+            # Overlay mode
+            changed, self.overlay_mode = psim.Checkbox("Overlay Mode (same position)", self.overlay_mode)
+            if changed:
+                self.visualize_current_file()
+            
+            psim.Separator()
+            
+            # Surface Type Filtering
+            psim.Text("Surface Type Filters")
+            
+            # Show all types toggle
+            changed, self.show_all_types = psim.Checkbox("Show All Types", self.show_all_types)
+            if changed:
+                self.visualize_current_file()
+            
+            # Individual surface type filters (only show when not showing all)
+            if not self.show_all_types:
+                psim.Text("Select types to show:")
+                filter_changed = False
+                
+                # Basic surface types
+                for surface_type in ["plane", "cylinder", "sphere", "cone", "torus"]:
+                    changed, self.surface_type_filters[surface_type] = psim.Checkbox(
+                        f"Show {surface_type}", 
+                        self.surface_type_filters[surface_type]
+                    )
+                    if changed:
+                        filter_changed = True
+                
+                # B-spline surface types
+                for surface_type in ["bezier_surface", "bspline_surface"]:
+                    changed, self.surface_type_filters[surface_type] = psim.Checkbox(
+                        f"Show {surface_type}", 
+                        self.surface_type_filters[surface_type]
+                    )
+                    if changed:
+                        filter_changed = True
+                
+                # Quick filter buttons
+                psim.Text("Quick filters:")
+                if psim.Button("Basic Surfaces Only"):
+                    for key in self.surface_type_filters:
+                        self.surface_type_filters[key] = key in self.basic_surface_types
+                    filter_changed = True
+                
+                psim.SameLine()
+                if psim.Button("B-spline Surfaces Only"):
+                    for key in self.surface_type_filters:
+                        self.surface_type_filters[key] = key in ["bezier_surface", "bspline_surface"]
+                    filter_changed = True
+                
+                psim.SameLine()
+                if psim.Button("Cones Only"):
+                    for key in self.surface_type_filters:
+                        self.surface_type_filters[key] = (key == "cone")
+                    filter_changed = True
+                
+                if filter_changed:
+                    self.visualize_current_file()
+            
+            psim.Separator()
             
             # Statistics
-            psim.text("Surface Statistics")
+            psim.Text("Surface Statistics")
             if self.current_surfaces_data:
                 surface_type_counts = {}
+                visible_surface_type_counts = {}
                 basic_surface_count = 0
                 bspline_surface_count = 0
+                visible_count = 0
                 
                 for surface_data in self.current_surfaces_data:
                     surface_type = surface_data.get("type", "unknown")
@@ -387,25 +491,37 @@ class SurfaceComparisonVisualizer:
                         basic_surface_count += 1
                     elif surface_type in ["bezier_surface", "bspline_surface"]:
                         bspline_surface_count += 1
+                    
+                    # Count visible surfaces
+                    if self.should_show_surface_type(surface_type):
+                        visible_surface_type_counts[surface_type] = visible_surface_type_counts.get(surface_type, 0) + 1
+                        visible_count += 1
                 
-                psim.text(f"Total surfaces: {len(self.current_surfaces_data)}")
-                psim.text(f"Basic surfaces: {basic_surface_count}")
-                psim.text(f"B-spline surfaces: {bspline_surface_count}")
+                psim.Text(f"Total surfaces: {len(self.current_surfaces_data)}")
+                psim.Text(f"Visible surfaces: {visible_count}")
+                psim.Text(f"Basic surfaces: {basic_surface_count}")
+                psim.Text(f"B-spline surfaces: {bspline_surface_count}")
                 
-                psim.text("Surface type breakdown:")
+                psim.Text("Surface type breakdown (total/visible):")
                 for surface_type, count in surface_type_counts.items():
+                    visible_count_for_type = visible_surface_type_counts.get(surface_type, 0)
                     color = self.surface_colors.get(surface_type, self.surface_colors["unknown"])
-                    psim.text(f"  {surface_type}: {count}")
-                    psim.same_line()
-                    psim.text(f"RGB({color[0]:.1f}, {color[1]:.1f}, {color[2]:.1f})")
+                    status = "✓" if self.should_show_surface_type(surface_type) else "✗"
+                    psim.Text(f"  {status} {surface_type}: {count}/{visible_count_for_type}")
+                    psim.SameLine()
+                    psim.Text(f"RGB({color[0]:.1f}, {color[1]:.1f}, {color[2]:.1f})")
             
-            psim.separator()
+            psim.Separator()
             
             # Help text
-            psim.text("Help")
-            psim.text("Original surfaces: from surface['points']")
-            psim.text("Transformed surfaces: basic surfaces + r,t,s")
-            psim.text("B-spline surfaces: original only")
+            psim.Text("Help")
+            psim.Text("Original surfaces: from surface['points']")
+            psim.Text("Transformed surfaces: basic surfaces + r,t,s")
+            psim.Text("B-spline surfaces: original only")
+            psim.Text("Use surface type filters to show specific types")
+            psim.Text("'Cones Only' button useful for debugging cones")
+            psim.Text("Overlay mode: surfaces at same position for comparison")
+            psim.Text("Non-overlay: transformed surfaces offset by +5 in X")
             
         return gui_callback
     
@@ -436,6 +552,8 @@ class SurfaceComparisonVisualizer:
         print(f"   - Use file navigation to switch between JSON files")
         print(f"   - Toggle original vs transformed surface display")
         print(f"   - Adjust surface resolution and transparency")
+        print(f"   - Use surface type filters to focus on specific types")
+        print(f"   - Toggle overlay mode for better comparison")
         print(f"   - Original surfaces use surface['points']")
         print(f"   - Transformed surfaces use surface_sampler with r,t,s")
         print(f"   - B-spline surfaces show original only")
