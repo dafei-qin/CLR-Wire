@@ -279,7 +279,6 @@ class SurfaceTransformationConverter:
                 points_flat = points_array
             else:
                 points_flat = None
-<<<<<<< HEAD
             
             if points_flat is not None and len(points_flat) > 0:
                 # Transform points to standard plane space (z=0)
@@ -345,8 +344,6 @@ class SurfaceTransformationConverter:
                 aabb_max = [1.0, 1.0, 0.001]
                 uv_min = [aabb_min[0], aabb_min[1]]
                 uv_max = [aabb_max[0], aabb_max[1]]
-=======
->>>>>>> dca3ec0a903972caad1ad1db2e03b1aa22f32eea
         else:
             points_flat = None
 
