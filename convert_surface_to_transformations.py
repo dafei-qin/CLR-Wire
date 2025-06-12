@@ -263,19 +263,15 @@ class SurfaceTransformationConverter:
         Standard plane: center at (0,0,0), normal towards z-axis
         For planes, we calculate scaling to match the minimal enclosing rectangle.
         """
-        location = surface_data["location"][0]  # [x, y, z]
+        # 1. Use normal direction from the surface data
         direction = surface_data["direction"][0]  # [nx, ny, nz]
         
-        # Translation: position of the plane
-        translation = location
-        
-        # Rotation: align standard z-normal to actual normal
-        rotation_matrix = self.compute_rotation_matrix(direction)
-        
-        # Calculate scaling based on actual points if available
+        # 2. Derive translation (center) from the point cloud instead of relying on the
+        #    potentially inaccurate `location` field that comes from OCC.  We compute
+        #    the centroid of all sampled points on the plane.  This is robust even if
+        #    the original centre stored in the JSON is wrong.
         points = surface_data.get("points")
         if points is not None and len(points) > 0:
-            # Convert points to numpy array
             points_array = np.array(points)
             if len(points_array.shape) == 3 and points_array.shape[2] == 3:
                 points_flat = points_array.reshape(-1, 3)
@@ -283,54 +279,67 @@ class SurfaceTransformationConverter:
                 points_flat = points_array
             else:
                 points_flat = None
-            
-            if points_flat is not None and len(points_flat) > 0:
-                # Transform points to standard plane space (z=0)
-                # First create a temporary transformation with unit scaling
-                temp_transformation = {
-                    "translation": translation,
-                    "rotation": rotation_matrix,
-                    "scaling": [1.0, 1.0, 1.0]
-                }
-                
-                standard_points = self.transform_points_to_standard_space(
-                    points_flat, translation, rotation_matrix, [1.0, 1.0, 1.0]
-                )
-                
-                # Calculate the minimal enclosing rectangle in the x-y plane
-                min_x, max_x = np.min(standard_points[:, 0]), np.max(standard_points[:, 0])
-                min_y, max_y = np.min(standard_points[:, 1]), np.max(standard_points[:, 1])
-                
-                # Calculate scaling to match the actual extent
-                # Standard plane extends from -1 to 1 in both x and y directions
-                width = max_x - min_x
-                height = max_y - min_y
-                
-                scale_x = width / 2.0 if width > 0 else 1.0
-                scale_y = height / 2.0 if height > 0 else 1.0
-                scaling = [scale_x, scale_y, 1.0]  # z-scaling is 1 for planes
-                
-                # For planes, AABB in standard space is always the maximum extent
-                # since we scale the plane to fit the points exactly
-                aabb_min = [-1.0, -1.0, -0.001]  # Small z-extent for visualization
-                aabb_max = [1.0, 1.0, 0.001]
-                
-                # UV bounds for plane are the same as XY bounds in standard space
-                uv_min = [aabb_min[0], aabb_min[1]]
-                uv_max = [aabb_max[0], aabb_max[1]]
-                
-                print(f"Plane analysis:")
-                print(f"  Point extent: x=[{min_x:.3f}, {max_x:.3f}], y=[{min_y:.3f}, {max_y:.3f}]")
-                print(f"  Calculated scaling: [{scale_x:.3f}, {scale_y:.3f}, 1.0]")
-            else:
-                # Fallback to default scaling
-                scaling = [1.0, 1.0, 1.0]
-                aabb_min = [-1.0, -1.0, -0.001]
-                aabb_max = [1.0, 1.0, 0.001]
-                uv_min = [aabb_min[0], aabb_min[1]]
-                uv_max = [aabb_max[0], aabb_max[1]]
         else:
-            # No points available, use default scaling
+            points_flat = None
+
+        if points_flat is not None and len(points_flat) > 0:
+            # Use centroid as translation
+            translation = np.mean(points_flat, axis=0).tolist()
+        else:
+            # Fallback to OCC/ACIS provided location if no points exist
+            location_fallback = surface_data.get("location")
+            if location_fallback is not None and len(location_fallback) > 0:
+                translation = location_fallback[0]
+            else:
+                translation = [0.0, 0.0, 0.0]
+        
+        # Rotation: align standard z-normal to actual normal
+        rotation_matrix = self.compute_rotation_matrix(direction)
+        
+        # ------------------------------------------------------------------
+        # 3. Compute scaling from the extent of the points in plane space
+        # ------------------------------------------------------------------
+        if points_flat is not None and len(points_flat) > 0:
+            # Transform points to standard plane space (z=0)
+            # First create a temporary transformation with unit scaling
+            temp_transformation = {
+                "translation": translation,
+                "rotation": rotation_matrix,
+                "scaling": [1.0, 1.0, 1.0]
+            }
+            
+            standard_points = self.transform_points_to_standard_space(
+                points_flat, translation, rotation_matrix, [1.0, 1.0, 1.0]
+            )
+            
+            # Calculate the minimal enclosing rectangle in the x-y plane
+            min_x, max_x = np.min(standard_points[:, 0]), np.max(standard_points[:, 0])
+            min_y, max_y = np.min(standard_points[:, 1]), np.max(standard_points[:, 1])
+            
+            # Calculate scaling to match the actual extent
+            # Standard plane extends from -1 to 1 in both x and y directions
+            width = max_x - min_x
+            height = max_y - min_y
+            
+            scale_x = width / 2.0 if width > 0 else 1.0
+            scale_y = height / 2.0 if height > 0 else 1.0
+            scaling = [scale_x, scale_y, 1.0]  # z-scaling is 1 for planes
+            
+            # For planes, AABB in standard space is always the maximum extent
+            # since we scale the plane to fit the points exactly
+            aabb_min = [-1.0, -1.0, -0.001]  # Small z-extent for visualization
+            aabb_max = [1.0, 1.0, 0.001]
+            
+            # UV bounds for plane are the same as XY bounds in standard space
+            uv_min = [aabb_min[0], aabb_min[1]]
+            uv_max = [aabb_max[0], aabb_max[1]]
+            
+            print(f"Plane analysis (points-derived center):")
+            print(f"  Centroid translation: {translation}")
+            print(f"  Point extent: x=[{min_x:.3f}, {max_x:.3f}], y=[{min_y:.3f}, {max_y:.3f}]")
+            print(f"  Calculated scaling: [{scale_x:.3f}, {scale_y:.3f}, 1.0]")
+        else:
+            # Fallback when no valid points available
             scaling = [1.0, 1.0, 1.0]
             aabb_min = [-1.0, -1.0, -0.001]
             aabb_max = [1.0, 1.0, 0.001]
@@ -544,8 +553,8 @@ class SurfaceTransformationConverter:
         """
         location = surface_data["location"][0]  # [x, y, z]
         direction = surface_data["direction"][0]  # [dx, dy, dz]
-        print('cone direction', direction)
-        direction = [direction[0], -direction[1], direction[2]] 
+        print('cone direction', direction, 'cone location', location)
+        direction = [direction[0], direction[1], -direction[2]] 
         semi_angle = surface_data["scalar"][0]
         radius = surface_data["scalar"][1]  # reference radius
         
@@ -567,7 +576,7 @@ class SurfaceTransformationConverter:
             "scaling": scaling
         }
         aabb_min, aabb_max = self.calculate_standard_space_aabb(surface_data, transformation_for_aabb)
-        
+        print('cone aabb', aabb_min, aabb_max)
         # Create a copy of the original data and add transformation
         result = surface_data.copy()
         result["converted_transformation"] = {
@@ -648,6 +657,7 @@ class SurfaceTransformationConverter:
             "scaling": scaling
         }
         aabb_min, aabb_max = self.calculate_standard_space_aabb(surface_data, transformation_for_aabb)
+        print('torus aabb', aabb_min, aabb_max)
         
         # Create a copy of the original data and add transformation
         result = surface_data.copy()
