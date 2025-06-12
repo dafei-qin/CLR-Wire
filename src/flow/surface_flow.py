@@ -124,7 +124,22 @@ class Encoder(ModelMixin, ConfigMixin):
         x = self.proj_out(x)
         return x
 
-    
+# class EncoderRTS(Encoder):
+#     def __init__(self, in_dim, out_dim, depth=24, dim=512, heads=8, res=32):
+#         super().__init__(in_dim, out_dim, depth, dim, heads, res)
+      
+#     def forward(self, x):
+#         x, last = super().forward(x, return_last=True)
+
+#         if self.cone_pred is not None:
+#             cone_pred = self.cone_pred(last)
+#             x = torch.cat([x, cone_pred], dim=1)
+
+#         if return_last:
+#             return x, last, rts
+#         else:
+#             return x, rts
+
 class ZLDM(ModelMixin, ConfigMixin):
     @register_to_config
     def __init__(

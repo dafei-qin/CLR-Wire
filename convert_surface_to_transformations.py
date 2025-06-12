@@ -310,14 +310,33 @@ class SurfaceTransformationConverter:
                 scale_y = height / 2.0 if height > 0 else 1.0
                 scaling = [scale_x, scale_y, 1.0]  # z-scaling is 1 for planes
                 
-                # For planes, AABB in standard space is always the maximum extent
-                # since we scale the plane to fit the points exactly
-                aabb_min = [-1.0, -1.0, -0.001]  # Small z-extent for visualization
-                aabb_max = [1.0, 1.0, 0.001]
+                # For planes, AABB in standard space corresponds to the actual point distribution
+                # Transform points to standard space to get actual bounds
+                centered_x = (min_x + max_x) / 2.0
+                centered_y = (min_y + max_y) / 2.0
+                
+                # In standard space, the points should be centered and scaled
+                # The actual UV bounds should correspond to the normalized point range
+                # Since scaling is applied, we need to map back to the [-1, 1] range
+                uv_min_x = -1.0  # Always full range since scaling adjusts for width
+                uv_max_x = 1.0
+                uv_min_y = -1.0  # Always full range since scaling adjusts for height  
+                uv_max_y = 1.0
+                
+                # However, if we want to constraint sampling to actual point bounds,
+                # we should use the actual point distribution in the standard coordinate system
+                # Standard space bounds: normalize the original extent to [-1, 1] * scaling
+                standard_min_x = (min_x - centered_x) / (width / 2.0) if width > 0 else -1.0
+                standard_max_x = (max_x - centered_x) / (width / 2.0) if width > 0 else 1.0
+                standard_min_y = (min_y - centered_y) / (height / 2.0) if height > 0 else -1.0
+                standard_max_y = (max_y - centered_y) / (height / 2.0) if height > 0 else 1.0
+                
+                aabb_min = [standard_min_x, standard_min_y, -0.001]
+                aabb_max = [standard_max_x, standard_max_y, 0.001]
                 
                 # UV bounds for plane are the same as XY bounds in standard space
-                uv_min = [aabb_min[0], aabb_min[1]]
-                uv_max = [aabb_max[0], aabb_max[1]]
+                uv_min = [standard_min_x, standard_min_y]
+                uv_max = [standard_max_x, standard_max_y]
                 
                 print(f"Plane analysis:")
                 print(f"  Point extent: x=[{min_x:.3f}, {max_x:.3f}], y=[{min_y:.3f}, {max_y:.3f}]")
