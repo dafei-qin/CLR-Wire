@@ -6,6 +6,7 @@ from src.flow.surface_flow import Encoder as MyModel
 from src.dataset.dataset_cls_rts import SurfaceClassificationAndRegressionDataset as MyDataset
 from src.trainer.trainer_cls_rts import TrainerClassificationAndRegression as MyTrainer
 from src.utils.config import NestedDictToClass, load_config
+from src.dataset.dataset_fn import surface_scale_and_jitter, surface_rotate
 
 program_parser = ArgumentParser(description='Train classification and regression model.')
 program_parser.add_argument('--config', type=str, default='', help='Path to config file.')
@@ -23,14 +24,14 @@ if isDebug:
     args.num_workers = 1
 
 transform = getattr(args.data, 'transform', None)
-# if transform is None:
-#     transform = None
-# elif transform == 'scale_and_jitter':
-#     transform = surface_scale_and_jitter
-# elif transform == 'rotate':
-#     transform = surface_rotate
-# elif transform == 'scale_and_jitter_and_rotate':
-#     transform = lambda x: surface_scale_and_jitter(surface_rotate(x))
+if transform is None:
+    transform = None
+elif transform == 'scale_and_jitter':
+    transform = surface_scale_and_jitter
+elif transform == 'rotate':
+    transform = surface_rotate
+elif transform == 'scale_and_jitter_and_rotate':
+    transform = lambda x: surface_scale_and_jitter(surface_rotate(x))
 
 train_dataset = MyDataset(
     data_path=args.data.train_data_path,

@@ -55,7 +55,8 @@ model = MyModel(
     depth=args.model.depth,
     dim=args.model.dim,
     heads=args.model.heads,
-    res=args.model.res
+    res=args.model.res,
+    use_pe=args.model.use_pe
 )
 
 epochs = args.epochs

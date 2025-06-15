@@ -40,7 +40,7 @@ class SurfaceClassificationAndRegressionDataset(Dataset):
         cone_min_axis = self.cone_min_axis[idx]
         bspline_control_points = self.bspline_control_points[idx]
         
-        rts = np.concatenate([translation, rotation, scaling], axis=0)
+        rts = np.concatenate([scaling, rotation, translation], axis=0)
         rts = torch.from_numpy(rts).float()
         cone_mask = torch.tensor([class_label == 2], dtype=torch.bool)
 
@@ -65,7 +65,7 @@ class SurfaceClassificationAndRegressionDataset(Dataset):
         if self.transform:
             points = self.transform(points)
         
-        return torch.from_numpy(points).float(), torch.from_numpy(np.array(class_label)).long(), rts, cone_min_axis, bspline_control_points, rts_mask, cone_mask
+        return torch.from_numpy(points).float(), torch.from_numpy(np.array(class_label)).long(), rts, torch.from_numpy(cone_min_axis).float(), torch.from_numpy(bspline_control_points).float(), rts_mask, cone_mask
 
 
 

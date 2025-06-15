@@ -1,4 +1,4 @@
-resume_training: true
+resume_training: false
 from_start: false
 
 epochs: 1000
@@ -12,12 +12,12 @@ ema_update_every: 10
 max_grad_norm: 1.0
 
 val_every_epoch: 1
-save_every_epoch: 10
+save_every_epoch: 50
 log_every_step: 10
 
 use_wandb_tracking: true
 wandb_project_name: CLR-classification
-wandb_run_name: surface_classification
+wandb_run_name: surface_cls_nope
 
 DATA:
     replication: 1
@@ -33,5 +33,6 @@ MODEL:
     dim: 256
     heads: 8
     res: 16
-    checkpoint_folder: checkpoints/classification
+    use_pe: false
+    checkpoint_folder: checkpoints/classification_nope
     checkpoint_file_name: model-62.pt 
