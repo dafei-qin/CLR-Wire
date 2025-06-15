@@ -27,6 +27,7 @@ from src.dataset.dataset_cls_rts import SurfaceClassificationAndRegressionDatase
 
 # Surface reconstruction imports
 from surface_sampler import SurfaceSampler
+from convert_surface_to_transformations import SurfaceTransformationConverter
 
 # Surface type mapping
 CLASS_MAPPING = {
@@ -38,6 +39,7 @@ CLASS_MAPPING = {
     5: "bspline_surface",
     6: "bezier_surface",
 }
+
 
 class CLSRTSExaminer:
     def __init__(self):
@@ -56,6 +58,7 @@ class CLSRTSExaminer:
         
         # Surface reconstruction
         self.surface_sampler = SurfaceSampler()
+        self.surface_converter = SurfaceTransformationConverter()
         self.surface_resolution = 32
         
         # Data management
@@ -202,7 +205,7 @@ class CLSRTSExaminer:
         for idx in sampled_indices:
             # Get data from dataset
             points, class_label, rts, cone_min_axis, bspline_control_points, rts_mask, cone_mask = self.dataset[idx]
-            
+            print('class_label, rts: ', class_label, rts, cone_min_axis, cone_mask)
             # Perform inference
             prediction_results = self.perform_inference(points, class_label, rts, cone_min_axis, cone_mask)
             
@@ -212,7 +215,7 @@ class CLSRTSExaminer:
                 'points': points.numpy(),
                 'true_class': class_label.item(),
                 'true_rts': rts.numpy(),
-                'true_cone_min_axis': cone_min_axis.numpy(),
+                'true_cone_min_axis': cone_min_axis,
                 'rts_mask': rts_mask.numpy(),
                 'cone_mask': cone_mask.numpy()
             }
@@ -228,7 +231,6 @@ class CLSRTSExaminer:
         
         # Reset to first surface
         self.current_surface_index = 0
-        self.visualize_current_surface()
     
     def perform_inference(self, points, true_class, true_rts, true_cone_min_axis, cone_mask):
         """Perform inference on a single surface."""
@@ -259,14 +261,35 @@ class CLSRTSExaminer:
                 # Get classification results
                 probabilities = torch.softmax(logits, dim=-1)
                 confidence, predicted_class = torch.max(probabilities, dim=-1)
-                
+
+                predicted_class = predicted_class[0].cpu().numpy().item() 
+                confidence = confidence[0].float().cpu().numpy().item()
+                probabilities = probabilities[0].float().cpu().numpy()
+                srt_pred = srt_pred[0].float().cpu().numpy()
+                cone_min_axis_pred = cone_min_axis_pred[0].float().cpu().numpy()
+
+                # Apply convension base on different classes
+                if predicted_class == 0:
+                    srt_pred[2] = 1 # [x, y, 1] for plane
+                elif predicted_class == 1:
+                    srt_pred[1] = srt_pred[0] # [x, x, z] for cylinder
+                elif predicted_class == 2:
+                    srt_pred[1] = srt_pred[0] # [x, x, z] for cone
+                elif predicted_class == 3:
+                    srt_pred[:3] = srt_pred[0] # [x, x, x] for sphere
+                    srt_pred[3:6] = [0, 0, 1] # [0, 0, 1] for sphere
+                elif predicted_class == 4:
+                    srt_pred[:3] = srt_pred[0] # [x, x, x] for torus
+
+                print('pred rts: ', srt_pred)
+                print('true rts: ', true_rts)
                 # Convert to numpy
                 return {
-                    'predicted_class': predicted_class[0].cpu().numpy().item(),
-                    'confidence': confidence[0].float().cpu().numpy().item(),
-                    'probabilities': probabilities[0].float().cpu().numpy(),
-                    'predicted_rts': srt_pred[0].float().cpu().numpy(),
-                    'predicted_cone_min_axis': cone_min_axis_pred[0].float().cpu().numpy()
+                    'predicted_class': predicted_class,
+                    'confidence': confidence,
+                    'probabilities': probabilities,
+                    'predicted_rts': srt_pred,
+                    'predicted_cone_min_axis': cone_min_axis_pred,
                 }
     
     def compute_metrics(self, surface_data, prediction_results):
@@ -303,28 +326,34 @@ class CLSRTSExaminer:
     
     def create_surface_from_rts(self, surface_type, rts_params, cone_params=None):
         """Create surface data structure from RTS parameters for surface reconstruction."""
-        # RTS order: [translation, rotation, scaling] (from dataset)
-        # But model predicts: [scaling, rotation, translation] 
-        translation = rts_params[:3]
-        rotation = rts_params[3:6]
-        scaling = rts_params[6:9]
+        # The model predicts RTS in the order: [scaling, rotation, translation]
+        scaling = rts_params[:3]
+        rotation_vec = rts_params[3:6]  # This is a direction vector
+        translation = rts_params[6:9]
         
-        # Create basic surface data structure
+        rotation = self.surface_converter.compute_rotation_matrix(rotation_vec)
+        # Create surface data in the format expected by convert_surface_to_transformations.py
         surface_data = {
             "type": surface_type,
-            "location": [translation.tolist()],
-            "direction": [rotation.tolist()],
-            "scalar": scaling.tolist(),
             "converted_transformation": {
-                "translation": translation.tolist(),
-                "rotation": rotation.reshape(3, 1).tolist() if len(rotation.shape) == 1 else rotation.tolist(),
-                "scaling": scaling.tolist()
-            }
+            "translation": translation,
+            "rotation": rotation,
+            "scaling": scaling,
+            "extra_params": []}
+
         }
         
         # Add cone-specific parameters
-        if surface_type == "cone" and cone_params is not None:
-            surface_data["scalar"] = [cone_params[0], scaling[0]]  # [semi_angle, radius]
+        if surface_type == "torus" and cone_params is not None:
+            surface_data["converted_transformation"]['extra_params'] = [cone_params[0]]
+        #     # For cone: semi_angle, radius (from the cone parameters)
+        #     surface_data["scalar"] = [cone_params[0], scaling[0]]
+        # elif surface_type == "torus" and len(scaling) >= 2:
+        #     # For torus: major_radius, minor_radius
+        #     surface_data["scalar"] = [scaling[0], scaling[1]]
+        
+        # Use the converter to generate proper transformation parameters
+        # converted_surface = self.surface_converter.convert_surface(surface_data)
         
         return surface_data
     
@@ -430,9 +459,10 @@ class CLSRTSExaminer:
         # Visualize original points
         if self.show_original_points:
             original_points = surface_data['points'].reshape(-1, 3)
-            ps_points = ps.register_point_cloud("original_points", original_points)
+            vertices, faces = self.create_surface_mesh(original_points)
+            ps_points = ps.register_surface_mesh("original_points", vertices, faces)
             ps_points.set_color([0.7, 0.7, 0.7])
-            ps_points.set_radius(0.01)
+            # ps_points.set_radius(0.01)
             self.polyscope_objects.append("original_points")
         
         # Get surface type information
@@ -451,6 +481,16 @@ class CLSRTSExaminer:
                 surface_data['true_cone_min_axis'] if true_surface_type == "cone" else None
             )
             
+            # true_surface_data = {
+            #     "type": true_surface_type,
+            #     "converted_transformation": {
+            #         "translation": surface_data['true_rts'][6:],
+            #         "rotation": self.surface_converter.compute_rotation_matrix(surface_data['true_rts'][3:6]),
+            #         "scaling": surface_data['true_rts'][3:6],
+            #         "extra_params": [surface_data['true_cone_min_axis']] if true_surface_type == "cone" else []
+
+            #     }
+            # }
             true_points = self.sample_surface_from_data(true_surface_data)
             if true_points is not None:
                 vertices, faces = self.create_surface_mesh(true_points)
@@ -474,7 +514,16 @@ class CLSRTSExaminer:
                 prediction_results['predicted_rts'],
                 prediction_results['predicted_cone_min_axis'] if pred_surface_type == "cone" else None
             )
-            
+
+            # pred_surface_data = {
+            #     "type": pred_surface_type,
+            #     "converted_transformation": {
+            #         "translation": prediction_results['predicted_rts'][6:],
+            #         "rotation": self.surface_converter.compute_rotation_matrix(prediction_results['predicted_rts'][3:6]),
+            #         "scaling": prediction_results['predicted_rts'][3:6],
+            #         "extra_params": [prediction_results['predicted_cone_min_axis']] if pred_surface_type == "cone" else []
+            #     }
+            # }
             pred_points = self.sample_surface_from_data(pred_surface_data)
             if pred_points is not None:
                 vertices, faces = self.create_surface_mesh(pred_points)
@@ -491,7 +540,7 @@ class CLSRTSExaminer:
                         color = [c * 0.8 for c in color]
                     else:
                         # Red tint for incorrect predictions
-                        color = [min(1.0, c + 0.3), c * 0.5, c * 0.5]
+                        color = [min(1.0, color[0] + 0.3), color[1] * 0.5, color[2] * 0.5]
                     
                     ps_mesh.set_color(color)
                     ps_mesh.set_transparency(self.surface_transparency)
@@ -513,7 +562,7 @@ class CLSRTSExaminer:
         """Create the polyscope GUI callback."""
         def gui_callback():
             # Surface navigation
-            psim.Text("Surface Navigation")
+            psim.TextUnformatted("Surface Navigation")
             if self.current_surfaces:
                 changed, new_index = psim.SliderInt(
                     "Surface Index", 
@@ -537,44 +586,56 @@ class CLSRTSExaminer:
             psim.Separator()
             
             # Data management
-            psim.Text("Data Management")
+            psim.TextUnformatted("Data Management")
             
             # Number of surfaces to load
             changed, self.num_surfaces_to_load = psim.SliderInt(
                 "Num Surfaces", self.num_surfaces_to_load, 1, 50
             )
             
-            # Class filter
+            # Class filter dropdown using BeginCombo/EndCombo pattern
             class_options = ["All Classes"] + self.class_names
-            changed_class, self.selected_class_filter = psim.Combo(
-                "Surface Type Filter", self.selected_class_filter, class_options
-            )
+            current_selection = class_options[self.selected_class_filter]
             
-            if psim.Button("Load New Random Surfaces") or changed_class:
+            if psim.BeginCombo("Surface Type Filter", current_selection):
+                for i, option in enumerate(class_options):
+                    is_selected = (i == self.selected_class_filter)
+                    clicked, _ = psim.Selectable(option, is_selected)
+                    if clicked:
+                        if self.selected_class_filter != i:
+                            self.selected_class_filter = i
+                            self.load_random_surfaces()
+                            if self.current_surfaces:
+                                self.visualize_current_surface()
+                psim.EndCombo()
+            
+            if psim.Button("Load New Random Surfaces"):
                 self.load_random_surfaces()
+                if self.current_surfaces:
+                    self.visualize_current_surface()
             
             # Show current surface info
             if self.current_surfaces:
                 surface_data = self.current_surfaces[self.current_surface_index]
                 metrics = self.current_metrics[self.current_surface_index]
                 
-                psim.Text(f"Surface {self.current_surface_index + 1}/{len(self.current_surfaces)}")
-                psim.Text(f"Dataset Index: {surface_data['dataset_idx']}")
+                psim.TextUnformatted(f"Surface {self.current_surface_index + 1}/{len(self.current_surfaces)}")
+                psim.TextUnformatted(f"Dataset Index: {surface_data['dataset_idx']}")
                 
                 # Classification results
-                status_color = (0.2, 0.8, 0.2) if metrics['classification_correct'] else (0.8, 0.2, 0.2)
+                status_color = (0.2, 0.8, 0.2, 1.0) if metrics['classification_correct'] else (0.8, 0.2, 0.2, 1.0)
                 psim.TextColored(status_color, f"True: {metrics['true_class_name']}")
                 psim.TextColored(status_color, f"Pred: {metrics['pred_class_name']}")
-                psim.Text(f"Confidence: {metrics['confidence']:.3f}")
-                psim.Text(f"RTS Error: {metrics['rts_error']:.6f}")
+                psim.TextUnformatted(f"Confidence: {metrics['confidence']:.3f}")
+                psim.TextUnformatted(f"RTS Error: {metrics['rts_error']:.6f}")
                 
                 if metrics['cone_error'] > 0:
-                    psim.Text(f"Cone Error: {metrics['cone_error']:.6f}")
+                    psim.TextUnformatted(f"Cone Error: {metrics['cone_error']:.6f}")
             
             psim.Separator()
             
             # Visualization controls
-            psim.Text("Visualization Settings")
+            psim.TextUnformatted("Visualization Settings")
             
             changed, self.show_ground_truth = psim.Checkbox("Show Ground Truth", self.show_ground_truth)
             if changed:
@@ -610,20 +671,20 @@ class CLSRTSExaminer:
             
             # Statistics
             if self.current_metrics:
-                psim.Text("Statistics")
+                psim.TextUnformatted("Statistics")
                 
                 # Overall accuracy
                 correct_count = sum(1 for m in self.current_metrics if m['classification_correct'])
                 accuracy = correct_count / len(self.current_metrics)
-                psim.Text(f"Classification Accuracy: {accuracy:.3f} ({correct_count}/{len(self.current_metrics)})")
+                psim.TextUnformatted(f"Classification Accuracy: {accuracy:.3f} ({correct_count}/{len(self.current_metrics)})")
                 
                 # Average RTS error
                 avg_rts_error = np.mean([m['rts_error'] for m in self.current_metrics])
-                psim.Text(f"Average RTS Error: {avg_rts_error:.6f}")
+                psim.TextUnformatted(f"Average RTS Error: {avg_rts_error:.6f}")
                 
                 # Average confidence
                 avg_confidence = np.mean([m['confidence'] for m in self.current_metrics])
-                psim.Text(f"Average Confidence: {avg_confidence:.3f}")
+                psim.TextUnformatted(f"Average Confidence: {avg_confidence:.3f}")
                 
                 # Per-class breakdown
                 class_stats = defaultdict(lambda: {'correct': 0, 'total': 0, 'rts_errors': []})
@@ -634,24 +695,24 @@ class CLSRTSExaminer:
                         class_stats[class_name]['correct'] += 1
                     class_stats[class_name]['rts_errors'].append(m['rts_error'])
                 
-                psim.Text("Per-Class Stats:")
+                psim.TextUnformatted("Per-Class Stats:")
                 for class_name, stats in class_stats.items():
                     if stats['total'] > 0:
                         acc = stats['correct'] / stats['total']
                         avg_rts = np.mean(stats['rts_errors'])
-                        psim.Text(f"  {class_name}: {acc:.2f} acc, {avg_rts:.4f} RTS err ({stats['total']} samples)")
+                        psim.TextUnformatted(f"  {class_name}: {acc:.2f} acc, {avg_rts:.4f} RTS err ({stats['total']} samples)")
             
             psim.Separator()
             
             # Help
-            psim.Text("Help")
-            psim.Text("Ground Truth: reconstructed from true class & RTS")
-            psim.Text("Predicted: reconstructed from predicted class & RTS")
-            psim.Text("Original Points: input point cloud from dataset")
-            psim.Text("Overlay Mode: show at same position for comparison")
-            psim.Text("Separate Mode: ground truth on left, predicted on right")
-            psim.Text("Green text: correct classification")
-            psim.Text("Red text: incorrect classification")
+            psim.TextUnformatted("Help")
+            psim.TextUnformatted("Ground Truth: reconstructed from true class & RTS")
+            psim.TextUnformatted("Predicted: reconstructed from predicted class & RTS")
+            psim.TextUnformatted("Original Points: input point cloud from dataset")
+            psim.TextUnformatted("Overlay Mode: show at same position for comparison")
+            psim.TextUnformatted("Separate Mode: ground truth on left, predicted on right")
+            psim.TextUnformatted("Green text: correct classification")
+            psim.TextUnformatted("Red text: incorrect classification")
         
         return gui_callback
     
@@ -661,9 +722,13 @@ class CLSRTSExaminer:
         self.load_model_and_config(config_path, checkpoint_path)
         self.load_dataset(test_data_path)
         
-        # Initialize polyscope
+        # Initialize polyscope BEFORE any visualization calls
         ps.init()
         ps.set_user_callback(self.create_gui_callback())
+        
+        # Now that polyscope is initialized, we can safely visualize
+        if self.current_surfaces:
+            self.visualize_current_surface()
         
         print(f"\n🎛️ CLS-RTS Model Examination Interface")
         print(f"   - Use surface slider to navigate between surfaces")

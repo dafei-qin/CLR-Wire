@@ -19,6 +19,7 @@ Based on latest polyscope documentation features.
 import argparse
 import numpy as np
 import polyscope as ps
+import polyscope.imgui as psim
 from typing import Tuple, List, Optional
 import math
 
@@ -91,21 +92,20 @@ class DirectionVectorVisualizer:
         return np.array(vertices), np.array(faces)
     
     def create_coordinate_system(self) -> Tuple[np.ndarray, np.ndarray]:
-        """Create coordinate system axes."""
-        # Origin and axis endpoints
+        """Create coordinate system axes starting at the origin."""
+        axis_length = 1.2
+        # All axes start at the origin
         points = np.array([
-            [0, 0, 0],  # Origin
-            [1.2, 0, 0],  # X-axis
-            [0, 1.2, 0],  # Y-axis  
-            [0, 0, 1.2],  # Z-axis
+            [0, 0, 0],
+            [0, 0, 0],
+            [0, 0, 0],
         ])
         
         # Vectors for each axis
         vectors = np.array([
-            [1.2, 0, 0],   # X-axis vector
-            [0, 1.2, 0],   # Y-axis vector
-            [0, 0, 1.2],   # Z-axis vector
-            [0, 0, 0],     # Dummy for origin
+            [axis_length, 0, 0],   # X-axis vector
+            [0, axis_length, 0],   # Y-axis vector
+            [0, 0, axis_length],   # Z-axis vector
         ])
         
         return points, vectors
@@ -128,17 +128,38 @@ class DirectionVectorVisualizer:
         
         # 2. Create and display coordinate system
         if self.show_coordinates:
-            coord_points, coord_vectors = self.create_coordinate_system()
-            coord_cloud = ps.register_point_cloud("coordinate_axes", coord_points[:3])  # Skip origin
-            coord_cloud.set_radius(0.02)
+            axis_length = 1.2
+            origin = np.array([[0, 0, 0]])
             
-            # Add coordinate vectors
-            coord_cloud.add_vector_quantity("axes", coord_vectors[:3], 
-                                          enabled=True, 
-                                          vectortype="ambient",
-                                          length=1.0,
-                                          radius=0.01,
-                                          color=self.coordinate_color)
+            # X-axis (red)
+            x_axis_cloud = ps.register_point_cloud("x_axis", origin)
+            x_axis_cloud.set_radius(0.001)
+            x_axis_vector = np.array([[axis_length, 0, 0]])
+            x_axis_cloud.add_vector_quantity("x_vector", x_axis_vector,
+                                           enabled=True,
+                                           vectortype="ambient",
+                                           radius=0.01,
+                                           color=[1.0, 0.0, 0.0])  # Red
+            
+            # Y-axis (green)
+            y_axis_cloud = ps.register_point_cloud("y_axis", origin)
+            y_axis_cloud.set_radius(0.001)
+            y_axis_vector = np.array([[0, axis_length, 0]])
+            y_axis_cloud.add_vector_quantity("y_vector", y_axis_vector,
+                                           enabled=True,
+                                           vectortype="ambient",
+                                           radius=0.01,
+                                           color=[0.0, 1.0, 0.0])  # Green
+            
+            # Z-axis (blue)
+            z_axis_cloud = ps.register_point_cloud("z_axis", origin)
+            z_axis_cloud.set_radius(0.001)
+            z_axis_vector = np.array([[0, 0, axis_length]])
+            z_axis_cloud.add_vector_quantity("z_vector", z_axis_vector,
+                                           enabled=True,
+                                           vectortype="ambient",
+                                           radius=0.01,
+                                           color=[0.0, 0.0, 1.0])  # Blue
         
         # 3. Create and display the main direction vector
         origin = np.array([[0, 0, 0]])
@@ -210,110 +231,110 @@ class DirectionVectorVisualizer:
         """Create polyscope UI controls."""
         def ui_callback():
             # Angle input controls
-            ps.ImGuiText("Direction Vector Controls")
-            ps.ImGuiSeparator()
+            psim.TextUnformatted("Direction Vector Controls")
+            psim.Separator()
             
             # Azimuthal angle control
-            ps.ImGuiText("Azimuthal Angle (φ)")
-            ps.ImGuiText("Range: [-180°, 180°] (longitude)")
-            changed_azi, new_azi = ps.ImGuiSliderFloat("##azimuthal", self.ui_azimuthal, 
+            psim.TextUnformatted("Azimuthal Angle (φ)")
+            psim.TextUnformatted("Range: [-180°, 180°] (longitude)")
+            changed_azi, new_azi = psim.SliderFloat("##azimuthal", self.ui_azimuthal, 
                                                       v_min=-180.0, v_max=180.0)
             if changed_azi:
                 self.ui_azimuthal = new_azi
             
             # Polar angle control  
-            ps.ImGuiText("Polar Angle (θ)")
-            ps.ImGuiText("Range: [0°, 180°] (latitude from north pole)")
-            changed_pol, new_pol = ps.ImGuiSliderFloat("##polar", self.ui_polar,
+            psim.TextUnformatted("Polar Angle (θ)")
+            psim.TextUnformatted("Range: [0°, 180°] (latitude from north pole)")
+            changed_pol, new_pol = psim.SliderFloat("##polar", self.ui_polar,
                                                       v_min=0.0, v_max=180.0)
             if changed_pol:
                 self.ui_polar = new_pol
             
-            ps.ImGuiSeparator()
+            psim.Separator()
             
             # Update button
-            if ps.ImGuiButton("Update Vector"):
+            if psim.Button("Update Vector"):
                 self.current_azimuthal = self.ui_azimuthal
                 self.current_polar = self.ui_polar
                 self.update_visualization()
             
-            ps.ImGuiSameLine()
-            if ps.ImGuiButton("Reset to Default"):
+            psim.SameLine()
+            if psim.Button("Reset to Default"):
                 self.ui_azimuthal = 0.0
                 self.ui_polar = 90.0
                 self.current_azimuthal = 0.0
                 self.current_polar = 90.0
                 self.update_visualization()
             
-            ps.ImGuiSeparator()
+            psim.Separator()
             
             # Display options
-            ps.ImGuiText("Display Options")
+            psim.TextUnformatted("Display Options")
             
-            changed_sphere, new_sphere = ps.ImGuiCheckbox("Show Reference Sphere", self.show_sphere)
+            changed_sphere, new_sphere = psim.Checkbox("Show Reference Sphere", self.show_sphere)
             if changed_sphere:
                 self.show_sphere = new_sphere
                 self.update_visualization()
             
-            changed_coord, new_coord = ps.ImGuiCheckbox("Show Coordinate System", self.show_coordinates)
+            changed_coord, new_coord = psim.Checkbox("Show Coordinate System", self.show_coordinates)
             if changed_coord:
                 self.show_coordinates = new_coord
                 self.update_visualization()
             
-            ps.ImGuiSeparator()
+            psim.Separator()
             
             # Vector properties
-            ps.ImGuiText("Vector Properties")
-            changed_len, new_len = ps.ImGuiSliderFloat("Vector Length", self.vector_length,
+            psim.TextUnformatted("Vector Properties")
+            changed_len, new_len = psim.SliderFloat("Vector Length", self.vector_length,
                                                       v_min=0.1, v_max=2.0)
             if changed_len:
                 self.vector_length = new_len
                 self.update_visualization()
             
             # Color controls
-            changed_color, new_color = ps.ImGuiColorEdit3("Vector Color", self.vector_color)
+            changed_color, new_color = psim.ColorEdit3("Vector Color", self.vector_color)
             if changed_color:
                 self.vector_color = new_color
                 self.update_visualization()
             
-            ps.ImGuiSeparator()
+            psim.Separator()
             
             # Information display
-            ps.ImGuiText("Current Vector Information")
+            psim.TextUnformatted("Current Vector Information")
             direction = self.spherical_to_cartesian(self.current_azimuthal, self.current_polar, self.vector_length)
-            ps.ImGuiText(f"Azimuthal (φ): {self.current_azimuthal:.1f}°")
-            ps.ImGuiText(f"Polar (θ): {self.current_polar:.1f}°")
-            ps.ImGuiText(f"Cartesian: [{direction[0]:.3f}, {direction[1]:.3f}, {direction[2]:.3f}]")
-            ps.ImGuiText(f"Magnitude: {np.linalg.norm(direction):.3f}")
+            psim.TextUnformatted(f"Azimuthal (φ): {self.current_azimuthal:.1f}°")
+            psim.TextUnformatted(f"Polar (θ): {self.current_polar:.1f}°")
+            psim.TextUnformatted(f"Cartesian: [{direction[0]:.3f}, {direction[1]:.3f}, {direction[2]:.3f}]")
+            psim.TextUnformatted(f"Magnitude: {np.linalg.norm(direction):.3f}")
             
-            ps.ImGuiSeparator()
+            psim.Separator()
             
             # Quick presets
-            ps.ImGuiText("Quick Presets")
-            if ps.ImGuiButton("North Pole (0°, 0°)"):
+            psim.TextUnformatted("Quick Presets")
+            if psim.Button("North Pole (0°, 0°)"):
                 self.ui_azimuthal = 0.0
                 self.ui_polar = 0.0
                 self.current_azimuthal = 0.0
                 self.current_polar = 0.0
                 self.update_visualization()
             
-            ps.ImGuiSameLine()
-            if ps.ImGuiButton("Equator +X (0°, 90°)"):
+            psim.SameLine()
+            if psim.Button("Equator +X (0°, 90°)"):
                 self.ui_azimuthal = 0.0
                 self.ui_polar = 90.0
                 self.current_azimuthal = 0.0
                 self.current_polar = 90.0
                 self.update_visualization()
             
-            if ps.ImGuiButton("Equator +Y (90°, 90°)"):
+            if psim.Button("Equator +Y (90°, 90°)"):
                 self.ui_azimuthal = 90.0
                 self.ui_polar = 90.0
                 self.current_azimuthal = 90.0
                 self.current_polar = 90.0
                 self.update_visualization()
             
-            ps.ImGuiSameLine()
-            if ps.ImGuiButton("South Pole (0°, 180°)"):
+            psim.SameLine()
+            if psim.Button("South Pole (0°, 180°)"):
                 self.ui_azimuthal = 0.0
                 self.ui_polar = 180.0
                 self.current_azimuthal = 0.0

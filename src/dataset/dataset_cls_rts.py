@@ -40,6 +40,7 @@ class SurfaceClassificationAndRegressionDataset(Dataset):
         cone_min_axis = self.cone_min_axis[idx]
         bspline_control_points = self.bspline_control_points[idx]
         
+        # rts = np.concatenate([translation, rotation, scaling], axis=0)
         rts = np.concatenate([scaling, rotation, translation], axis=0)
         rts = torch.from_numpy(rts).float()
         cone_mask = torch.tensor([class_label == 2], dtype=torch.bool)
