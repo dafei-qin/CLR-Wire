@@ -1,0 +1,38 @@
+resume_training: false
+from_start: false
+
+epochs: 100
+batch_size: 256
+lr: 0.0001
+num_workers: 6
+num_gpus: 5
+
+grad_accum_every: 1
+ema_update_every: 10
+max_grad_norm: 1.0
+
+val_every_epoch: 5
+save_every_epoch: 20
+log_every_step: 50
+
+use_wandb_tracking: true
+wandb_project_name: CLR-adjacency
+wandb_run_name: surface_adjacency_v1
+
+data:
+    replication: 1
+    transform: null
+    train_data_path: /home/qindafei/CAD/abc_adjency/train.pkl
+    val_data_path: /home/qindafei/CAD/abc_adjency/val.pkl
+
+model:
+    depth: 16
+    dim: 512
+    heads: 8
+    surface_res: 32
+    num_types: 6
+    num_nearby: 20
+    surface_dim: 256
+    surface_enc_block_out_channels: [16, 32, 64, 128]
+    checkpoint_folder: checkpoints/adjacency
+    checkpoint_file_name: model.pt 

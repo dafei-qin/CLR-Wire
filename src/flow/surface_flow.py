@@ -91,9 +91,13 @@ class ControlNetConditioningEmbedding(nn.Module):
 
         return embedding
 
+
+
+
 class Encoder(ModelMixin, ConfigMixin):
+    # This is a simple encoder that takes in a point cloud and outputs a latent representation
     @register_to_config
-    def __init__(self, in_dim, out_dim, depth=24, dim=512, heads=8, res=32):
+    def __init__(self, in_dim=3, out_dim=3, depth=24, dim=512, heads=8, res=32, use_pe=True):
         super().__init__()
 
         self.depth = depth
@@ -105,7 +109,10 @@ class Encoder(ModelMixin, ConfigMixin):
 
         self.proj_in = nn.Linear(in_dim, dim, bias=False)
         self.proj_out = nn.Linear(dim, out_dim, bias=False)
-        self.pe = PointEmbd2D(dim=dim)
+        if use_pe:
+            self.pe = PointEmbd2D(dim=dim)
+        else:
+            self.pe = None
         self.layers = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(dim, heads, dim_feedforward=dim * 4, dropout=0, activation=F.gelu, batch_first=True, norm_first=True, layer_norm_eps=1e-4),
             depth
@@ -116,7 +123,10 @@ class Encoder(ModelMixin, ConfigMixin):
         t_grid = torch.stack(torch.meshgrid(t_1d, t_1d, indexing='ij'), dim=-1)
         x_pe = t_grid.unsqueeze(0).repeat(x.shape[0], 1, 1, 1)
         x_pe = rearrange(x_pe, 'b h w c -> b (h w) c')
-        x_pe = self.pe(x_pe)
+        if self.pe is not None:
+            x_pe = self.pe(x_pe)
+        else:
+            x_pe = 0
         x = rearrange(x, 'b h w c -> b (h w) c', h=self.res, w=self.res)
         x = self.proj_in(x)
         x = x + x_pe
@@ -124,21 +134,70 @@ class Encoder(ModelMixin, ConfigMixin):
         x = self.proj_out(x)
         return x
 
-# class EncoderRTS(Encoder):
-#     def __init__(self, in_dim, out_dim, depth=24, dim=512, heads=8, res=32):
-#         super().__init__(in_dim, out_dim, depth, dim, heads, res)
-      
-#     def forward(self, x):
-#         x, last = super().forward(x, return_last=True)
+class EncoderWithHeader(ModelMixin, ConfigMixin):
+    # This is a simple encoder that takes in a point cloud and outputs a global token as an indicator for surface type and other attributes
+    # TODO: Add some pe
+    @register_to_config
+    def __init__(self, in_dim, depth=24, dim=512, heads=8, res=32, cls_dim=6, rst_dim=9, bspline_cp_dim=16):
+        super().__init__()
 
-#         if self.cone_pred is not None:
-#             cone_pred = self.cone_pred(last)
-#             x = torch.cat([x, cone_pred], dim=1)
+        self.in_dim = in_dim
+        self.depth = depth
+        self.dim = dim
+        self.heads = heads
+        self.res = res
 
-#         if return_last:
-#             return x, last, rts
-#         else:
-#             return x, rts
+        self.global_embd = nn.Parameter(torch.randn(1, 1, dim), requires_grad=True)
+        self.proj_in = nn.Linear(in_dim, dim, bias=False)
+        # self.pe = PointEmbd2D(dim=dim)
+        self.layers = nn.TransformerEncoder(
+            nn.TransformerEncoderLayer(dim, heads, dim_feedforward=dim * 4, dropout=0, activation=F.gelu, batch_first=True, norm_first=True, layer_norm_eps=1e-4),
+            depth
+        )
+        self.dropout = nn.Dropout(0.1)
+        self.cls_dim = cls_dim
+        self.rst_dim = rst_dim
+        self.bspline_cp_dim = bspline_cp_dim
+        if cls_dim > 0:
+            self.cls_proj = nn.Linear(dim, cls_dim)
+        else:
+            self.cls_proj = None
+        if rst_dim > 0:
+            self.rst_proj = nn.Linear(dim, rst_dim)
+            self.cone_proj = nn.Linear(dim, 1)
+        else:
+            self.rst_proj = None
+            self.cone_proj = None
+        if bspline_cp_dim > 0:
+            self.bspline_cp_proj = nn.Linear(dim, bspline_cp_dim)
+        else:
+            self.bspline_cp_proj = None
+
+    def forward(self, x):
+        x = rearrange(x, 'b h w c -> b (h w) c')
+        x = self.proj_in(x)
+        x = torch.cat([self.global_embd.repeat(x.shape[0], 1, 1), x], dim=1)
+        x = self.layers(x)
+        global_token = x[:, 0, :]
+        global_token = self.dropout(global_token)
+        if self.cls_proj is not None:
+            cls_token = self.cls_proj(global_token)
+        else:
+            cls_token = None
+        if self.rst_proj is not None:
+            rst_token = self.rst_proj(global_token)
+            cone_token = self.cone_proj(global_token)
+        else:
+            rst_token = None
+            cone_token = None
+        if self.bspline_cp_proj is not None:
+            bspline_cp_token = self.bspline_cp_proj(global_token)
+        else:
+            bspline_cp_token = None
+        return global_token, cls_token, rst_token, cone_token, bspline_cp_token
+        
+
+
 
 class ZLDM(ModelMixin, ConfigMixin):
     @register_to_config

@@ -2,13 +2,13 @@ import os
 import sys
 from argparse import ArgumentParser
 
-from src.flow.surface_flow import Encoder as MyModel
-from src.dataset.dataset_cls_rts import SurfaceClassificationAndRegressionDataset as MyDataset
-from src.trainer.trainer_cls_rts import TrainerClassificationAndRegression as MyTrainer
+from src.flow.adjacency import AdjacencyDecoder as MyModel
+from src.dataset.dataset_adj import SurfaceClassificationAndRegressionDataset as MyDataset
+from src.trainer.trainer_adjency import TrainerAdjacency as MyTrainer
 from src.utils.config import NestedDictToClass, load_config
 from src.dataset.dataset_fn import surface_scale_and_jitter, surface_rotate
 
-program_parser = ArgumentParser(description='Train classification and regression model.')
+program_parser = ArgumentParser(description='Train adjacency prediction model.')
 program_parser.add_argument('--config', type=str, default='', help='Path to config file.')
 program_parser.add_argument('--resume_lr', type=float, default=None, help='New learning rate to use when resuming from a checkpoint.')
 cli_args, unknown = program_parser.parse_known_args()
@@ -38,22 +38,25 @@ train_dataset = MyDataset(
     replication=args.data.replication,
     transform=transform,
     is_train=True,
-    res=args.model.res
+    res=args.model.surface_res,
+    num_nearby=args.model.num_nearby
 )
 
 val_dataset = MyDataset(
     data_path=args.data.val_data_path,
     is_train=False,
-    res=args.model.res
+    res=args.model.surface_res,
+    num_nearby=args.model.num_nearby
 )
 
 model = MyModel(
-    in_dim=args.model.in_dim,
-    out_dim=args.model.out_dim,
     depth=args.model.depth,
-    dim=args.model.dim,
     heads=args.model.heads,
-    res=args.model.res
+    surface_res=args.model.surface_res,
+    num_types=args.model.num_types,
+    num_nearby=args.model.num_nearby,
+    surface_dim=args.model.surface_dim,
+    surface_enc_block_out_channels=args.model.surface_enc_block_out_channels
 )
 
 epochs = args.epochs
@@ -75,8 +78,6 @@ trainer = MyTrainer(
     grad_accum_every=args.grad_accum_every,
     ema_update_every=args.ema_update_every,
     learning_rate=initial_lr,
-    rts_loss_weight=args.rts_loss_weight,
-    cone_loss_weight=args.cone_loss_weight,
     max_grad_norm=args.max_grad_norm,
     accelerator_kwargs=dict(
         cpu=False,

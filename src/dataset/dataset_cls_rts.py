@@ -66,7 +66,7 @@ class SurfaceClassificationAndRegressionDataset(Dataset):
         if self.transform:
             points = self.transform(points)
         
-        return torch.from_numpy(points).float(), torch.from_numpy(np.array(class_label)).long(), rts, cone_min_axis, bspline_control_points, rts_mask, cone_mask
+        return torch.from_numpy(points).float(), torch.from_numpy(np.array(class_label)).long(), rts, torch.from_numpy(cone_min_axis).float(), torch.from_numpy(bspline_control_points).float(), rts_mask, cone_mask
 
 
 
