@@ -95,6 +95,7 @@ class ControlNetConditioningEmbedding(nn.Module):
 
 
 class Encoder(ModelMixin, ConfigMixin):
+    # This is a simple encoder that takes in a point cloud and outputs a latent representation
     @register_to_config
     def __init__(self, in_dim=3, out_dim=3, depth=24, dim=512, heads=8, res=32, use_pe=True):
         super().__init__()
@@ -134,6 +135,7 @@ class Encoder(ModelMixin, ConfigMixin):
         return x
 
 class EncoderWithHeader(ModelMixin, ConfigMixin):
+    # This is a simple encoder that takes in a point cloud and outputs a global token as an indicator for surface type and other attributes
     # TODO: Add some pe
     @register_to_config
     def __init__(self, in_dim, depth=24, dim=512, heads=8, res=32, cls_dim=6, rst_dim=9, bspline_cp_dim=16):
@@ -194,6 +196,8 @@ class EncoderWithHeader(ModelMixin, ConfigMixin):
             bspline_cp_token = None
         return global_token, cls_token, rst_token, cone_token, bspline_cp_token
         
+
+
 
 class ZLDM(ModelMixin, ConfigMixin):
     @register_to_config

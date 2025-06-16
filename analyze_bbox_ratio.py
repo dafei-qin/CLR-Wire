@@ -13,10 +13,16 @@ import argparse
 import csv
 import json
 import os
+import multiprocessing
 from pathlib import Path
 from collections import defaultdict
 import numpy as np
+from scipy.ndimage import zoom
 from tqdm import tqdm
+
+
+def default_ratio_analysis():
+    return {'surfaces_in_bbox': [], 'adj_not_in_bbox': []}
 
 
 def find_json_files(input_dir):
@@ -46,9 +52,51 @@ def get_surfaces_and_adjacency(data):
     return surfaces, dict(surface_adjacency)
 
 
+def upsample_surface(vertices, factor=4):
+    """
+    Upsamples the surface vertices assuming they form a square grid.
+    """
+    num_points = vertices.shape[0]
+    grid_size = int(np.sqrt(num_points))
+
+    if grid_size * grid_size != num_points:
+        # Not a square grid, cannot upsample this way.
+        return None
+
+    # Reshape to a grid for each coordinate
+    grid_x = vertices[:, 0].reshape((grid_size, grid_size))
+    grid_y = vertices[:, 1].reshape((grid_size, grid_size))
+    grid_z = vertices[:, 2].reshape((grid_size, grid_size))
+
+    # Upsample each coordinate grid using linear interpolation
+    zoomed_x = zoom(grid_x, factor, order=1)
+    zoomed_y = zoom(grid_y, factor, order=1)
+    zoomed_z = zoom(grid_z, factor, order=1)
+
+    # Combine back into a list of points
+    upsampled_vertices = np.vstack([zoomed_x.ravel(), zoomed_y.ravel(), zoomed_z.ravel()]).T
+    
+    return upsampled_vertices
+
+
 def is_surface_in_bbox(surface_verts, bbox_min, bbox_max):
-    """Check if any vertex of a surface is within the given bounding box."""
-    return np.any(np.all((surface_verts >= bbox_min) & (surface_verts <= bbox_max), axis=1))
+    """
+    Check if any vertex of a surface is within the given bounding box.
+    If not, upsample the vertices and check again.
+    """
+    # Initial check with original vertices
+    if np.any(np.all((surface_verts >= bbox_min) & (surface_verts <= bbox_max), axis=1)):
+        return True
+
+    # If the initial check fails, try upsampling the surface.
+    upsampled_verts = upsample_surface(surface_verts, factor=4)
+    
+    if upsampled_verts is not None:
+        # Check again with the upsampled vertices.
+        return np.any(np.all((upsampled_verts >= bbox_min) & (upsampled_verts <= bbox_max), axis=1))
+
+    # If upsampling is not possible, return the result from the original check (which was False).
+    return False
 
 
 def analyze_file(file_path):
@@ -66,9 +114,9 @@ def analyze_file(file_path):
     
     file_stats = {
         'num_adjacent_dist': [],
-        'ratio_analysis': defaultdict(lambda: {'surfaces_in_bbox': [], 'adj_not_in_bbox': []})
+        'ratio_analysis': defaultdict(default_ratio_analysis)
     }
-    ratios = np.arange(1.0, 1.52, 0.02)
+    ratios = np.arange(1.0, 1.06, 0.02)
 
     for surface_idx, surface_data in surfaces.items():
         if not surface_data or not surface_data.get('points'):
@@ -142,13 +190,18 @@ def main():
     all_num_adjacent = []
     all_ratio_stats = defaultdict(lambda: {'surfaces_in_bbox': [], 'adj_not_in_bbox': []})
 
-    for file_path in tqdm(json_files, desc="Processing files"):
-        file_results = analyze_file(file_path)
-        if file_results:
-            all_num_adjacent.extend(file_results['num_adjacent_dist'])
-            for ratio, stats in file_results['ratio_analysis'].items():
-                all_ratio_stats[ratio]['surfaces_in_bbox'].extend(stats['surfaces_in_bbox'])
-                all_ratio_stats[ratio]['adj_not_in_bbox'].extend(stats['adj_not_in_bbox'])
+    num_processes = multiprocessing.cpu_count()
+    print(f"Using {num_processes} processes for analysis.")
+
+    with multiprocessing.Pool(processes=num_processes) as pool:
+        results_iterator = pool.imap_unordered(analyze_file, json_files)
+        
+        for file_results in tqdm(results_iterator, total=len(json_files), desc="Processing files"):
+            if file_results:
+                all_num_adjacent.extend(file_results['num_adjacent_dist'])
+                for ratio, stats in file_results['ratio_analysis'].items():
+                    all_ratio_stats[ratio]['surfaces_in_bbox'].extend(stats['surfaces_in_bbox'])
+                    all_ratio_stats[ratio]['adj_not_in_bbox'].extend(stats['adj_not_in_bbox'])
 
     if not all_num_adjacent:
         print("No processable surfaces found in any files.")
