@@ -35,6 +35,7 @@ elif transform == 'scale_and_jitter_and_rotate':
 
 train_dataset = MyDataset(
     data_path=args.data.train_data_path,
+    data_dir=args.data.train_data_dir,
     replication=args.data.replication,
     transform=transform,
     is_train=True,
@@ -43,6 +44,7 @@ train_dataset = MyDataset(
 
 val_dataset = MyDataset(
     data_path=args.data.val_data_path,
+    data_dir=args.data.val_data_dir,
     is_train=False,
     res=args.model.res
 )
