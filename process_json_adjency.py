@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-Process surface data from JSON files into a structured pickle format.
+Process surface data from JSON files into individual pickle files.
 
 This script reads CAD data from JSON files, extracts information for each surface,
 and computes its local context, including nearby surfaces and adjacency information.
-The processed data is then saved to a single pickle file.
+Each surface is saved as an individual pickle file with the naming convention:
+<uid>_<surface_idx>.pkl
 """
 import argparse
 import json
@@ -33,6 +34,11 @@ def find_json_files(input_dir):
     input_path = Path(input_dir)
     return sorted([str(f) for f in input_path.rglob("*.json")])
 
+def extract_uid_from_filename(file_path):
+    """Extract UID from JSON filename."""
+    filename = Path(file_path).stem
+    return filename
+
 def get_surfaces_and_adjacency(data):
     """Extract surfaces and their adjacency relationships from the raw JSON data."""
     surface_adjacency = defaultdict(set)
@@ -52,15 +58,10 @@ def upsample_surface(vertices, factor=4):
     """
     Upsamples the surface vertices assuming they form a square grid.
     """
-    num_points = vertices.shape[0]
-    grid_size = int(np.sqrt(num_points))
 
-    if grid_size * grid_size != num_points:
-        return None
-
-    grid_x = vertices[:, 0].reshape((grid_size, grid_size))
-    grid_y = vertices[:, 1].reshape((grid_size, grid_size))
-    grid_z = vertices[:, 2].reshape((grid_size, grid_size))
+    grid_x = vertices[:, 0]
+    grid_y = vertices[:, 1]
+    grid_z = vertices[:, 2]
 
     zoomed_x = zoom(grid_x, factor, order=1)
     zoomed_y = zoom(grid_y, factor, order=1)
@@ -85,19 +86,22 @@ def is_surface_in_bbox(surface_verts, bbox_min, bbox_max):
 
     return False
 
-def process_file(file_path):
+def process_file(args_tuple):
     """
-    Process a single JSON file and extract surface data.
+    Process a single JSON file and save individual surface data.
     """
+    file_path, output_dir = args_tuple
+    
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
     except Exception as e:
         print(f"Error loading {file_path}: {e}")
-        return []
+        return 0
 
+    uid = extract_uid_from_filename(file_path)
     surfaces, adjacency_map = get_surfaces_and_adjacency(data)
-    results = []
+    saved_count = 0
 
     for s_idx, s_data in surfaces.items():
         if not s_data.get('points') or s_data.get('type') not in SURFACE_TYPE_MAP:
@@ -149,20 +153,33 @@ def process_file(file_path):
             if nearby['idx'] in s_adj:
                 adj_mask[i] = 1
 
-        results.append({
+        # Prepare surface data
+        surface_data = {
             'type': s_type,
             'points': s_points.reshape(32, 32, 3),
             'bbox': s_bbox,
             'nearby': nearby_surfaces,
             'adj_mask': adj_mask,
-        })
+        }
 
-    return results
+        # Save individual surface file
+        output_filename = f"{uid}_{s_idx}.pkl"
+        output_path = Path(output_dir) / output_filename
+        
+        try:
+            with open(output_path, 'wb') as f:
+                pickle.dump(surface_data, f)
+            saved_count += 1
+        except Exception as e:
+            print(f"Error saving {output_path}: {e}")
+
+    return saved_count
 
 def main():
-    parser = argparse.ArgumentParser(description="Process surface data from JSON to a structured pickle file.")
+    parser = argparse.ArgumentParser(description="Process surface data from JSON to individual pickle files.")
     parser.add_argument("--input", type=str, required=True, help="Input directory containing JSON files.")
-    parser.add_argument("--output", type=str, required=True, help="Path to the output pickle file.")
+    parser.add_argument("--output", type=str, required=True, help="Output directory for individual pickle files.")
+    parser.add_argument("--processes", type=int, default=None, help="Number of processes to use (default: CPU count).")
     args = parser.parse_args()
 
     json_files = find_json_files(args.input)
@@ -172,39 +189,23 @@ def main():
 
     print(f"Found {len(json_files)} JSON files. Starting processing...")
 
-    all_data = {
-        'types': [], 'points': [], 'bbox': [], 'nearby': [], 'adj_mask': []
-    }
+    # Create output directory
+    output_dir = Path(args.output)
+    output_dir.mkdir(parents=True, exist_ok=True)
     
-    num_processes = multiprocessing.cpu_count()
+    # Prepare arguments for multiprocessing
+    process_args = [(file_path, str(output_dir)) for file_path in json_files]
+    
+    num_processes = args.processes or multiprocessing.cpu_count()
+    total_surfaces_saved = 0
+    
     with multiprocessing.Pool(processes=num_processes) as pool:
-        results_iterator = pool.imap_unordered(process_file, json_files)
+        results_iterator = pool.imap_unordered(process_file, process_args)
         
-        for file_results in tqdm(results_iterator, total=len(json_files), desc="Processing files"):
-            for res in file_results:
-                all_data['types'].append(res['type'])
-                all_data['points'].append(res['points'])
-                all_data['bbox'].append(res['bbox'])
-                
-                # Extract nearby info, stripping the original index
-                nearby_info = [{k: v for k, v in n.items() if k != 'idx'} for n in res['nearby']]
-                all_data['nearby'].append(nearby_info)
-                all_data['adj_mask'].append(res['adj_mask'])
+        for surfaces_saved in tqdm(results_iterator, total=len(json_files), desc="Processing files"):
+            total_surfaces_saved += surfaces_saved
 
-    # Convert lists to numpy arrays where appropriate
-    all_data['points'] = np.array(all_data['points'])
-    all_data['bbox'] = np.array(all_data['bbox'])
-    all_data['adj_mask'] = np.array(all_data['adj_mask'])
-
-    print(f"Processed {len(all_data['types'])} surfaces.")
-    
-    # Save to pickle file
-    output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, 'wb') as f:
-        pickle.dump(all_data, f)
-
-    print(f"Data saved to {output_path}")
+    print(f"Processing complete! Saved {total_surfaces_saved} individual surface files to {output_dir}")
 
 if __name__ == "__main__":
     main() 

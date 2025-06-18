@@ -128,7 +128,7 @@ class TrainerAdjacency(BaseTrainer):
                     total_loss += loss.item()
                     total_accuracy += accuracy.item() / self.grad_accum_every
 
-                    self.print(get_current_time() + f' loss: {loss.item():.3f} acc: {accuracy.item():.3f}')
+                    # self.print(get_current_time() + f' loss: {loss.item():.3f} acc: {accuracy.item():.3f}')
                 
                 self.accelerator.backward(loss)
             

@@ -2,12 +2,32 @@ import numpy as np
 from scipy.spatial import ConvexHull
 from concurrent.futures import ThreadPoolExecutor
 import random
+from scipy.ndimage import zoom
 
 from src.utils.numpy_tools import (
     rotation_matrix_x, rotation_matrix_y, rotation_matrix_z
 )
 
 
+
+# # ==================== Upsampling Surface ====================
+# def upsample_surface(vertices, factor=4):
+#     """
+#     Upsamples the surface vertices assuming they form a square grid.
+#     """
+
+    
+#     grid_x = vertices[:, 0]
+#     grid_y = vertices[:, 1]
+#     grid_z = vertices[:, 2]
+
+#     zoomed_x = zoom(grid_x, factor, order=1)
+#     zoomed_y = zoom(grid_y, factor, order=1)
+#     zoomed_z = zoom(grid_z, factor, order=1)
+
+#     upsampled_vertices = np.vstack([zoomed_x.ravel(), zoomed_y.ravel(), zoomed_z.ravel()]).T
+    
+#     return upsampled_vertices
 def random_viewpoint():
     theta = np.random.uniform(np.radians(20), np.radians(110))
     phi = np.random.uniform(0, 2 * np.pi)
@@ -70,7 +90,10 @@ def surface_scale_and_jitter(vertices, interval=(0.9, 1.1), jitter=0.1):
     vertices *= scale_ratio * (interval[1] - interval[0]) + interval[0]
    
     shift = np.random.rand(3) * 2 - 1
-    shift = shift[np.newaxis, np.newaxis, :]
+    if vertices.ndim == 4:
+        shift = shift[np.newaxis, np.newaxis, np.newaxis, :]
+    else:
+        shift = shift[np.newaxis, np.newaxis, :]
 
     vertices += shift * jitter
     
