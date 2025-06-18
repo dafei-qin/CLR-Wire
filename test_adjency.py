@@ -85,6 +85,7 @@ class AdjacencyInference:
         self.true_labels = []
         self.probabilities = []
         self.processing_times = []
+        self.surface_types = []  # Track surface types for per-type analysis
         
         # Binary classification metrics
         self.tp = 0
@@ -141,19 +142,21 @@ class AdjacencyInference:
                 predictions = predictions.cpu().numpy()
                 probabilities = probabilities.float().cpu().numpy()
                 adj_mask_np = adj_mask.float().cpu().numpy()
+                surface_type_np = surface_type.cpu().numpy()
         
         processing_time = time.time() - start_time
         
-        return predictions, probabilities, adj_mask_np, processing_time
+        return predictions, probabilities, adj_mask_np, surface_type_np, processing_time
     
-    def process_dataset(self, data_path, batch_size=32, num_workers=4):
+    def process_dataset(self, data_path, data_dir, batch_size=32, num_workers=4):
         """Process entire dataset using DataLoader for efficient batch processing."""
-        print(f"Creating dataset from {data_path}")
+        print(f"Creating dataset from {data_path} with data directory {data_dir}")
         
         # Create dataset
         try:
             dataset = SurfaceClassificationAndRegressionDataset(
                 data_path=data_path,
+                data_dir=data_dir,
                 replication=1,
                 transform=None,
                 is_train=False,
@@ -187,7 +190,7 @@ class AdjacencyInference:
         
         for batch_idx, batch_data in enumerate(tqdm(dataloader, desc="Processing batches")):
             # Predict batch
-            pred_batch, prob_batch, true_batch, proc_time = self.predict_batch(batch_data)
+            pred_batch, prob_batch, true_batch, surface_type_batch, proc_time = self.predict_batch(batch_data)
             total_processing_time += proc_time
             
             # Store results for each sample in the batch
@@ -198,11 +201,14 @@ class AdjacencyInference:
                 predictions = pred_batch[i]  # Shape: (num_nearby,)
                 probabilities = prob_batch[i]  # Shape: (num_nearby,)
                 true_labels = true_batch[i]  # Shape: (num_nearby,)
+                surface_type = surface_type_batch[i]  # Scalar value for main surface type
                 
                 # Store results
                 self.predictions.extend(predictions.tolist())
                 self.true_labels.extend(true_labels.tolist())
                 self.probabilities.extend(probabilities.tolist())
+                # Store surface type for each nearby surface prediction
+                self.surface_types.extend([surface_type] * len(predictions))
                 
                 # Update confusion matrix metrics
                 for j in range(len(predictions)):
@@ -230,6 +236,7 @@ class AdjacencyInference:
         true_labels = np.array(self.true_labels)
         probabilities = np.array(self.probabilities)
         processing_times = np.array(self.processing_times)
+        surface_types = np.array(self.surface_types)
         
         # Basic metrics
         accuracy = np.mean(predictions == true_labels)
@@ -260,6 +267,109 @@ class AdjacencyInference:
         avg_correct_prob = np.mean(correct_probabilities) if len(correct_probabilities) > 0 else 0.0
         avg_incorrect_prob = np.mean(incorrect_probabilities) if len(incorrect_probabilities) > 0 else 0.0
         
+        # Per-surface-type analysis
+        unique_types = np.unique(surface_types)
+        per_type_metrics = {}
+        
+        # Debug prints removed for production use. Uncomment if needed.
+        # print(f"Debug - predictions shape: {predictions.shape}")
+        # print(f"Debug - surface_types shape: {surface_types.shape}")
+        # print(f"Debug - unique surface types: {unique_types}")
+        
+        # Define surface type names (assuming standard CAD surface types)
+        type_names = {
+            0: "Plane",
+            1: "Cylinder", 
+            2: "Cone",
+            3: "Sphere",
+            4: "Torus",
+            5: "B-Spline/NURBS",
+            6: "Other"
+        }
+        
+        for surface_type in unique_types:
+            type_mask = (surface_types == surface_type).reshape(-1)
+            # Debug per-type mask info removed.
+            
+            type_predictions = predictions[type_mask]
+            type_true_labels = true_labels[type_mask]
+            type_probabilities = probabilities[type_mask]
+            
+            if len(type_predictions) == 0:
+                continue
+                
+            # Compute metrics for this surface type
+            type_accuracy = np.mean(type_predictions == type_true_labels)
+            type_avg_prob = np.mean(type_probabilities)
+            
+            # Confusion matrix for this type
+            type_tp = np.sum((type_predictions == 1) & (type_true_labels == 1))
+            type_fp = np.sum((type_predictions == 1) & (type_true_labels == 0))
+            type_tn = np.sum((type_predictions == 0) & (type_true_labels == 0))
+            type_fn = np.sum((type_predictions == 0) & (type_true_labels == 1))
+            
+            type_precision = type_tp / (type_tp + type_fp) if (type_tp + type_fp) > 0 else 0.0
+            type_recall = type_tp / (type_tp + type_fn) if (type_tp + type_fn) > 0 else 0.0
+            type_f1 = 2 * type_precision * type_recall / (type_precision + type_recall) if (type_precision + type_recall) > 0 else 0.0
+            type_specificity = type_tn / (type_tn + type_fp) if (type_tn + type_fp) > 0 else 0.0
+            type_balanced_acc = (type_recall + type_specificity) / 2
+            
+            type_positive_samples = np.sum(type_true_labels == 1)
+            type_negative_samples = np.sum(type_true_labels == 0)
+            
+            type_name = type_names.get(surface_type, f"Type_{surface_type}")
+            
+            per_type_metrics[type_name] = {
+                'surface_type_id': int(surface_type),
+                'accuracy': type_accuracy,
+                'precision': type_precision,
+                'recall': type_recall,
+                'f1_score': type_f1,
+                'specificity': type_specificity,
+                'balanced_accuracy': type_balanced_acc,
+                'avg_probability': type_avg_prob,
+                'total_samples': len(type_predictions),
+                'positive_samples': int(type_positive_samples),
+                'negative_samples': int(type_negative_samples),
+                'confusion_matrix': {
+                    'tp': int(type_tp),
+                    'fp': int(type_fp),
+                    'tn': int(type_tn),
+                    'fn': int(type_fn)
+                }
+            }
+        
+        # Failure case analysis (FP and FN distribution across surface types)
+        failure_analysis = {}
+
+        fp_mask_global = (predictions == 1) & (true_labels == 0)
+        fn_mask_global = (predictions == 0) & (true_labels == 1)
+
+        def _type_distribution(mask):
+            distribution = {}
+            total = int(np.sum(mask))
+            if total == 0:
+                return distribution, total
+            for st in unique_types:
+                count = int(np.sum(mask & (surface_types == st).reshape(-1)))
+                if count > 0:
+                    st_name = type_names.get(st, f"Type_{st}")
+                    distribution[st_name] = count
+            return distribution, total
+
+        fp_dist, fp_total = _type_distribution(fp_mask_global)
+        fn_dist, fn_total = _type_distribution(fn_mask_global)
+
+        failure_analysis['false_positive'] = {
+            'total': fp_total,
+            'distribution': fp_dist
+        }
+
+        failure_analysis['false_negative'] = {
+            'total': fn_total,
+            'distribution': fn_dist
+        }
+        
         return {
             'overall': {
                 'accuracy': accuracy,
@@ -281,7 +391,9 @@ class AdjacencyInference:
                 'fp': self.fp,
                 'tn': self.tn,
                 'fn': self.fn
-            }
+            },
+            'per_surface_type': per_type_metrics,
+            'failure_analysis': failure_analysis
         }
     
     def print_summary(self, metrics=None):
@@ -318,6 +430,38 @@ class AdjacencyInference:
         print(f"Actual Non-Adj   {cm['tn']:6d}   {cm['fp']:6d}")
         print(f"       Adjacent  {cm['fn']:6d}   {cm['tp']:6d}")
         
+        # Per-surface-type performance
+        if 'per_surface_type' in metrics and metrics['per_surface_type']:
+            print(f"\n📈 PERFORMANCE BY SURFACE TYPE:")
+            print(f"{'Surface Type':<15} {'Samples':<8} {'Accuracy':<8} {'Precision':<9} {'Recall':<7} {'F1-Score':<8} {'Bal.Acc':<7}")
+            print("-" * 80)
+            
+            # Sort by surface type name for consistent output
+            for type_name in sorted(metrics['per_surface_type'].keys()):
+                type_metrics = metrics['per_surface_type'][type_name]
+                print(f"{type_name:<15} {type_metrics['total_samples']:<8} "
+                      f"{type_metrics['accuracy']:<8.4f} {type_metrics['precision']:<9.4f} "
+                      f"{type_metrics['recall']:<7.4f} {type_metrics['f1_score']:<8.4f} "
+                      f"{type_metrics['balanced_accuracy']:<7.4f}")
+        
+        # Failure analysis summary
+        if 'failure_analysis' in metrics:
+            fa = metrics['failure_analysis']
+            print(f"\n❌ FAILURE ANALYSIS:")
+            # False Positives
+            fp_info = fa.get('false_positive', {})
+            fn_info = fa.get('false_negative', {})
+
+            print(f"  False Positives: {fp_info.get('total', 0):,}")
+            if fp_info.get('distribution'):
+                for t, c in fp_info['distribution'].items():
+                    print(f"    • {t}: {c}")
+
+            print(f"  False Negatives: {fn_info.get('total', 0):,}")
+            if fn_info.get('distribution'):
+                for t, c in fn_info['distribution'].items():
+                    print(f"    • {t}: {c}")
+        
         # Model and hardware info
         print(f"\n⚙️  SYSTEM INFO:")
         print(f"  Surface Resolution: {self.cfg.model.surface_res}x{self.cfg.model.surface_res}")
@@ -346,7 +490,8 @@ class AdjacencyInference:
             'predictions': self.predictions,
             'true_labels': self.true_labels,
             'probabilities': self.probabilities,
-            'processing_times': self.processing_times
+            'processing_times': self.processing_times,
+            'surface_types': self.surface_types
         }
         
         with open(output_path, 'w') as f:
@@ -356,7 +501,8 @@ class AdjacencyInference:
 
 def main():
     parser = ArgumentParser(description="Perform comprehensive adjacency prediction inference on dataset.")
-    parser.add_argument('--data_file', type=str, required=True, help="Path to the .pkl file containing test data.")
+    parser.add_argument('--data_file', type=str, required=True, help="Path to the .pkl file containing list of test filenames.")
+    parser.add_argument('--data_dir', type=str, required=True, help="Directory containing individual .pkl files.")
     parser.add_argument('--config', type=str, required=True, help="Path to the adjacency model config file.")
     parser.add_argument('--checkpoint', type=str, required=True, help="Path to the adjacency model checkpoint file.")
     parser.add_argument('--output', type=str, default=None, help="Path to save detailed results JSON file.")
@@ -380,7 +526,7 @@ def main():
     adjacency_predictor = AdjacencyInference(args.config, args.checkpoint, use_fp16=use_fp16)
     
     # Process dataset
-    adjacency_predictor.process_dataset(args.data_file, args.batch_size, args.num_workers)
+    adjacency_predictor.process_dataset(args.data_file, args.data_dir, args.batch_size, args.num_workers)
     
     # Compute and print metrics
     metrics = adjacency_predictor.compute_metrics()

@@ -14,9 +14,11 @@ Standard surfaces:
 import argparse
 import json
 import math
+import multiprocessing
 import numpy as np
 import os
 from pathlib import Path
+from tqdm import tqdm
 
 
 class SurfaceTransformationConverter:
@@ -334,10 +336,7 @@ class SurfaceTransformationConverter:
             uv_min = [aabb_min[0], aabb_min[1]]
             uv_max = [aabb_max[0], aabb_max[1]]
             
-            print(f"Plane analysis (points-derived center):")
-            print(f"  Centroid translation: {translation}")
-            print(f"  Point extent: x=[{min_x:.3f}, {max_x:.3f}], y=[{min_y:.3f}, {max_y:.3f}]")
-            print(f"  Calculated scaling: [{scale_x:.3f}, {scale_y:.3f}, 1.0]")
+            # Removed verbose output for multiprocessing compatibility
         else:
             # Fallback when no valid points available
             scaling = [1.0, 1.0, 1.0]
@@ -496,19 +495,11 @@ class SurfaceTransformationConverter:
                 print("Warning: Calculated radius is too small, using basic conversion")
                 return basic_result
             
-            print(f"Cylinder analysis:")
-            print(f"  Given radius: {radius:.4f}, Estimated from points: {actual_radius_estimate:.4f} (±{radius_std:.4f})")
-            print(f"  Actual height from points: {actual_height:.4f}")
-            print(f"  Height range: [{min_projection:.4f}, {max_projection:.4f}]")
-            print(f"  Original center: {location}")
-            print(f"  Calculated center: {actual_center}")
-            
             # Decide whether to use given or estimated radius
             # If they're close, use the given radius (more reliable)
-            # If they differ significantly, warn and use estimated
+            # If they differ significantly, use estimated
             radius_ratio = abs(actual_radius_estimate - radius) / max(radius, actual_radius_estimate)
             if radius_ratio > 0.1:  # More than 10% difference
-                print(f"  Warning: Large radius discrepancy ({radius_ratio:.1%}), using estimated radius")
                 improved_radius = actual_radius_estimate
             else:
                 improved_radius = radius
@@ -542,8 +533,7 @@ class SurfaceTransformationConverter:
             return improved_result
             
         except Exception as e:
-            print(f"Error in cylinder analysis: {e}")
-            print("Falling back to basic conversion")
+            # Silently fall back to basic conversion for multiprocessing compatibility
             return basic_result
 
     def convert_cone(self, surface_data):
@@ -553,7 +543,7 @@ class SurfaceTransformationConverter:
         """
         location = surface_data["location"][0]  # [x, y, z]
         direction = surface_data["direction"][0]  # [dx, dy, dz]
-        print('cone direction', direction, 'cone location', location)
+        # Removed verbose output for multiprocessing compatibility
         direction = [direction[0], direction[1], -direction[2]] 
         semi_angle = surface_data["scalar"][0]
         radius = surface_data["scalar"][1]  # reference radius
@@ -576,7 +566,7 @@ class SurfaceTransformationConverter:
             "scaling": scaling
         }
         aabb_min, aabb_max = self.calculate_standard_space_aabb(surface_data, transformation_for_aabb)
-        print('cone aabb', aabb_min, aabb_max)
+        # Removed verbose output for multiprocessing compatibility
         # Create a copy of the original data and add transformation
         result = surface_data.copy()
         result["converted_transformation"] = {
@@ -657,7 +647,7 @@ class SurfaceTransformationConverter:
             "scaling": scaling
         }
         aabb_min, aabb_max = self.calculate_standard_space_aabb(surface_data, transformation_for_aabb)
-        print('torus aabb', aabb_min, aabb_max)
+        # Removed verbose output for multiprocessing compatibility
         
         # Create a copy of the original data and add transformation
         result = surface_data.copy()
@@ -730,14 +720,12 @@ class SurfaceTransformationConverter:
         with open(output_path, 'w') as f:
             json.dump(converted_data, f, indent=2)
         
-        print(f"Converted {input_path} -> {output_path}")
-        print(f"Conversion stats: {conversion_stats}")
-        
         return output_path, conversion_stats
 
-    def convert_directory(self, input_dir, output_dir=None):
+
+    def convert_directory(self, input_dir, output_dir=None, processes=None):
         """
-        Convert all JSON files in a directory
+        Convert all JSON files in a directory using multiprocessing
         """
         input_dir = Path(input_dir)
         if output_dir is None:
@@ -756,33 +744,72 @@ class SurfaceTransformationConverter:
         
         print(f"Found {len(json_files)} JSON files to convert")
         
+        # Set number of processes
+        num_processes = processes or multiprocessing.cpu_count()
+        print(f"Using {num_processes} processes for parallel conversion...")
+        
+        # Prepare arguments for multiprocessing
+        process_args = []
+        for json_file in json_files:
+            output_file = output_dir / json_file.name
+            process_args.append((json_file, output_file))
+        
         total_stats = {
             "plane": 0, "cylinder": 0, "cone": 0, "sphere": 0, "torus": 0,
-            "other": 0, "total": 0, "files": 0
+            "other": 0, "total": 0, "files": 0, "errors": 0
         }
         
-        for json_file in json_files:
-            try:
-                output_file = output_dir / json_file.name
-                _, stats = self.convert_json_file(json_file, output_file)
-                
-                # Accumulate stats
-                for key in total_stats:
-                    if key in stats:
-                        total_stats[key] += stats[key]
-                total_stats["files"] += 1
-                
-            except Exception as e:
-                print(f"Error converting {json_file}: {e}")
+        # Process files in parallel with progress bar
+        with multiprocessing.Pool(processes=num_processes) as pool:
+            results_iterator = pool.imap_unordered(process_single_file, process_args)
+            
+            for success, input_path, output_path, stats in tqdm(results_iterator, 
+                                                               total=len(json_files), 
+                                                               desc="Converting files"):
+                if success:
+                    # Accumulate stats
+                    for key in total_stats:
+                        if key in stats:
+                            total_stats[key] += stats[key]
+                    total_stats["files"] += 1
+                else:
+                    total_stats["errors"] += 1
         
-        print(f"\nTotal conversion stats: {total_stats}")
+        print(f"\nConversion complete!")
+        print(f"Successfully converted: {total_stats['files']} files")
+        print(f"Errors: {total_stats['errors']} files")
+        print(f"Surface type stats: plane={total_stats['plane']}, cylinder={total_stats['cylinder']}, "
+              f"cone={total_stats['cone']}, sphere={total_stats['sphere']}, torus={total_stats['torus']}, "
+              f"other={total_stats['other']}")
+
+
+def process_single_file(args_tuple):
+    """
+    Helper function for multiprocessing to convert a single file.
+    
+    Args:
+        args_tuple: (input_file_path, output_file_path)
+    
+    Returns:
+        tuple: (success, input_path, output_path, conversion_stats)
+    """
+    input_file, output_file = args_tuple
+    converter = SurfaceTransformationConverter()
+    
+    try:
+        output_path, stats = converter.convert_json_file(input_file, output_file)
+        return True, str(input_file), str(output_path), stats
+    except Exception as e:
+        return False, str(input_file), None, {"error": str(e)}
 
 
 def main():
     parser = argparse.ArgumentParser(description="Convert surface attributes to transformation parameters")
     parser.add_argument("input", help="Input JSON file or directory")
     parser.add_argument("--output", "-o", help="Output file or directory (optional)")
-    parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
+    parser.add_argument("--processes", "-p", type=int, default=None, 
+                       help="Number of processes to use (default: CPU count)")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output (deprecated)")
     
     args = parser.parse_args()
     
@@ -792,10 +819,12 @@ def main():
     
     if input_path.is_file():
         # Convert single file
-        converter.convert_json_file(input_path, args.output)
+        output_path, stats = converter.convert_json_file(input_path, args.output)
+        print(f"Converted {input_path} -> {output_path}")
+        print(f"Conversion stats: {stats}")
     elif input_path.is_dir():
-        # Convert directory
-        converter.convert_directory(input_path, args.output)
+        # Convert directory with multiprocessing
+        converter.convert_directory(input_path, args.output, args.processes)
     else:
         print(f"Error: {input_path} is not a valid file or directory")
 

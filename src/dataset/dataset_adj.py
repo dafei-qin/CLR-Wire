@@ -60,6 +60,12 @@ class SurfaceClassificationAndRegressionDataset(Dataset):
         nearby_points_unpad = torch.from_numpy(np.array([nearby['points'] for nearby in nearby_list], dtype=np.float32))
         nearby_bbox_unpad = torch.from_numpy(np.array([nearby['bbox'] for nearby in nearby_list], dtype=np.float32))
         
+        random_order = torch.randperm(nearby_type_unpad.shape[0])
+        nearby_type_unpad = nearby_type_unpad[random_order]
+        nearby_points_unpad = nearby_points_unpad[random_order]
+        nearby_bbox_unpad = nearby_bbox_unpad[random_order]
+        # No need to perm adj_mask since the leading always be 1
+
         # Create padding mask and pad nearby data
         padding_mask = torch.zeros(self.num_nearby, dtype=torch.bool)
         padding_mask[len(nearby_list):] = True
@@ -97,6 +103,11 @@ class SurfaceClassificationAndRegressionDataset(Dataset):
         points = points_together[0].float()
         nearby_points = points_together[1:].float()
         
+
+
+
+
+
         return {
             'points': points,
             'type': torch.tensor([type]).long(),

@@ -17,14 +17,15 @@ log_every_step: 50
 
 use_wandb_tracking: true
 wandb_project_name: CLR-adjacency
-wandb_run_name: surface_adjacency_30data_transform
+wandb_run_name: surface_adjacency_30filtered_transform_rand_order
 
 data:
     replication: 1
     transform: scale_and_jitter_and_rotate
-    train_data_path: /home/qindafei/CAD/json_first_30_adjency/train_files.pkl
-    val_data_path: /home/qindafei/CAD/json_first_30_adjency/val_files.pkl
-    data_dir: /home/qindafei/CAD/json_first_30_adjency
+    train_data_path: /home/qindafei/CAD/data/json/adjacency/train_files.pkl
+    val_data_path: /home/qindafei/CAD/data/json/adjacency/val_files.pkl
+    train_data_dir: /home/qindafei/CAD/data/json/adjacency/train
+    val_data_dir: /home/qindafei/CAD/data/json/adjacency/val
 
 model:
     depth: 16
@@ -35,5 +36,5 @@ model:
     num_nearby: 20
     surface_dim: 256
     surface_enc_block_out_channels: [16, 32, 64, 128]
-    checkpoint_folder: checkpoints/adjacency-30data-transform
+    checkpoint_folder: checkpoints/adjacency-30filtered-transform-randorder
     checkpoint_file_name: model.pt 
