@@ -5,8 +5,15 @@ import argparse
 
 def remove_ckpts(root_dir, keep_last=2):
     files = os.listdir(root_dir)
-    files.sort(key=lambda x: int(x.split('-')[-1].split('.')[0]))
-    print(files)
+    files_valid = []
+    for f in files:
+        try:
+            int(f.split('-')[-1].split('.')[0])
+            files_valid.append(f)
+        except:
+            pass
+    files_valid.sort(key=lambda x: int(x.split('-')[-1].split('.')[0]))
+    print(files_valid)
 
 
 
