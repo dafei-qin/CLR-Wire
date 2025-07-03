@@ -15,6 +15,7 @@ def remove_ckpts(root_dir, keep_last=2):
     files_valid.sort(key=lambda x: int(x.split('-')[-1].split('.')[0]))
     for f in files_valid[:-keep_last]:
         os.remove(os.path.join(root_dir, f))
+    print(f"Removed {len(files_valid[:-keep_last])} checkpoints from {root_dir}")
 
 
 
