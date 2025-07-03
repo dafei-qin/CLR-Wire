@@ -13,7 +13,8 @@ def remove_ckpts(root_dir, keep_last=2):
         except:
             pass
     files_valid.sort(key=lambda x: int(x.split('-')[-1].split('.')[0]))
-    print(files_valid)
+    for f in files_valid[:-keep_last]:
+        os.remove(os.path.join(root_dir, f))
 
 
 
