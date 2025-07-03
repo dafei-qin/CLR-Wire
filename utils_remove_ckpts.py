@@ -5,7 +5,7 @@ import argparse
 
 def remove_ckpts(root_dir, keep_last=2):
     files = os.listdir(root_dir)
-    files.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]))
+    files.sort(key=lambda x: int(x.split('-')[-1].split('.')[0]))
     print(files)
 
 
@@ -22,4 +22,3 @@ if __name__ == "__main__":
     for subfolder in os.listdir(root_dir):
         if os.path.isdir(os.path.join(root_dir, subfolder)):
             remove_ckpts(os.path.join(root_dir, subfolder), keep_last)
-            
