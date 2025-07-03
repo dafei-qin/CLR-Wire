@@ -2,25 +2,29 @@ import torch
 from torch.utils.data import Dataset
 import numpy as np
 import pickle
+import os
 from einops import rearrange
 
 
 class SurfaceClassificationAndRegressionDataset(Dataset):
-    def __init__(self, data_path, replication=1, transform=None, is_train=True, res=32):
+    def __init__(self, data_path, data_dir, replication=1, transform=None, is_train=True, res=32):
+        """
+        Args:
+            data_path: Path to the .pkl file containing the list of filenames (e.g., train.pkl)
+            data_dir: Directory containing the individual .pkl files
+            replication: Number of times to replicate the dataset
+            transform: Optional transform to apply to the data
+            is_train: Whether this is training data
+            res: Resolution for surface points
+        """
         super().__init__()
-        self.data = pickle.load(open(data_path, 'rb'))
-        datasize = len(self.data['points'])
-        for key, value in self.data.items():
-            assert len(value) == datasize, f'data size mismatch, {len(value)} != {datasize} for {key}'
         
-        self.points = self.data['points']
-        self.class_label = self.data['class_label']
-        self.scaling = self.data['scaling']
-        self.rotation = self.data['rotation']
-        self.translation = self.data['translation']
-        self.cone_min_axis = self.data['cone_min_axis'] # TODO: check if this is correct
-        self.bspline_control_points = self.data['bspline_control_points'] # TODO: this contains NaN, please check
-
+        # Load the file list
+        with open(data_path, 'rb') as f:
+            self.file_names = pickle.load(f)
+        
+        self.data_dir = data_dir
+        self.datasize = len(self.file_names)
         
         self.transform = transform
         self.replica = replication
@@ -28,17 +32,28 @@ class SurfaceClassificationAndRegressionDataset(Dataset):
         self.res = res
 
     def __len__(self):
-        return len(self.points) * self.replica
+        return self.datasize * self.replica
 
     def __getitem__(self, idx):
-        idx = idx % len(self.points)
-        points = self.points[idx]
-        class_label = self.class_label[idx]
-        scaling = self.scaling[idx]
-        rotation = self.rotation[idx]
-        translation = self.translation[idx]
-        cone_min_axis = self.cone_min_axis[idx]
-        bspline_control_points = self.bspline_control_points[idx]
+        idx = idx % self.datasize
+        
+        # Load individual surface data
+        file_path = os.path.join(self.data_dir, self.file_names[idx])
+        try:
+            with open(file_path, 'rb') as f:
+                surface_data = pickle.load(f)
+        except Exception as e:
+            raise RuntimeError(f"Error loading {file_path}: {e}")
+        
+        # Extract data from the loaded surface
+        points = surface_data['points']
+        class_label = surface_data['class_label']
+        scaling = surface_data['scaling']
+        rotation = surface_data['rotation']
+        translation = surface_data['translation']
+        cone_min_axis = surface_data['cone_min_axis'] # TODO: check if this is correct
+        bspline_control_points = surface_data['bspline_control_points'] # TODO: this contains NaN, please check
+
         
         # rts = np.concatenate([translation, rotation, scaling], axis=0)
         rts = np.concatenate([scaling, rotation, translation], axis=0)
