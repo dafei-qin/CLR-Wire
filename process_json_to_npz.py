@@ -52,7 +52,7 @@ def process_single_json(json_file_path):
             curve_idx = feature['idx']
             # For edges, idx is [face1_idx, face2_idx]
             # Add curve to both faces it connects
-            for face_idx in curve_idx:
+            for face_idx in curve_idx[:1]: # Only add curve to first face
                 if face_idx not in curves_by_face:
                     curves_by_face[face_idx] = []
                 curves_by_face[face_idx].append(feature)

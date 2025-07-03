@@ -58,11 +58,18 @@ class DistributedSurfaceVisualizer:
         self.show_wireframe = False
         self.surface_transparency = 0.8
         self.control_point_size = 0.02
+        self.curve_radius = 0.005  # Thickness of curve lines
+        self.use_bspline_mode = True  # Toggle between B-spline and direct points mode
         
         # Colors
         self.surface_color = [0.2, 0.8, 0.2]  # Default Green
-        self.curve_color = [1.0, 0.0, 0.0]    # Red
+        self.curve_color = [1.0, 0.0, 0.0]    # Red (not used when gradient is enabled)
         self.control_point_color = [0.0, 0.0, 1.0]  # Blue
+        
+        # Curve gradient colors
+        self.curve_gradient_start = [1.0, 0.5, 0.5]  # Light red
+        self.curve_gradient_end = [0.8, 0.0, 0.0]    # Dark red
+        self.use_curve_gradient = True  # Toggle for gradient vs solid color
         
         # Surface type color mapping
         self.surface_type_colors = {
@@ -326,10 +333,14 @@ class DistributedSurfaceVisualizer:
         print(f"\n=== Visualizing UID {current_uid}, Surface {self.current_surface_idx} ===")
         print(f"Surface Type: {surface_type}")
         print(f"Control points: {len(surface_cp) if type(surface_cp) == list else 0}")
+        print(f"Direct surface points: {np.array(surface_points).shape if len(surface_points) > 0 else 'None'}")
         print(f"Curves: {len(curves_cp)}")
+        print(f"Mode: {'B-spline' if self.use_bspline_mode else 'Direct Points'}")
         
-        # Visualize surface (same logic as original visualizer)
-        if len(surface_cp) == 16:  # 4x4 control points
+        # Visualize surface
+        surface_points_eval = None
+        
+        if self.use_bspline_mode and len(surface_cp) == 16:  # B-spline mode with 4x4 control points
             if PYTHONOCC_AVAILABLE:
                 bspline_surface = self.create_bspline_surface_pythonocc(surface_cp)
                 if bspline_surface:
@@ -341,35 +352,54 @@ class DistributedSurfaceVisualizer:
             else:
                 surface_points_eval = self.fallback_surface_evaluation(
                     surface_cp, self.surface_resolution)
-            
-            if surface_points_eval is not None:
-                vertices, faces = self.create_surface_mesh(surface_points_eval)
-                if vertices is not None and faces is not None:
-                    surface_name = f"surface_{self.current_uid_idx}_{self.current_surface_idx}"
-                    ps_mesh = ps.register_surface_mesh(surface_name, vertices, faces)
-                    surface_color = self.surface_type_colors.get(surface_type, self.surface_color)
-                    ps_mesh.set_color(surface_color)
-                    ps_mesh.set_transparency(self.surface_transparency)
-                    if self.show_wireframe:
-                        ps_mesh.set_edge_width(1.0)
-                    self.surface_object = surface_name
         
-        elif len(surface_points) > 0:
+        elif not self.use_bspline_mode and len(surface_points) > 0:  # Direct points mode
             surface_points_array = np.array(surface_points)
             if surface_points_array.shape == (32, 32, 3):
-                vertices, faces = self.create_surface_mesh(surface_points_array)
-                if vertices is not None and faces is not None:
-                    surface_name = f"surface_{self.current_uid_idx}_{self.current_surface_idx}"
-                    ps_mesh = ps.register_surface_mesh(surface_name, vertices, faces)
-                    surface_color = self.surface_type_colors.get(surface_type, self.surface_color)
-                    ps_mesh.set_color(surface_color)
-                    ps_mesh.set_transparency(self.surface_transparency)
-                    if self.show_wireframe:
-                        ps_mesh.set_edge_width(1.0)
-                    self.surface_object = surface_name
+                surface_points_eval = surface_points_array
+            else:
+                print(f"Warning: Expected surface points shape (32, 32, 3), got {surface_points_array.shape}")
         
-        # Visualize control points
-        if self.show_control_points and len(surface_cp) == 16:
+        else:  # Fallback: try the other mode if current mode doesn't work
+            if self.use_bspline_mode:
+                # B-spline mode failed, try direct points
+                if len(surface_points) > 0:
+                    surface_points_array = np.array(surface_points)
+                    if surface_points_array.shape == (32, 32, 3):
+                        surface_points_eval = surface_points_array
+                        print("B-spline mode failed, using direct points as fallback")
+            else:
+                # Direct points mode failed, try B-spline
+                if len(surface_cp) == 16:
+                    if PYTHONOCC_AVAILABLE:
+                        bspline_surface = self.create_bspline_surface_pythonocc(surface_cp)
+                        if bspline_surface:
+                            surface_points_eval = self.evaluate_bspline_surface_pythonocc(
+                                bspline_surface, self.surface_resolution)
+                        else:
+                            surface_points_eval = self.fallback_surface_evaluation(
+                                surface_cp, self.surface_resolution)
+                    else:
+                        surface_points_eval = self.fallback_surface_evaluation(
+                            surface_cp, self.surface_resolution)
+                    if surface_points_eval is not None:
+                        print("Direct points mode failed, using B-spline as fallback")
+        
+        # Create surface mesh if we have valid points
+        if surface_points_eval is not None:
+            vertices, faces = self.create_surface_mesh(surface_points_eval)
+            if vertices is not None and faces is not None:
+                surface_name = f"surface_{self.current_uid_idx}_{self.current_surface_idx}"
+                ps_mesh = ps.register_surface_mesh(surface_name, vertices, faces)
+                surface_color = self.surface_type_colors.get(surface_type, self.surface_color)
+                ps_mesh.set_color(surface_color)
+                ps_mesh.set_transparency(self.surface_transparency)
+                if self.show_wireframe:
+                    ps_mesh.set_edge_width(1.0)
+                self.surface_object = surface_name
+        
+        # Visualize control points (only in B-spline mode)
+        if self.show_control_points and self.use_bspline_mode and len(surface_cp) == 16:
             cp_array = np.array(surface_cp)
             cp_name = f"surface_cp_{self.current_uid_idx}_{self.current_surface_idx}"
             ps_cp = ps.register_point_cloud(cp_name, cp_array)
@@ -377,9 +407,11 @@ class DistributedSurfaceVisualizer:
             ps_cp.set_radius(self.control_point_size)
             self.control_point_objects.append(cp_name)
         
-        # Visualize curves (same logic as original)
+        # Visualize curves
         for curve_idx, curve_cp in enumerate(curves_cp):
-            if len(curve_cp) == 4:
+            curve_points_eval = None
+            
+            if self.use_bspline_mode and len(curve_cp) == 4:  # B-spline mode with 4 control points
                 if PYTHONOCC_AVAILABLE:
                     bspline_curve = self.create_bspline_curve_pythonocc(curve_cp)
                     if bspline_curve:
@@ -391,24 +423,65 @@ class DistributedSurfaceVisualizer:
                 else:
                     curve_points_eval = self.fallback_curve_evaluation(
                         curve_cp, self.curve_resolution)
-                
-                if curve_points_eval is not None:
-                    edges = np.array([[i, i + 1] for i in range(len(curve_points_eval) - 1)])
-                    curve_name = f"curve_{self.current_uid_idx}_{self.current_surface_idx}_{curve_idx}"
-                    ps_curve = ps.register_curve_network(curve_name, curve_points_eval, edges)
-                    ps_curve.set_color(self.curve_color)
-                    ps_curve.set_radius(0.005)
-                    self.curve_objects.append(curve_name)
             
-            elif curve_idx < len(curves_points) and len(curves_points[curve_idx]) > 0:
+            elif not self.use_bspline_mode and curve_idx < len(curves_points) and len(curves_points[curve_idx]) > 0:  # Direct points mode
                 curve_points_array = np.array(curves_points[curve_idx])
                 if len(curve_points_array.shape) == 2 and curve_points_array.shape[1] == 3:
-                    edges = np.array([[i, i + 1] for i in range(len(curve_points_array) - 1)])
-                    curve_name = f"curve_{self.current_uid_idx}_{self.current_surface_idx}_{curve_idx}"
-                    ps_curve = ps.register_curve_network(curve_name, curve_points_array, edges)
+                    # Check if it's the expected (32, 3) shape
+                    if curve_points_array.shape[0] == 32:
+                        curve_points_eval = curve_points_array
+                    else:
+                        curve_points_eval = curve_points_array  # Use whatever shape we have
+                        print(f"Warning: Expected curve points shape (32, 3), got {curve_points_array.shape}")
+            
+            else:  # Fallback: try the other mode if current mode doesn't work
+                if self.use_bspline_mode:
+                    # B-spline mode failed, try direct points
+                    if curve_idx < len(curves_points) and len(curves_points[curve_idx]) > 0:
+                        curve_points_array = np.array(curves_points[curve_idx])
+                        if len(curve_points_array.shape) == 2 and curve_points_array.shape[1] == 3:
+                            curve_points_eval = curve_points_array
+                else:
+                    # Direct points mode failed, try B-spline
+                    if len(curve_cp) == 4:
+                        if PYTHONOCC_AVAILABLE:
+                            bspline_curve = self.create_bspline_curve_pythonocc(curve_cp)
+                            if bspline_curve:
+                                curve_points_eval = self.evaluate_bspline_curve_pythonocc(
+                                    bspline_curve, self.curve_resolution)
+                            else:
+                                curve_points_eval = self.fallback_curve_evaluation(
+                                    curve_cp, self.curve_resolution)
+                        else:
+                            curve_points_eval = self.fallback_curve_evaluation(
+                                curve_cp, self.curve_resolution)
+            
+            # Create curve visualization if we have valid points
+            if curve_points_eval is not None:
+                edges = np.array([[i, i + 1] for i in range(len(curve_points_eval) - 1)])
+                curve_name = f"curve_{self.current_uid_idx}_{self.current_surface_idx}_{curve_idx}"
+                ps_curve = ps.register_curve_network(curve_name, curve_points_eval, edges)
+                
+                # Apply coloring based on gradient setting
+                if self.use_curve_gradient:
+                    # Create UV gradient colors
+                    num_points = len(curve_points_eval)
+                    gradient_colors = np.zeros((num_points, 3))
+                    for i in range(num_points):
+                        # Parameter t goes from 0 to 1 along the curve
+                        t = i / (num_points - 1) if num_points > 1 else 0
+                        # Interpolate between start and end colors
+                        start_color = np.array(self.curve_gradient_start)
+                        end_color = np.array(self.curve_gradient_end)
+                        gradient_colors[i] = (1 - t) * start_color + t * end_color
+                    
+                    # Add the gradient as a color quantity
+                    ps_curve.add_color_quantity("gradient", gradient_colors, enabled=True)
+                else:
+                    # Use solid color
                     ps_curve.set_color(self.curve_color)
-                    ps_curve.set_radius(0.005)
-                    self.curve_objects.append(curve_name)
+                ps_curve.set_radius(self.curve_radius)
+                self.curve_objects.append(curve_name)
         
         # Automatically fit camera to the new surface
         ps.reset_camera_to_home_view()
@@ -450,9 +523,27 @@ class DistributedSurfaceVisualizer:
                     surface_type = self.surface_types[self.current_surface_idx] if self.current_surface_idx < len(self.surface_types) else "N/A"
                     num_curves = len(self.curve_cp_lists[self.current_surface_idx]) if self.current_surface_idx < len(self.curve_cp_lists) else 0
                     
+                    # Surface data availability info
+                    surface_cp = self.surface_cp_list[self.current_surface_idx] if self.current_surface_idx < len(self.surface_cp_list) else []
+                    surface_points = self.surface_points_list[self.current_surface_idx] if self.current_surface_idx < len(self.surface_points_list) else []
+                    has_bspline_data = len(surface_cp) == 16
+                    has_direct_points = len(surface_points) > 0 and np.array(surface_points).shape == (32, 32, 3)
+                    
                     psim.Text(f"Current Surface: {self.current_surface_idx + 1}/{self.surfaces_in_current_uid}")
                     psim.Text(f"Surface Type: {surface_type}")
                     psim.Text(f"Curves: {num_curves}")
+                    
+                    # Data availability indicators
+                    psim.Text("Data Availability:")
+                    bspline_color = (0.0, 1.0, 0.0, 1.0) if has_bspline_data else (1.0, 0.0, 0.0, 1.0)
+                    direct_color = (0.0, 1.0, 0.0, 1.0) if has_direct_points else (1.0, 0.0, 0.0, 1.0)
+                    psim.TextColored(bspline_color, f"  B-spline CP: {'✓' if has_bspline_data else '✗'}")
+                    psim.TextColored(direct_color, f"  Direct Points: {'✓' if has_direct_points else '✗'}")
+                    
+                    # Current mode indicator
+                    mode_text = "B-spline Mode" if self.use_bspline_mode else "Direct Points Mode"
+                    mode_color = (0.0, 0.8, 1.0, 1.0)  # Cyan with alpha
+                    psim.TextColored(mode_color, f"Current Mode: {mode_text}")
                     
                     # Surface navigation Buttons
                     if psim.Button("Previous Surface"):
@@ -476,8 +567,16 @@ class DistributedSurfaceVisualizer:
                 
                 psim.Separator()
                 
-                # Visualization settings (same as original)
+                # Visualization settings
                 psim.Text("Visualization Settings")
+                
+                # Visualization mode toggle
+                changed, self.use_bspline_mode = psim.Checkbox("Use B-spline Mode", self.use_bspline_mode)
+                if changed:
+                    self.visualize_current_surface()
+                
+                psim.SameLine()
+                psim.Text("(Unchecked = Direct Points Mode)")
                 
                 changed, self.show_control_points = psim.Checkbox("Show Control Points", self.show_control_points)
                 if changed:
@@ -497,6 +596,30 @@ class DistributedSurfaceVisualizer:
                     for obj_name in self.control_point_objects:
                         ps.get_point_cloud(obj_name).set_radius(self.control_point_size)
                 
+                changed, self.curve_radius = psim.SliderFloat("Curve Thickness", self.curve_radius, 0.001, 0.05)
+                if changed:
+                    for obj_name in self.curve_objects:
+                        ps.get_curve_network(obj_name).set_radius(self.curve_radius)
+                
+                # Curve gradient settings
+                changed, self.use_curve_gradient = psim.Checkbox("Use Curve Gradient", self.use_curve_gradient)
+                if changed:
+                    self.visualize_current_surface()
+                
+                if self.use_curve_gradient:
+                    psim.Text("Gradient Colors:")
+                    changed, self.curve_gradient_start = psim.ColorEdit3("Start Color (Light)", self.curve_gradient_start)
+                    if changed:
+                        self.visualize_current_surface()
+                    
+                    changed, self.curve_gradient_end = psim.ColorEdit3("End Color (Dark)", self.curve_gradient_end)
+                    if changed:
+                        self.visualize_current_surface()
+                else:
+                    changed, self.curve_color = psim.ColorEdit3("Curve Color", self.curve_color)
+                    if changed:
+                        self.visualize_current_surface()
+                
                 psim.Separator()
                 
                 # Resolution settings
@@ -509,6 +632,15 @@ class DistributedSurfaceVisualizer:
                 changed, self.curve_resolution = psim.SliderInt("Curve Resolution", self.curve_resolution, 16, 128)
                 if changed:
                     self.visualize_current_surface()
+                
+                psim.Separator()
+                
+                # Visualization mode explanation
+                psim.Text("Visualization Modes:")
+                psim.Text("  B-spline Mode: Uses 4x4 control points to reconstruct surfaces")
+                psim.Text("                 and 4 control points for curves via B-spline evaluation")
+                psim.Text("  Direct Points: Uses pre-computed (32,32,3) surface points")
+                psim.Text("                 and (32,3) curve points directly")
                 
                 psim.Separator()
                 
