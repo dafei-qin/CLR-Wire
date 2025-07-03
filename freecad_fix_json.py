@@ -5,7 +5,7 @@ from glob import glob
 from collections import defaultdict
 from freecad_visualize_json_pythonocc import create_bspline_from_params, sample_points_on_curve
 import os
-
+import argparse
 
 def load_json(file_path):
     with open(file_path, 'r') as f:
@@ -149,7 +149,12 @@ def split_circle_bspline(edge, vertices, edges, faces, wires_to_face, wires_mapp
             if e['edge_index'] == edge['edge_index']:
                 new_e = e.copy()
                 new_e['edge_index'] = new_edge_index
-                insert_e_idx = e_idx + 1
+                # Insert the new edge after the current edge if it is forward, otherwise insert before the current edge
+                if e['orientation'] == 'Forward':
+                    insert_e_idx = e_idx + 1
+                else:
+                    insert_e_idx = e_idx
+
                 break
         wire['ordered_edges'].insert(insert_e_idx, new_e)
         wire_new_name = wire2str(wire)
@@ -418,12 +423,15 @@ def save_json(vertices, edges, faces, save_path):
         json.dump(data, f, indent=4)
 
 if __name__ == "__main__":
-    # data_paths = sorted(glob(r"D:\abc_json\step2json_freecad\*.json"))
-    data_paths = [r"C:\Users\Dafei Qin\00000056_005.json"]
-    save_path = r"D:\abc_json\step2json_freecad_simplified"
-    if not os.path.exists(save_path):
-        os.makedirs(save_path)
-    for data_path in data_paths:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data_path", type=str, required=True)
+    args = parser.parse_args()
+    root_dir = args.data_path
+    to_process_paths = []
+    for f in os.listdir(root_dir):
+        if f.endswith('.json'):
+            to_process_paths.append(os.path.join(root_dir, f))
+    for data_path in to_process_paths:
         print(data_path)
 
     # data_path = r"D:\abc_json\step2json_freecad\00000046_1a67c6032bbd479492910b39_step_000.json"
@@ -434,18 +442,19 @@ if __name__ == "__main__":
             # edge_index = f"{edge['edge_index']:05d}"
             # all_wire_indexes = wire_reversed_mapping[edge_index]
 
-            # First simplify bsplines
+            # 1. Simplify bsplines to Lines or Circles (if possible)
             if edge['curve_type'] == 'BSplineCurve':
                 new_edge = simplify_bspline_curve(edge, vertices)
                 if new_edge is not None:
                     edge = new_edge
                     edges[edge_idx] = edge
 
-            # Then remove edges with length < 1e-6, remember to update wires, faces
+            # 2. Remove edges with length < 1e-6, remember to update wires, faces
 
-            # Then fix face orientation, remember to update wire orientation
+            # 3. Fix face orientation, remember to update wire orientation
 
-            # Then break closed edges into two half edges, remember to update vertices, wires, edges, faces...
+
+        # 4. Break closed circles into two half edges, remember to update vertices, wires, edges, faces...
 
         edge_idx = 0
         while edge_idx < len(edges):
@@ -456,7 +465,7 @@ if __name__ == "__main__":
                 vertices, edges, faces, wires_to_face, wires_mapping, wire_reversed_mapping = split_circle_bspline(edge, vertices, edges, faces, wires_to_face, wires_mapping, wire_reversed_mapping)
             edge_idx += 1
 
-        save_json(vertices, edges, faces, os.path.join(save_path, os.path.basename(data_path)))
+        save_json(vertices, edges, faces, os.path.join(root_dir, os.path.basename(data_path).replace('.json', '_fixed.json')))
 
         # for edge_idx, edge in enumerate(edges):
         #     edge_index = f"{edge['edge_index']:05d}"
