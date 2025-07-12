@@ -23,18 +23,19 @@ How to Run:
 
        For macOS:
        /Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd -c "/path/to/batch_serializer.py" "/path/to/your_model.step"
-       
+
        For Linux (AppImage):
        ./FreeCAD.AppImage --headless -c "/path/to/batch_serializer.py" "/path/to/your_model.step"
-       
+
        For Linux (installed):
-       freecadcmd -c "/path/to/batch_serializer.py" "/path/to/your_model.step"
+       freecadcmd "/path/to/batch_serializer.py" "/path/to/your_model.step"
 
     4. The script will create a file named "your_model.json" in the same
        directory as the input .step file.
 ================================================================================
 """
 import FreeCAD as App
+from FreeCAD import Base
 import Part
 import sys
 import os
@@ -107,7 +108,7 @@ def serialize_shape_to_json(shape, output_path):
             center_vec = curve.Center
             axis_vec = first_pole - center_vec
             major_axis_dir = App.Vector(0,0,0)
-            
+
             if abs(axis_vec.Length**2 - curve.MajorRadius**2) < 1e-7:
                  major_axis_dir = axis_vec.normalize()
             else:
@@ -139,6 +140,7 @@ def serialize_shape_to_json(shape, output_path):
     # --- Face Extraction ---
     json_faces = []
     for i, face in enumerate(shape.Faces):
+        # face.Orientation = 'Forward'
         surface = face.Surface
         face_data = {
             "face_index": i,
@@ -149,7 +151,7 @@ def serialize_shape_to_json(shape, output_path):
             "parameter_range": face.ParameterRange,
             "wires": []
         }
-        
+
         # --- Detailed Geometric Definitions for Surfaces ---
         surface_def = {}
         if isinstance(surface, Part.Plane):
@@ -161,7 +163,7 @@ def serialize_shape_to_json(shape, output_path):
         elif isinstance(surface, Part.Cone):
             surface_def = {"position": [surface.Center.x, surface.Center.y, surface.Center.z],
                         "axis": [surface.Axis.x, surface.Axis.y, surface.Axis.z],
-                        "radius": surface.Radius, 
+                        "radius": surface.Radius,
                         "semi_angle": surface.SemiAngle}
         elif isinstance(surface, Part.Sphere):
             surface_def = {"position": [surface.Center.x, surface.Center.y, surface.Center.z],
@@ -171,7 +173,7 @@ def serialize_shape_to_json(shape, output_path):
                         "axis": [surface.Axis.x, surface.Axis.y, surface.Axis.z],
                         "major_radius": surface.MajorRadius,
                         "minor_radius": surface.MinorRadius}
-        # ... (other surface types like Cone, Sphere, Toroid would go here)
+
         elif isinstance(surface, Part.BSplineSurface):
             u_knots, v_knots = surface.getUKnots(), surface.getVKnots()
             u_mults, v_mults = surface.getUMultiplicities(), surface.getVMultiplicities()
@@ -184,8 +186,16 @@ def serialize_shape_to_json(shape, output_path):
                 "u_knots": full_u_knots, "v_knots": full_v_knots,
                 "u_multiplicities": list(u_mults), "v_multiplicities": list(v_mults)
             }
+        else:
+            print(f"Surface type {type(surface).__name__} not supported")
+            continue
         face_data["surface_definition"] = surface_def
-
+        if isinstance(surface.Rotation, Base.Rotation):
+            face_data["rotation_axis"] = [surface.Rotation.Axis.x, surface.Rotation.Axis.y, surface.Rotation.Axis.z]
+            face_data["rotation_angle"] = surface.Rotation.Angle
+        else:
+            face_data["rotation_axis"] = [0, 0, 0]
+            face_data["rotation_angle"] = 0
         # --- Wire and Edge Loop Extraction ---
         for wire in face.Wires:
             wire_data = {"is_outer": wire.isSame(face.OuterWire), "ordered_edges": []}
@@ -197,9 +207,9 @@ def serialize_shape_to_json(shape, output_path):
                 wire_data["ordered_edges"].append(edge_ref)
             face_data["wires"].append(wire_data)
         json_faces.append(face_data)
-    
+
     print("Data extraction complete.")
-    
+
     # --- Assemble and Export JSON ---
     print("Step 2/3: Assembling final JSON object...")
     reconstruction_data = {
@@ -235,8 +245,8 @@ def serialize_shape_to_json(shape, output_path):
     #     print("Usage: freecadcmd -c batch_serializer.py <path_to_your_model.step>", file=sys.stderr)
     #     sys.exit(1) # Exit with an error code
 
-input_file_path = r"D:\abc_0000_step_v00\00000053\00000053_666139e3bff64d4e8a6ce183_step_002.step"
-output_file_path = r"D:\abc_0000_step_v00\00000053\00000053.json"
+input_file_path = sys.argv[2]
+output_file_path = sys.argv[3]
 
 # Verify the input file exists
 if not os.path.isfile(input_file_path):
