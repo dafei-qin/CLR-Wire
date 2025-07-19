@@ -7,7 +7,8 @@ from OCC.Core.GeomAbs import GeomAbs_C2
 from OCC.Core.TColgp import TColgp_Array1OfPnt, TColgp_Array2OfPnt
 from OCC.Core.gp import gp_Lin, gp_Circ, gp_Elips, gp_Pln, gp_Cylinder, gp_Cone, gp_Sphere, gp_Torus, gp_Hypr, gp_Parab, \
     gp_Pnt, gp_Trsf
-from occwl import Solid, uvgrid, ugrid
+from occwl.solid import Solid
+from occwl.uvgrid import uvgrid, ugrid
 from occwl.graph import face_adjacency
 from occwl.io import load_step, save_step
 from OCC.Core.BRepBndLib import brepbndlib
@@ -15,13 +16,13 @@ from OCC.Core.Bnd import Bnd_Box
 import numpy as np
 from OCC.Core.TColStd import TColStd_Array1OfReal, TColStd_Array1OfInteger
 from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_Transform
-import torch
+
 from tqdm import tqdm
-import zlw, os, json
+import os, json
 
 from multiprocessing.pool import Pool
 
-from utils import load_step_with_timeout, load_abc_step, load_furniture_step
+# from utils import load_step_with_timeout, load_abc_step, load_furniture_step
 
 '''
 Logan's script to convert .step to json
@@ -357,8 +358,8 @@ class BRepDataProcessor:
         for _, _, files in os.walk(step_path):
             assert len(files) == 1
             step_path = os.path.join(step_path, files[0])
-        with zlw.Timer("Load step"):
-            solids = load_step(step_path)
+        # with zlw.Timer("Load step"):
+        solids = load_step(step_path)
         if solids is None or len(solids) < 1:
             raise ValueError("No solids found in the step file")
         # for this version, assert step is single solid.
@@ -404,42 +405,44 @@ class BRepDataProcessor:
                 node_feature = self.bspline_surface_feature(surface, [face_idx, face_idx])
             else:
                 raise ValueError("Unknown surface type.")
-            try:
-                points = uvgrid(face, method="point", num_u=32, num_v=32)
-                node_feature["approximation"] = self.get_approx_face(points)
-                node_feature["points"] = points.tolist()
-            except Exception as e:
-                node_feature["approximation"] = None
-                node_feature["points"] = None
+            # try:
+            #     points = uvgrid(face, method="point", num_u=32, num_v=32)
+            #     node_feature["approximation"] = self.get_approx_face(points)
+            #     node_feature["points"] = points.tolist()
+            # except Exception as e:
+            #     node_feature["approximation"] = None
+            #     node_feature["points"] = None
+            
+            node_feature['uv'] = [face.uv_bounds().min_point()[0], face.uv_bounds().max_point()[0], face.uv_bounds().min_point()[1], face.uv_bounds().max_point()[1]]
             data.append(node_feature)
-        for edge_idx in graph.edges():
-            edge = graph.edges[edge_idx]["edge"]
-            curv_type = edge.curve_type()
-            curve = edge.specific_curve()
-            if curv_type == "line":
-                edge_feature = self.line_feature(curve, [edge_idx[0], edge_idx[1]])
-            elif curv_type == "circle":
-                edge_feature = self.circle_feature(curve, [edge_idx[0], edge_idx[1]])
-            elif curv_type == "ellipse":
-                edge_feature = self.ellipse_feature(curve, [edge_idx[0], edge_idx[1]])
-            elif curv_type == "hyperbola":
-                edge_feature = self.hyperbola_feature(curve, [edge_idx[0], edge_idx[1]])
-            elif curv_type == "parabola":
-                edge_feature = self.parabola_feature(curve, [edge_idx[0], edge_idx[1]])
-            elif curv_type == "bezier":
-                edge_feature = self.bezier_curve_feature(curve, [edge_idx[0], edge_idx[1]])
-            elif curv_type == "bspline":
-                edge_feature = self.bspline_curve_feature(curve, [edge_idx[0], edge_idx[1]])
-            else:
-                raise ValueError("Unknown curve type.")
-            try:
-                points = ugrid(edge, method="point", num_u=32)
-                edge_feature["approximation"] = self.get_approx_edge(points)
-                edge_feature["points"] = points.tolist()
-            except Exception as e:
-                edge_feature["approximation"] = None
-                edge_feature["points"] = None
-            data.append(edge_feature)
+        # for edge_idx in graph.edges():
+        #     edge = graph.edges[edge_idx]["edge"]
+        #     curv_type = edge.curve_type()
+        #     curve = edge.specific_curve()
+        #     if curv_type == "line":
+        #         edge_feature = self.line_feature(curve, [edge_idx[0], edge_idx[1]])
+        #     elif curv_type == "circle":
+        #         edge_feature = self.circle_feature(curve, [edge_idx[0], edge_idx[1]])
+        #     elif curv_type == "ellipse":
+        #         edge_feature = self.ellipse_feature(curve, [edge_idx[0], edge_idx[1]])
+        #     elif curv_type == "hyperbola":
+        #         edge_feature = self.hyperbola_feature(curve, [edge_idx[0], edge_idx[1]])
+        #     elif curv_type == "parabola":
+        #         edge_feature = self.parabola_feature(curve, [edge_idx[0], edge_idx[1]])
+        #     elif curv_type == "bezier":
+        #         edge_feature = self.bezier_curve_feature(curve, [edge_idx[0], edge_idx[1]])
+        #     elif curv_type == "bspline":
+        #         edge_feature = self.bspline_curve_feature(curve, [edge_idx[0], edge_idx[1]])
+        #     else:
+        #         raise ValueError("Unknown curve type.")
+        #     try:
+        #         points = ugrid(edge, method="point", num_u=32)
+        #         edge_feature["approximation"] = self.get_approx_edge(points)
+        #         edge_feature["points"] = points.tolist()
+        #     except Exception as e:
+        #         edge_feature["approximation"] = None
+        #         edge_feature["points"] = None
+        #     data.append(edge_feature)
         return data
 
     def tokenize_and_save_cad_data(self, path):
@@ -447,10 +450,13 @@ class BRepDataProcessor:
         if os.path.exists(output_path):
             return 0
         try:
-            with zlw.Timer("Process"):
-                data = self.tokenize_cad_data(step_path)
-            with open(output_path, 'w') as f:
-                json.dump(data, f)
+            # with zlw.Timer("Process"):
+            data = self.tokenize_cad_data(step_path)
+            with open(output_path, 'w', encoding='utf-8') as f: # Readable export
+                json.dump(data, f, ensure_ascii=False, indent=2)
+
+            # with open(output_path, 'w') as f: # Compressed export
+            #     json.dump(data, f)
             return 1
         except ValueError as e:
             return 0

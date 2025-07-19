@@ -160,10 +160,24 @@ def create_cylindrical_face_mesh(face_index: int, position: list, axis: list, ra
                 edge_to_add = edge_to_add.Reversed()
             
 
-            # wire_builder.Add(edge_to_add)
+            wire_builder.Add(edge_to_add)
             # print(f'Adding edge {edge_index} to wire, edge close statue is {edge_to_add.Closed()}, Current wire close statue is {wire_builder.Wire().Closed()}')
             edge_in_wire.append(edge_index)
-            interm_wire_points, interm_wire_lines = get_wire_vertices_and_lines(wire_builder.Wire(), 0.1)
+            if not wire_builder.IsDone():
+                print(f"线框构建失败... 尝试修复........... {edge_in_wire} {wire_builder.Error()}")
+                # Try fix
+                wire_fixer = ShapeFix_Wire(new_wire, context_face, 1e-6)
+                # wire_fixer.Perform()
+
+                wire_fixer.FixReorder()
+                # wire_fixer.FixConnected()
+                # wire_fixer.FixClosed()
+                wire_builder = BRepBuilderAPI_MakeWire(wire_fixer.Wire())
+
+                # print(wire_builder.Error(), edge_in_wire)
+
+            new_wire = wire_builder.Wire()
+            interm_wire_points, interm_wire_lines = get_wire_vertices_and_lines(new_wire, 0.1)
 
             interm_wire_name = '_'.join([f"{i:04d}" for i in edge_in_wire])
             colors = generate_edge_gradient_colors(interm_wire_points.shape[0], False)
@@ -246,7 +260,7 @@ def create_cylindrical_face_mesh(face_index: int, position: list, axis: list, ra
 
 
 if __name__ == "__main__":
-    cad_data = json.load(open('d:/abc_json/step2json_freecad_simplified/00000056_005.json', 'r'))
+    cad_data = json.load(open(r'F:\WORK\CAD\data\examples\00000056_new\out_002_fixed.json', 'r'))
     # cad_data = json.load(open('c:/Users/Dafei Qin/cylinder_cut.json', 'r'))
     # cad_data = json.load(open('c:/Users/Dafei Qin/00000056_005.json', 'r'))
     vertex_positions = np.array(cad_data.get('vertices', []))
@@ -341,7 +355,7 @@ if __name__ == "__main__":
     for face in faces_list:
 
             surface_idx = face['face_index']
-            if surface_idx != 8:
+            if surface_idx != 9:
                 continue
             surface_type = face['surface_type']
             wires = face['wires']

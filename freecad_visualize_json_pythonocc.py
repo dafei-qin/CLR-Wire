@@ -662,6 +662,108 @@ def get_wire_vertices_and_lines(
 
     return vertices, lines
 
+
+
+def construct_edge(edge, vertex_positions):
+    idx = edge['edge_index']
+    curve_type = edge.get('curve_type')
+    v_indices = edge.get('vertices')
+    print(f"Fitting edge {idx:03d} of type {curve_type}")
+    if edge.get('curve_type') == 'Circle':
+        center = np.array(edge.get('curve_definition').get('center'))
+        normal = np.array(edge.get('curve_definition').get('normal'))
+        radius = edge.get('curve_definition').get('radius')
+        if len(v_indices) == 2:
+            start_vertex = vertex_positions[v_indices[0]]
+            end_vertex = vertex_positions[v_indices[1]]
+        else:
+            start_vertex = vertex_positions[v_indices[0]]
+            end_vertex = vertex_positions[v_indices[0]]
+        arc, sampled_points, is_closed, curve = create_arc_from_params(center, normal, radius, start_vertex, end_vertex, return_curve=True)
+        # sampled_edges.append( {'idx': idx, 'sampled_points': sampled_points, 'is_closed': is_closed, 'curve_type': curve_type})
+        
+    elif edge.get('curve_type') == 'Line':
+        if len(v_indices) >= 2:
+            start_vertex = vertex_positions[v_indices[0]]
+            end_vertex = vertex_positions[v_indices[1]]
+            arc, sampled_points, is_closed, curve = create_line_from_points(start_vertex, end_vertex, return_curve=True)
+            # sampled_edges.append( {'idx': idx, 'sampled_points': sampled_points, 'is_closed': is_closed, 'curve_type': curve_type})
+        else:
+            print(f"Warning: Edge {idx} of type 'Line' has insufficient vertices ({len(v_indices)})")
+            
+    elif edge.get('curve_type') == 'Ellipse':
+        curve_def = edge.get('curve_definition', {})
+        center = np.array(curve_def.get('center'))
+        x_direction = np.array(curve_def.get('major_axis_direction'))
+        y_direction = np.array(curve_def.get('minor_axis_direction'))
+        normal = np.array(curve_def.get('normal'))
+        major_radius = curve_def.get('major_radius')
+        minor_radius = curve_def.get('minor_radius')
+        if len(v_indices) == 2:
+            start_vertex = vertex_positions[v_indices[0]]
+            end_vertex = vertex_positions[v_indices[1]]
+        else:
+            start_vertex = vertex_positions[v_indices[0]]
+            end_vertex = vertex_positions[v_indices[0]]
+        arc, sampled_points, is_closed, curve = create_ellipse_from_params(center, x_direction, y_direction, normal, major_radius, minor_radius, start_vertex, end_vertex, return_curve=True)
+    elif edge.get('curve_type') == 'Hyperbola':
+        curve_def = edge.get('curve_definition', {})
+        center = np.array(curve_def.get('center'))
+        x_direction = np.array(curve_def.get('major_axis_direction'))
+        normal = np.array(curve_def.get('normal'))
+        major_radius = curve_def.get('major_radius')
+        minor_radius = curve_def.get('minor_radius')
+        if len(v_indices) == 2:
+            start_vertex = vertex_positions[v_indices[0]]
+            end_vertex = vertex_positions[v_indices[1]]
+        else:
+            start_vertex = vertex_positions[v_indices[0]]
+            end_vertex = vertex_positions[v_indices[0]]
+        arc, sampled_points, is_closed, curve = create_hyperbola_from_params(center, x_direction, normal, major_radius, minor_radius, start_vertex, end_vertex, return_curve=True)
+    elif edge.get('curve_type') == 'Parabola':
+        curve_def = edge.get('curve_definition', {})
+        vertex = np.array(curve_def.get('vertex'))
+        axis_of_symmetry = np.array(curve_def.get('axis_of_symmetry'))
+        normal = np.array(curve_def.get('normal'))
+        focal_length = curve_def.get('focal_length')
+        if len(v_indices) == 2:
+            start_vertex = vertex_positions[v_indices[0]]
+            end_vertex = vertex_positions[v_indices[1]]
+        else:
+            start_vertex = vertex_positions[v_indices[0]]
+            end_vertex = vertex_positions[v_indices[0]]
+        arc, sampled_points, is_closed, curve = create_parabola_from_params(vertex, axis_of_symmetry, normal, focal_length, start_vertex, end_vertex, return_curve=True)
+    elif edge.get('curve_type') == 'BSplineCurve':
+        curve_def = edge.get('curve_definition', {})
+        degree = curve_def.get('degree')
+        is_periodic = curve_def.get('is_periodic', False)
+        is_closed = len(v_indices) == 1
+        control_points = curve_def.get('control_points', [])
+        knots = curve_def.get('knots', [])
+        multiplicities = curve_def.get('multiplicities', [])
+        
+        # 验证B样条曲线参数
+        if degree is not None and control_points and knots and multiplicities:
+            if len(v_indices) >= 2:
+                start_vertex = vertex_positions[v_indices[0]]
+                end_vertex = vertex_positions[v_indices[-1]]  # 使用最后一个顶点作为终点
+            elif len(v_indices) == 1:
+                start_vertex = vertex_positions[v_indices[0]]
+                end_vertex = vertex_positions[v_indices[0]]
+            else:
+                # 如果没有足够的顶点索引，使用控制点的首尾作为起终点
+                start_vertex = control_points[0]
+                end_vertex = control_points[-1]
+                
+            arc, sampled_points, is_closed, curve = create_bspline_from_params(
+                degree, is_periodic, is_closed, control_points, knots, multiplicities, 
+                start_vertex, end_vertex, return_curve=True
+            )
+        else:
+            print(f"Warning: Edge {idx} of type 'BSplineCurve' has incomplete curve definition")
+    else:
+        raise ValueError(f"Unsupported curve type '{curve_type}' for edge {idx}")
+    return idx, curve_type, v_indices, arc, sampled_points, is_closed, curve
 # ===============================================
 # Surface reconstruction
 # ===============================================
@@ -678,6 +780,7 @@ def extract_mesh_from_face(face):
     """
     # 获取面的三角化数据，如果面没有被网格化，则返回None
     location = TopLoc_Location()
+    # print(type(face))
     triangulation = BRep_Tool.Triangulation(face, location)
 
     if triangulation is None:
@@ -757,7 +860,47 @@ def _build_and_mesh_face_robustly(face_builder: BRepBuilderAPI_MakeFace, linear_
     
     return healed_face, vertices, faces
 
+def _build_and_mesh_face_robustly_from_topods(face, linear_deflection: float = 0.1, angular_deflection: float = 0.5):
+    """
+    一个健壮的函数，用于从BRepBuilderAPI_MakeFace构建面，
+    并对其进行修复和高质量的网格化。
 
+    :param face_builder: 已经添加了所有内外边界的 BRepBuilderAPI_MakeFace 对象。
+    :param linear_deflection: 网格的线性挠度。
+    :param angular_deflection: 网格的角度挠度（弧度）。
+    :return: 一个元组 (final_face, vertices, faces)。
+    """
+    # if not face_builder.IsDone():
+    #     raise RuntimeError("Face Builder failed before healing and meshing.")
+        
+    # # --- 步骤 A: 构建基础面 ---
+    # face = face_builder.Face()
+
+    # # --- 步骤 B: “几何修复”过程 ---
+    # # 1. 强制更新公差，确保所有子形状的公差一致
+    breplib.UpdateTolerances(face, True)
+    
+    # 2. 这是一个强大的修复工具，可以解决多种拓扑和几何问题
+    # print(face_builder.Error())
+    fixer = ShapeFix_Shape(face)
+    fixer.Perform()
+    healed_face = fixer.Shape()
+    # healed_face = face
+
+    # --- 步骤 C: 精细化网格 ---
+    # 使用修复后的面进行网格化，并同时指定线性和角度挠度
+    # 第二个布尔参数 True 表示启用角度挠度控制
+    mesher = BRepMesh_IncrementalMesh(healed_face, linear_deflection, True, angular_deflection)
+    mesher.Perform() # 确保执行网格化
+
+    if not mesher.IsDone():
+         print("警告: BRepMesh_IncrementalMesh 执行后报告未完成，网格可能无效。")
+
+    # --- 步骤 D: 提取网格数据 ---
+    # 从修复并网格化后的面中提取数据
+    vertices, faces = extract_mesh_from_face(healed_face)
+    
+    return healed_face, vertices, faces
 def create_planar_face_mesh(face_index, pos, norm, wires, all_edges, all_curves):
     """
     根据从JSON加载的面数据（特别是平面）及其边界线，重建一个带孔的拓扑面并进行网格化。
@@ -781,9 +924,12 @@ def create_planar_face_mesh(face_index, pos, norm, wires, all_edges, all_curves)
     outer_wire_name = ''
     inner_wire_name_list = []
 
+
     for wire_info in wires:
         wire_builder = BRepBuilderAPI_MakeWire()
         edges_in_wire = []
+        edge_last = None
+        edge_last_Orientation = None
         for edge_ref in wire_info["ordered_edges"]:
             edge_index = edge_ref["edge_index"]
             orientation = edge_ref["orientation"]
@@ -793,17 +939,31 @@ def create_planar_face_mesh(face_index, pos, norm, wires, all_edges, all_curves)
                 raise KeyError(f"未在提供的 'all_edges' 集合中找到索引为 {edge_index} 的边。")
             
             edge_to_add = all_edges[edge_index]
+            arc_to_add = edge_to_add['arc']
+            if edge_last is not None:
+                if edge_last_Orientation == 'Forward':
+                    last_vertex = edge_last['vertices'][-1]
+                else:
+                    last_vertex = edge_last['vertices'][0]
+                if last_vertex == edge_to_add['vertices'][0]:
+                    orientation = 'Forward'
+                elif last_vertex == edge_to_add['vertices'][-1]:
+                    orientation = 'Reversed'
+                else:
+                    raise ValueError(f"边 {edge_index} 的顶点不连续。")
+
             # print(type(all_curves[edge_index]), type(geom_plane))
             # edge_to_add = BRepBuilderAPI_MakeEdge(all_curves[edge_index], geom_plane)
             # 根据方向要求，可能需要翻转边
             if orientation == "Reversed":
                 # .Reversed() 返回一个新的翻转后的边，不改变原始对象
-                if not edge_index == 46:
-                    edge_to_add = edge_to_add.Reversed()
+                    arc_to_add = arc_to_add.Reversed()
                 # edge_to_add = edge_to_add
             
-            wire_builder.Add(edge_to_add)
+            wire_builder.Add(arc_to_add)
             edges_in_wire.append(edge_index)
+            edge_last = edge_to_add
+            edge_last_Orientation = orientation
         if not wire_builder.IsDone():
             # 通常在这里失败意味着边没有正确地首尾相连
             raise RuntimeError(f"构建线框失败，请检查索引为 {face_index:03d} 的面的边连接性。")
@@ -831,6 +991,7 @@ def create_planar_face_mesh(face_index, pos, norm, wires, all_edges, all_curves)
 
     # --- 3. 构建拓扑面 (Face)，并添加孔洞 ---
     # 首先用基准平面和外边界线框创建基础面
+
     face_builder = BRepBuilderAPI_MakeFace(geom_plane, outer_wire)
     
 
@@ -1010,6 +1171,9 @@ def create_cylindrical_face_mesh(face_index: int, position: list, axis: list, ra
         
         # edges_in_wire = set()
         edge_in_wire = []
+
+        edge_last = None
+        edge_last_Orientation = None
         for edge_ref in wire_info["ordered_edges"]:
             edge_index = edge_ref["edge_index"]
             orientation = edge_ref["orientation"]
@@ -1021,12 +1185,24 @@ def create_cylindrical_face_mesh(face_index: int, position: list, axis: list, ra
                 raise KeyError(f"未在提供的 'all_edges' 集合中找到索引为 {edge_index} 的边。")
             
             edge_to_add = all_edges[edge_index]
-            
+            arc_to_add = edge_to_add['arc']
+            if edge_last is not None:
+                if edge_last_Orientation == 'Forward':
+                    last_vertex = edge_last['vertices'][-1]
+                else:
+                    last_vertex = edge_last['vertices'][0]
+                if last_vertex == edge_to_add['vertices'][0]:
+                    orientation = 'Forward'
+                elif last_vertex == edge_to_add['vertices'][-1]:
+                    orientation = 'Reversed'
+                else:
+                    raise ValueError(f"边 {edge_index} 的顶点不连续。")
+
             if orientation == "Reversed":
-                edge_to_add = edge_to_add.Reversed()
+                arc_to_add = arc_to_add.Reversed()
             
 
-            wire_builder.Add(edge_to_add)
+            wire_builder.Add(arc_to_add)
             # current_wire = wire_builder.Wire()
             # wire_analyzer = ShapeAnalysis_Wire(current_wire)
 
@@ -1046,8 +1222,10 @@ def create_cylindrical_face_mesh(face_index: int, position: list, axis: list, ra
 
             new_wire = wire_builder.Wire()
             wire_analyzer = ShapeAnalysis_Wire(new_wire, context_face, 1e-6)
-            print(f'Adding edge {edge_index} to wire, edge close status is {edge_to_add.Closed()},  Current wire close status is {new_wire.Closed()} Shape_Analysis_Wire.Closed() is {wire_analyzer.CheckClosed()}')
+            print(f'Adding edge {edge_index} to wire, edge close status is {arc_to_add.Closed()},  Current wire close status is {new_wire.Closed()} Shape_Analysis_Wire.Closed() is {wire_analyzer.CheckClosed()}')
             edge_in_wire.append(edge_index)
+            edge_last = edge_to_add
+            edge_last_Orientation = orientation
             # edges_in_wire.add(edge_index)
 
 
@@ -1077,6 +1255,7 @@ def create_cylindrical_face_mesh(face_index: int, position: list, axis: list, ra
 
     # --- 3. 构建拓扑面 (Face)，并添加孔洞 ---
     # 使用基准圆柱和外边界线框创建基础面
+    # face_orientation = 
     face_builder = BRepBuilderAPI_MakeFace(geom_cylinder, outer_wire)
 
     
@@ -1142,6 +1321,8 @@ def create_conical_face_mesh(face_index: int, position: list, axis: list, radius
     for wire_info in wires:
         wire_builder = BRepBuilderAPI_MakeWire()
         edges_in_wire = []
+        edge_last = None
+        edge_last_Orientation = None
         for edge_ref in wire_info["ordered_edges"]:
             edge_index = edge_ref["edge_index"]
             orientation = edge_ref["orientation"]
@@ -1150,11 +1331,28 @@ def create_conical_face_mesh(face_index: int, position: list, axis: list, radius
                 raise KeyError(f"未在提供的 'all_edges' 集合中找到索引为 {edge_index} 的边。")
             
             edge_to_add = all_edges[edge_index]
+            arc_to_add = edge_to_add['arc']
+            if edge_last is not None:
+                if edge_last_Orientation == 'Forward':
+                    last_vertex = edge_last['vertices'][-1]
+                else:
+                    last_vertex = edge_last['vertices'][0]
+                if last_vertex == edge_to_add['vertices'][0]:
+                    orientation = 'Forward'
+                elif last_vertex == edge_to_add['vertices'][-1]:
+                    orientation = 'Reversed'
+                else:
+                    raise ValueError(f"边 {edge_index} 的顶点不连续。")
+
             edges_in_wire.append(edge_index)
             if orientation == "Reversed":
-                edge_to_add = edge_to_add.Reversed()
+                arc_to_add = arc_to_add.Reversed()
             
-            wire_builder.Add(edge_to_add)
+            wire_builder.Add(arc_to_add)
+            edges_in_wire.append(edge_index)
+            edge_last = edge_to_add
+            edge_last_Orientation = orientation
+
 
         if not wire_builder.IsDone():
             raise RuntimeError(f"构建线框失败，请检查索引为 {face_index:03d} 的面的边连接性。")
@@ -1526,109 +1724,19 @@ class DistributedSurfaceVisualizer:
         sampled_edges = []
         for edge in edges_list:
             # print(edge)
-            idx = edge['edge_index']
-            curve_type = edge.get('curve_type')
-            v_indices = edge.get('vertices')
-            print(f"Fitting edge {idx:03d} of type {curve_type}")
-            if edge.get('curve_type') == 'Circle':
-                center = np.array(edge.get('curve_definition').get('center'))
-                normal = np.array(edge.get('curve_definition').get('normal'))
-                radius = edge.get('curve_definition').get('radius')
-                if len(v_indices) == 2:
-                    start_vertex = vertex_positions[v_indices[0]]
-                    end_vertex = vertex_positions[v_indices[1]]
-                else:
-                    start_vertex = vertex_positions[v_indices[0]]
-                    end_vertex = vertex_positions[v_indices[0]]
-                arc, sampled_points, is_closed, curve = create_arc_from_params(center, normal, radius, start_vertex, end_vertex, return_curve=True)
-                # sampled_edges.append( {'idx': idx, 'sampled_points': sampled_points, 'is_closed': is_closed, 'curve_type': curve_type})
-                
-            elif edge.get('curve_type') == 'Line':
-                if len(v_indices) >= 2:
-                    start_vertex = vertex_positions[v_indices[0]]
-                    end_vertex = vertex_positions[v_indices[1]]
-                    arc, sampled_points, is_closed, curve = create_line_from_points(start_vertex, end_vertex, return_curve=True)
-                    # sampled_edges.append( {'idx': idx, 'sampled_points': sampled_points, 'is_closed': is_closed, 'curve_type': curve_type})
-                else:
-                    print(f"Warning: Edge {idx} of type 'Line' has insufficient vertices ({len(v_indices)})")
-                    
-            elif edge.get('curve_type') == 'Ellipse':
-                curve_def = edge.get('curve_definition', {})
-                center = np.array(curve_def.get('center'))
-                x_direction = np.array(curve_def.get('major_axis_direction'))
-                y_direction = np.array(curve_def.get('minor_axis_direction'))
-                normal = np.array(curve_def.get('normal'))
-                major_radius = curve_def.get('major_radius')
-                minor_radius = curve_def.get('minor_radius')
-                if len(v_indices) == 2:
-                    start_vertex = vertex_positions[v_indices[0]]
-                    end_vertex = vertex_positions[v_indices[1]]
-                else:
-                    start_vertex = vertex_positions[v_indices[0]]
-                    end_vertex = vertex_positions[v_indices[0]]
-                arc, sampled_points, is_closed, curve = create_ellipse_from_params(center, x_direction, y_direction, normal, major_radius, minor_radius, start_vertex, end_vertex, return_curve=True)
-            elif edge.get('curve_type') == 'Hyperbola':
-                curve_def = edge.get('curve_definition', {})
-                center = np.array(curve_def.get('center'))
-                x_direction = np.array(curve_def.get('major_axis_direction'))
-                normal = np.array(curve_def.get('normal'))
-                major_radius = curve_def.get('major_radius')
-                minor_radius = curve_def.get('minor_radius')
-                if len(v_indices) == 2:
-                    start_vertex = vertex_positions[v_indices[0]]
-                    end_vertex = vertex_positions[v_indices[1]]
-                else:
-                    start_vertex = vertex_positions[v_indices[0]]
-                    end_vertex = vertex_positions[v_indices[0]]
-                arc, sampled_points, is_closed, curve = create_hyperbola_from_params(center, x_direction, normal, major_radius, minor_radius, start_vertex, end_vertex, return_curve=True)
-            elif edge.get('curve_type') == 'Parabola':
-                curve_def = edge.get('curve_definition', {})
-                vertex = np.array(curve_def.get('vertex'))
-                axis_of_symmetry = np.array(curve_def.get('axis_of_symmetry'))
-                normal = np.array(curve_def.get('normal'))
-                focal_length = curve_def.get('focal_length')
-                if len(v_indices) == 2:
-                    start_vertex = vertex_positions[v_indices[0]]
-                    end_vertex = vertex_positions[v_indices[1]]
-                else:
-                    start_vertex = vertex_positions[v_indices[0]]
-                    end_vertex = vertex_positions[v_indices[0]]
-                arc, sampled_points, is_closed, curve = create_parabola_from_params(vertex, axis_of_symmetry, normal, focal_length, start_vertex, end_vertex, return_curve=True)
-            elif edge.get('curve_type') == 'BSplineCurve':
-                curve_def = edge.get('curve_definition', {})
-                degree = curve_def.get('degree')
-                is_periodic = curve_def.get('is_periodic', False)
-                is_closed = len(v_indices) == 1
-                control_points = curve_def.get('control_points', [])
-                knots = curve_def.get('knots', [])
-                multiplicities = curve_def.get('multiplicities', [])
-                
-                # 验证B样条曲线参数
-                if degree is not None and control_points and knots and multiplicities:
-                    if len(v_indices) >= 2:
-                        start_vertex = vertex_positions[v_indices[0]]
-                        end_vertex = vertex_positions[v_indices[-1]]  # 使用最后一个顶点作为终点
-                    elif len(v_indices) == 1:
-                        start_vertex = vertex_positions[v_indices[0]]
-                        end_vertex = vertex_positions[v_indices[0]]
-                    else:
-                        # 如果没有足够的顶点索引，使用控制点的首尾作为起终点
-                        start_vertex = control_points[0]
-                        end_vertex = control_points[-1]
-                        
-                    arc, sampled_points, is_closed, curve = create_bspline_from_params(
-                        degree, is_periodic, is_closed, control_points, knots, multiplicities, 
-                        start_vertex, end_vertex, return_curve=True
-                    )
-                else:
-                    print(f"Warning: Edge {idx} of type 'BSplineCurve' has incomplete curve definition")
-                
-            else:
-                print(f"Warning: Unsupported curve type '{curve_type}' for edge {idx}")
-            
-            sampled_edges.append( {'idx': idx,  'arc': arc,'sampled_points': sampled_points, 'is_closed': is_closed, 'curve_type': curve_type})
-            all_edges[idx] = arc
-            all_curves[idx] = curve
+            try:
+                idx, curve_type, v_indices, arc, sampled_points, is_closed, curve = construct_edge(edge, vertex_positions)
+
+                sampled_edges.append( {'idx': idx,  'arc': arc,'sampled_points': sampled_points, 'is_closed': is_closed, 'curve_type': curve_type})
+                all_edges[idx] = {
+                    'arc': arc,
+                    'curve_type': curve_type,
+                    'vertices': v_indices
+                }
+                all_curves[idx] = curve
+            except:
+                print(f"Error processing edge {edge['edge_index']}: {e}")
+                continue
             
         # Store edge data for later use in color updates
         self.edge_data = sampled_edges
@@ -1655,50 +1763,52 @@ class DistributedSurfaceVisualizer:
 
         sampled_faces = []
         for face in faces_list:
-
-            surface_idx = face['face_index']
-            surface_type = face['surface_type']
-            wires = face['wires']
-            surface_orientation = face['orientation']
-            if surface_orientation == 'Reversed':
-                for w in wires:
-                    for e in w['ordered_edges']:
-                        if e['orientation'] == 'Reversed':
-                            e['orientation'] = 'Forward'
-                        else:
-                            e['orientation'] = 'Reversed'
-            if surface_type == 'Plane':
-                position = np.array(face['surface_definition']['position'])
-                normal = np.array(face['surface_definition']['normal'])
-                face_mesh, vertices, faces, outer_wire_points, outer_wire_lines, outer_wire_name, inner_wire_points_list, inner_wire_lines_list, inner_wire_name_list = create_planar_face_mesh(surface_idx, position, normal, wires, all_edges, all_curves)
-                # sampled_faces.append( {'idx': surface_idx, 'surface_type': surface_type, 'face_mesh': face_mesh, 'vertices': vertices, 'faces': faces})
-            elif surface_type == 'Cylinder':
-                position = np.array(face['surface_definition']['position'])
-                axis = np.array(face['surface_definition']['axis'])
-                radius = face['surface_definition']['radius']
-                face_mesh, vertices, faces, outer_wire_points, outer_wire_lines, outer_wire_name, inner_wire_points_list, inner_wire_lines_list, inner_wire_name_list = create_cylindrical_face_mesh(surface_idx, position, axis, radius, wires, all_edges, all_curves)
-                # sampled_faces.append( {'idx': surface_idx, 'surface_type': surface_type, 'face_mesh': face_mesh, 'vertices': vertices, 'faces': faces})
-            elif surface_type == 'Cone':
-                position = np.array(face['surface_definition']['position'])
-                axis = np.array(face['surface_definition']['axis'])
-                radius = face['surface_definition']['radius']
-                semi_angle = face['surface_definition']['semi_angle']
-                face_mesh, vertices, faces, outer_wire_points, outer_wire_lines, outer_wire_name, inner_wire_points_list, inner_wire_lines_list, inner_wire_name_list = create_conical_face_mesh(surface_idx, position, axis, radius, semi_angle, wires, all_edges, all_curves)
-            else:
-                print(f"Surface type {surface_type} is not supported yet")
+            try:
+                surface_idx = face['face_index']
+                surface_type = face['surface_type']
+                wires = face['wires']
+                surface_orientation = face['orientation']
+                # if surface_orientation == 'Reversed':
+                #     for w in wires:
+                #         for e in w['ordered_edges']:
+                #             if e['orientation'] == 'Reversed':
+                #                 e['orientation'] = 'Forward'
+                #             else:
+                #                 e['orientation'] = 'Reversed'
+                if surface_type == 'Plane':
+                    position = np.array(face['surface_definition']['position'])
+                    normal = np.array(face['surface_definition']['normal'])
+                    face_mesh, vertices, faces, outer_wire_points, outer_wire_lines, outer_wire_name, inner_wire_points_list, inner_wire_lines_list, inner_wire_name_list = create_planar_face_mesh(surface_idx, position, normal, wires, all_edges, all_curves)
+                    # sampled_faces.append( {'idx': surface_idx, 'surface_type': surface_type, 'face_mesh': face_mesh, 'vertices': vertices, 'faces': faces})
+                elif surface_type == 'Cylinder':
+                    position = np.array(face['surface_definition']['position'])
+                    axis = np.array(face['surface_definition']['axis'])
+                    radius = face['surface_definition']['radius']
+                    face_mesh, vertices, faces, outer_wire_points, outer_wire_lines, outer_wire_name, inner_wire_points_list, inner_wire_lines_list, inner_wire_name_list = create_cylindrical_face_mesh(surface_idx, position, axis, radius, wires, all_edges, all_curves)
+                    # sampled_faces.append( {'idx': surface_idx, 'surface_type': surface_type, 'face_mesh': face_mesh, 'vertices': vertices, 'faces': faces})
+                elif surface_type == 'Cone':
+                    position = np.array(face['surface_definition']['position'])
+                    axis = np.array(face['surface_definition']['axis'])
+                    radius = face['surface_definition']['radius']
+                    semi_angle = face['surface_definition']['semi_angle']
+                    face_mesh, vertices, faces, outer_wire_points, outer_wire_lines, outer_wire_name, inner_wire_points_list, inner_wire_lines_list, inner_wire_name_list = create_conical_face_mesh(surface_idx, position, axis, radius, semi_angle, wires, all_edges, all_curves)
+                else:
+                    print(f"Surface type {surface_type} is not supported yet")
+                    continue
+                all_outer_wires.append([outer_wire_points, outer_wire_lines, outer_wire_name])
+                for inner_wire_points, inner_wire_lines, inner_wire_name in zip(inner_wire_points_list, inner_wire_lines_list, inner_wire_name_list):
+                    all_inner_wires.append([inner_wire_points, inner_wire_lines, inner_wire_name])
+                sampled_faces.append( {'idx': surface_idx, 'surface_type': surface_type, 'face_mesh': face_mesh, 'vertices': vertices, 'faces': faces})
+            except Exception as e:
+                print(f"Error processing face {surface_idx}: {e}")
                 continue
-            all_outer_wires.append([outer_wire_points, outer_wire_lines, outer_wire_name])
-            for inner_wire_points, inner_wire_lines, inner_wire_name in zip(inner_wire_points_list, inner_wire_lines_list, inner_wire_name_list):
-                all_inner_wires.append([inner_wire_points, inner_wire_lines, inner_wire_name])
-            sampled_faces.append( {'idx': surface_idx, 'surface_type': surface_type, 'face_mesh': face_mesh, 'vertices': vertices, 'faces': faces})
-
 
 
         for face in sampled_faces:
             face_name = f"Face {face['idx']:03d} {face['surface_type']}"
             try:
                 ps.register_surface_mesh(face_name, np.array(face['vertices']), np.array(face['faces']))
-                ps.register_point_cloud(face_name, np.array(face['vertices']))
+                # ps.register_point_cloud(face_name, np.array(face['vertices']))
             except Exception as e:
                 print(f"Error registering surface mesh {face_name}: {e}")
                 continue
