@@ -17,7 +17,7 @@ log_every_step: 50
 
 use_wandb_tracking: true
 wandb_project_name: CLR-adjacency
-wandb_run_name: surface_adjacency_30filtered_transform_rand_order
+wandb_run_name: surface_adjacency_30filtered_transform_rand_order_fix_rand
 
 data:
     replication: 1
