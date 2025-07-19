@@ -245,13 +245,8 @@ def serialize_shape_to_json(shape, output_path):
     #     print("Usage: freecadcmd -c batch_serializer.py <path_to_your_model.step>", file=sys.stderr)
     #     sys.exit(1) # Exit with an error code
 
-<<<<<<< HEAD
-input_file_path = r"C:\Users\Dafei Qin\Documents\WORK\CAD\data\examples\00000056\00000056_666139e3bff64d4e8a6ce183_step_005.step"
-output_file_path = r"C:\Users\Dafei Qin\Documents\WORK\CAD\data\examples\00000056\out.json"
-=======
 input_file_path = sys.argv[2]
 output_file_path = sys.argv[3]
->>>>>>> 4497a1835c884d315a78009136188fc99ac63ccd
 
 # Verify the input file exists
 if not os.path.isfile(input_file_path):

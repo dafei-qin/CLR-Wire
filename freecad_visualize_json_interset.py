@@ -191,7 +191,7 @@ def build_second_order_surface(face):
         position = position + axis * u_min
         u_max = u_max - u_min
         u_min = 0
-    print(position, axis, v_min, v_max)
+    print(position, axis, u_min, u_max, v_min, v_max)
     if surface_type == 'Cylinder':
         radius = face['surface_definition']['radius']
     elif surface_type == 'Cone':
@@ -227,7 +227,7 @@ def build_second_order_surface(face):
     # if surface_type == 'Cylinder' or surface_type == 'Cone':
     #     trsf.SetRotation(rotation_axis, 0)
     # elif surface_type == 'Toroid':
-    trsf.SetRotation(rotation_axis, rotation_angle) # Bug: set rotation angle to 0
+    trsf.SetRotation(rotation_axis, 0) # Bug: set rotation angle to 0
     transformer = BRepBuilderAPI_Transform(face_builder.Shape(), trsf)
     # print(type(transformer.Shape()))
     shape = transformer.Shape()
@@ -242,7 +242,7 @@ def build_second_order_surface(face):
     vertices, faces = extract_mesh_from_face(shape)
     vertices = np.array(vertices)
     faces = np.array(faces)
-    print(vertices.max(axis=0), vertices.min(axis=0))
+    # print(vertices.max(axis=0), vertices.min(axis=0))
     return shape, vertices, faces
 
 
@@ -320,7 +320,7 @@ def visualize_json_interset(cad_data):
     #         ps.register_surface_mesh(f"intersection_face_{face_index:03d}", face['vertices'], face['faces'])
 
 
-    print(ps.get_bounding_box())
+    # print(ps.get_bounding_box())
     ps.show()
 
 
