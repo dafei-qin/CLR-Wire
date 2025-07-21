@@ -19,14 +19,29 @@ from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_Transform
 
 from tqdm import tqdm
 import os, json
-
+from icecream import ic
 from multiprocessing.pool import Pool
-
+import time
+# ic.disable()
 # from utils import load_step_with_timeout, load_abc_step, load_furniture_step
 
 '''
 Logan's script to convert .step to json
 '''
+
+
+def array_on_duplicate_keys(ordered_pairs):
+    """Convert duplicate keys to arrays."""
+    d = {}
+    for k, v in ordered_pairs:
+        if k in d:
+            if type(d[k]) is list:
+                d[k].append(v)
+            else:
+                d[k] = [d[k],v]
+        else:
+           d[k] = v
+    return d
 
 class BRepDataProcessor:
     def line_feature(self, curve: gp_Lin, idx):
@@ -294,14 +309,17 @@ class BRepDataProcessor:
         v_knots = np.array(v_knots).tolist()
         u_mults = np.array(u_mults).tolist()
         v_mults = np.array(v_mults).tolist()
-
+        u_periodic = surface.IsUPeriodic()
+        v_periodic = surface.IsVPeriodic()
         return {
             "type": "bspline_surface",
             "idx": idx,
             "location": [],
             "direction": [],
             "poles": poles,
-            "scalar": [u_degree, v_degree, num_poles_u, num_poles_v, num_knots_u, num_knots_v] + u_knots + v_knots + u_mults + v_mults
+            "scalar": [u_degree, v_degree, num_poles_u, num_poles_v, num_knots_u, num_knots_v] + u_knots + v_knots + u_mults + v_mults,
+            "u_periodic": u_periodic,
+            "v_periodic": v_periodic
         }
 
     def get_approx_face(self, points):
@@ -359,91 +377,127 @@ class BRepDataProcessor:
             assert len(files) == 1
             step_path = os.path.join(step_path, files[0])
         # with zlw.Timer("Load step"):
+        ic('Loading step file...')
+        t = time.time()
         solids = load_step(step_path)
+        ic(f'Finished loading step file: {time.time() - t:.2f}s')
         if solids is None or len(solids) < 1:
             raise ValueError("No solids found in the step file")
         # for this version, assert step is single solid.
-        solid = solids[0]
-        if len(list(solid.faces())) > 200:
-            raise ValueError("Too many faces in the solid.")
-        solid = solid.topods_shape()
-        bbox = Bnd_Box()
-        brepbndlib.Add(solid, bbox)
-        xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
-        max_dimension = max(xmax - xmin, ymax - ymin, zmax - zmin)
-        scale_factor = 2.0 / max_dimension
-        center = gp_Pnt((xmin + xmax) / 2, (ymin + ymax) / 2, (zmin + zmax) / 2)
-        trsf = gp_Trsf()
-        trsf.SetScale(center, scale_factor)
-        solid = BRepBuilderAPI_Transform(solid, trsf, True).Shape()
-        solid = Solid(solid)
+        datas = []
+        for __idx, solid in enumerate(solids):
+            try:
+                ic(f'Processing solid {__idx:02d}...')
+            # solid = solids[0]
+                if len(list(solid.faces())) > 500:
+                    ic(f'Too many faces in the solid: {len(list(solid.faces()))}')
+                    raise ValueError("Too many faces in the solid.")
+                solid = solid.topods_shape()
+                bbox = Bnd_Box()
+                brepbndlib.Add(solid, bbox)
+                xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
+                max_dimension = max(xmax - xmin, ymax - ymin, zmax - zmin)
+                # max_dimension = np.round(max_dimension*.5, 0) *2
+                # ic(f'Max dimension: {max_dimension}')
+                scale_factor = 2.0 / max_dimension
+                # ic(f'Scale factor: {scale_factor}')
+                scale_factor = np.round(scale_factor * 500, 0) / 500
+                ic(f'Scale factor: {scale_factor}')
+                center = gp_Pnt(np.round((xmin + xmax) / 2, 0), np.round((ymin + ymax) / 2, 0), np.round((zmin + zmax) / 2, 0))
+                ic(f'Center: {center.X()}, {center.Y()}, {center.Z()}')
+                trsf = gp_Trsf()
+                trsf.SetScale(center, scale_factor)
+                apply_transform = BRepBuilderAPI_Transform(trsf)
+                apply_transform.Perform(solid, True)
+                solid = apply_transform.Modified(solid)
+                assert solid.Size() == 1
+                solid = solid.First()
+                solid = Solid(solid)
 
-        try:
-            graph =  face_adjacency(solid, self_loops=True)
-        except:
-            raise ValueError("Face adjacency failed. The solid may be invalid.")
-        data = []
+                try:
+                    graph = face_adjacency(solid, self_loops=True)
+                except:
+                    raise ValueError("Face adjacency failed. The solid may be invalid.")
+                data = []
 
-        for face_idx in graph.nodes():
-            face = graph.nodes[face_idx]["face"]
-            surf_type = face.surface_type()
-            surface = face.specific_surface()
-            node_feature = None
-            if surf_type == "plane":
-                node_feature = self.plane_feature(surface, [face_idx, face_idx])
-            elif surf_type == "cylinder":
-                node_feature = self.cylinder_feature(surface, [face_idx, face_idx])
-            elif surf_type == "cone":
-                node_feature = self.cone_feature(surface, [face_idx, face_idx])
-            elif surf_type == "sphere":
-                node_feature = self.sphere_feature(surface, [face_idx, face_idx])
-            elif surf_type == "torus":
-                node_feature = self.torus_feature(surface, [face_idx, face_idx])
-            elif surf_type == "bezier":
-                node_feature = self.bezier_surface_feature(surface, [face_idx, face_idx])
-            elif surf_type == "bspline":
-                node_feature = self.bspline_surface_feature(surface, [face_idx, face_idx])
-            else:
-                raise ValueError("Unknown surface type.")
-            # try:
-            #     points = uvgrid(face, method="point", num_u=32, num_v=32)
-            #     node_feature["approximation"] = self.get_approx_face(points)
-            #     node_feature["points"] = points.tolist()
-            # except Exception as e:
-            #     node_feature["approximation"] = None
-            #     node_feature["points"] = None
-            
-            node_feature['uv'] = [face.uv_bounds().min_point()[0], face.uv_bounds().max_point()[0], face.uv_bounds().min_point()[1], face.uv_bounds().max_point()[1]]
-            data.append(node_feature)
-        # for edge_idx in graph.edges():
-        #     edge = graph.edges[edge_idx]["edge"]
-        #     curv_type = edge.curve_type()
-        #     curve = edge.specific_curve()
-        #     if curv_type == "line":
-        #         edge_feature = self.line_feature(curve, [edge_idx[0], edge_idx[1]])
-        #     elif curv_type == "circle":
-        #         edge_feature = self.circle_feature(curve, [edge_idx[0], edge_idx[1]])
-        #     elif curv_type == "ellipse":
-        #         edge_feature = self.ellipse_feature(curve, [edge_idx[0], edge_idx[1]])
-        #     elif curv_type == "hyperbola":
-        #         edge_feature = self.hyperbola_feature(curve, [edge_idx[0], edge_idx[1]])
-        #     elif curv_type == "parabola":
-        #         edge_feature = self.parabola_feature(curve, [edge_idx[0], edge_idx[1]])
-        #     elif curv_type == "bezier":
-        #         edge_feature = self.bezier_curve_feature(curve, [edge_idx[0], edge_idx[1]])
-        #     elif curv_type == "bspline":
-        #         edge_feature = self.bspline_curve_feature(curve, [edge_idx[0], edge_idx[1]])
-        #     else:
-        #         raise ValueError("Unknown curve type.")
-        #     try:
-        #         points = ugrid(edge, method="point", num_u=32)
-        #         edge_feature["approximation"] = self.get_approx_edge(points)
-        #         edge_feature["points"] = points.tolist()
-        #     except Exception as e:
-        #         edge_feature["approximation"] = None
-        #         edge_feature["points"] = None
-        #     data.append(edge_feature)
-        return data
+                for face_idx in graph.nodes():
+                    face = graph.nodes[face_idx]["face"]
+                    surf_type = face.surface_type()
+                    surface = face.specific_surface()
+                    node_feature = None
+                    if surf_type == "plane":
+                        node_feature = self.plane_feature(surface, [face_idx, face_idx])
+                    elif surf_type == "cylinder":
+                        node_feature = self.cylinder_feature(surface, [face_idx, face_idx])
+                    elif surf_type == "cone":
+                        node_feature = self.cone_feature(surface, [face_idx, face_idx])
+                    elif surf_type == "sphere":
+                        node_feature = self.sphere_feature(surface, [face_idx, face_idx])
+                    elif surf_type == "torus":
+                        node_feature = self.torus_feature(surface, [face_idx, face_idx])
+                    elif surf_type == "bezier":
+                        node_feature = self.bezier_surface_feature(surface, [face_idx, face_idx])
+                    elif surf_type == "bspline":
+                        node_feature = self.bspline_surface_feature(surface, [face_idx, face_idx])
+                    else:
+                        raise ValueError(f"Unknown surface type: {surf_type}")
+                    # try:
+                    #     points = uvgrid(face, method="point", num_u=32, num_v=32)
+                    #     node_feature["approximation"] = self.get_approx_face(points)
+                    #     node_feature["points"] = points.tolist()
+                    # except Exception as e:
+                    #     node_feature["approximation"] = None
+                    #     node_feature["points"] = None
+                    
+                    node_feature['uv'] = [face.uv_bounds().min_point()[0], face.uv_bounds().max_point()[0], face.uv_bounds().min_point()[1], face.uv_bounds().max_point()[1]]
+                    json_string = face.topods_shape().DumpJsonToString()
+                    string_data = json.loads('{' + json_string.replace(' ', '').replace(',,', ',') + '}', object_pairs_hook=array_on_duplicate_keys)
+                    surface_data = string_data['TShape']['Surface']
+                    if 'basisSurf' in surface_data:
+                        surface_data = surface_data['basisSurf']
+                    # print(surf_type)
+                    # print(surface_data)
+                    if surf_type != 'besize' and surf_type != 'bspline':
+                        direction = np.round(surface_data['pos']['Direction'], 7).tolist()
+                        XDirection = np.round(surface_data['pos']['XDirection'], 7).tolist()
+                        YDirection = np.round(surface_data['pos']['YDirection'], 7).tolist()
+                        node_feature['direction'] = [direction, XDirection, YDirection]
+
+                    data.append(node_feature)
+            except Exception as e:
+                ic(f'Error processing solid {__idx:02d}: {e}')
+                continue
+
+            # for edge_idx in graph.edges():
+            #     edge = graph.edges[edge_idx]["edge"]
+            #     curv_type = edge.curve_type()
+            #     curve = edge.specific_curve()
+            #     if curv_type == "line":
+            #         edge_feature = self.line_feature(curve, [edge_idx[0], edge_idx[1]])
+            #     elif curv_type == "circle":
+            #         edge_feature = self.circle_feature(curve, [edge_idx[0], edge_idx[1]])
+            #     elif curv_type == "ellipse":
+            #         edge_feature = self.ellipse_feature(curve, [edge_idx[0], edge_idx[1]])
+            #     elif curv_type == "hyperbola":
+            #         edge_feature = self.hyperbola_feature(curve, [edge_idx[0], edge_idx[1]])
+            #     elif curv_type == "parabola":
+            #         edge_feature = self.parabola_feature(curve, [edge_idx[0], edge_idx[1]])
+            #     elif curv_type == "bezier":
+            #         edge_feature = self.bezier_curve_feature(curve, [edge_idx[0], edge_idx[1]])
+            #     elif curv_type == "bspline":
+            #         edge_feature = self.bspline_curve_feature(curve, [edge_idx[0], edge_idx[1]])
+            #     else:
+            #         raise ValueError("Unknown curve type.")
+            #     try:
+            #         points = ugrid(edge, method="point", num_u=32)
+            #         edge_feature["approximation"] = self.get_approx_edge(points)
+            #         edge_feature["points"] = points.tolist()
+            #     except Exception as e:
+            #         edge_feature["approximation"] = None
+            #         edge_feature["points"] = None
+            #     data.append(edge_feature)
+            datas.append(data)
+        return datas
 
     def tokenize_and_save_cad_data(self, path):
         step_path, output_path = path
@@ -451,14 +505,16 @@ class BRepDataProcessor:
             return 0
         try:
             # with zlw.Timer("Process"):
-            data = self.tokenize_cad_data(step_path)
-            with open(output_path, 'w', encoding='utf-8') as f: # Readable export
-                json.dump(data, f, ensure_ascii=False, indent=2)
+            datas = self.tokenize_cad_data(step_path)
+            for i, data in enumerate(datas):
+                with open(output_path.replace('.json', f'_{i:03d}.json'), 'w', encoding='utf-8') as f: # Readable export
+                    json.dump(data, f, ensure_ascii=False, indent=2)
 
             # with open(output_path, 'w') as f: # Compressed export
             #     json.dump(data, f)
             return 1
         except ValueError as e:
+            ic(f'Error: {e}')
             return 0
 
 if __name__ == '__main__':
