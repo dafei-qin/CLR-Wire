@@ -191,7 +191,7 @@ def build_second_order_surface(face):
         position = position + axis * u_min
         u_max = u_max - u_min
         u_min = 0
-    print(position, axis, u_min, u_max, v_min, v_max)
+    # print(position, axis, u_min, u_max, v_min, v_max)
     if surface_type == 'Cylinder':
         radius = face['surface_definition']['radius']
     elif surface_type == 'Cone':
@@ -217,20 +217,21 @@ def build_second_order_surface(face):
     # 4. 使用BRepBuilderAPI_MakeFace根据参数范围裁剪几何体，生成面
     #    这是与C++ API最直接的对应
     face_builder = BRepBuilderAPI_MakeFace(occ_surface, u_min, u_max, v_min, v_max)
-    # return face_builder.Face()
-    rotation_axis = np.array(face['rotation_axis'])
-    rotation_angle = face['rotation_angle']
-    occ_rotation_axis = gp_Dir(rotation_axis[0], rotation_axis[1], rotation_axis[2])
-    occ_rotation_center = occ_position
-    rotation_axis = gp_Ax1(occ_rotation_center, occ_rotation_axis)
-    trsf = gp_Trsf()
-    # if surface_type == 'Cylinder' or surface_type == 'Cone':
-    #     trsf.SetRotation(rotation_axis, 0)
-    # elif surface_type == 'Toroid':
-    trsf.SetRotation(rotation_axis, 0) # Bug: set rotation angle to 0
-    transformer = BRepBuilderAPI_Transform(face_builder.Shape(), trsf)
+    # # return face_builder.Face()
+    # rotation_axis = np.array(face['rotation_axis'])
+    # rotation_angle = face['rotation_angle']
+    # occ_rotation_axis = gp_Dir(rotation_axis[0], rotation_axis[1], rotation_axis[2])
+    # occ_rotation_center = occ_position
+    # rotation_axis = gp_Ax1(occ_rotation_center, occ_rotation_axis)
+    # trsf = gp_Trsf()
+    # # if surface_type == 'Cylinder' or surface_type == 'Cone':
+    # #     trsf.SetRotation(rotation_axis, 0)
+    # # elif surface_type == 'Toroid':
+    # trsf.SetRotation(rotation_axis, 0) # Bug: set rotation angle to 0
+    # transformer = BRepBuilderAPI_Transform(face_builder.Shape(), trsf)
     # print(type(transformer.Shape()))
-    shape = transformer.Shape()
+    # shape = transformer.Shape()
+    shape = face_builder.Face()
     mesher = BRepMesh_IncrementalMesh(shape, 0.1, True, 0.2)
     mesher.Perform() # 确保执行网格化
 

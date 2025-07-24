@@ -18,7 +18,6 @@ from occwl.edge import Edge
 import numpy as np
 from OCC.Core.TColStd import TColStd_Array1OfReal, TColStd_Array1OfInteger
 from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_Transform
-import torch
 from tqdm import tqdm
 
 import polyscope as ps

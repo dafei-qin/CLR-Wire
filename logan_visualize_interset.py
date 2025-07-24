@@ -15,8 +15,8 @@ from OCC.Core.TopoDS import TopoDS_Edge
 from OCC.Core.TopLoc import TopLoc_Location
 from OCC.Core.Poly import Poly_Triangulation
 from OCC.Core.TColgp import TColgp_Array1OfPnt
-from OCC.Core.TColStd import TColStd_Array1OfReal, TColStd_Array1OfInteger
-from OCC.Core.GeomAPI import GeomAPI_ProjectPointOnCurve
+from OCC.Core.TColStd import TColStd_Array1OfReal, TColStd_Array1OfInteger, TColStd_Array2OfReal
+from OCC.Core.GeomAPI import GeomAPI_ProjectPointOnCurve, GeomAPI_IntSS
 from OCC.Core.BRep import BRep_Tool
 from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
 from OCC.Display.SimpleGui import init_display
@@ -90,78 +90,157 @@ def build_adjacency_matrix(faces):
     return adjacency_matrix
 
 
-def build_bspline_surface(face):
-    parameter_range = face['parameter_range']
-    u_min, u_max, v_min, v_max = parameter_range
-    v_degree = face['surface_definition']['v_degree']
-    u_degree = face['surface_definition']['u_degree']
-    is_u_periodic = face['surface_definition']['is_u_periodic']
-    is_v_periodic = face['surface_definition']['is_v_periodic']
-    control_points = face['surface_definition']['control_points']
-    u_count = len(control_points)
-    v_count = len(control_points[0]) if u_count > 0 else 0
-    # Create a 2D array of gp_Pnt
-    occ_control_points_array = TColgp_Array2OfPnt(1, u_count, 1, v_count)
-    for i in range(u_count):
-        for j in range(v_count):
-            pt = control_points[i][j]
-            occ_control_points_array.SetValue(i + 1, j + 1, gp_Pnt(pt[0], pt[1], pt[2]))
-    u_knots = face['surface_definition']['u_knots']
-    v_knots = face['surface_definition']['v_knots']
-    u_multiplicities = face['surface_definition']['u_multiplicities']
-    v_multiplicities = face['surface_definition']['v_multiplicities']
+# def build_bspline_surface(face):
+#     parameter_range = face['parameter_range']
+#     u_min, u_max, v_min, v_max = parameter_range
+#     u_degree, v_degree, num_poles_u, num_poles_v, num_knots_u, num_knots_v = face['scalar'][:6]
+#     # u_degree = face['surface_definition']['u_degree']
+#     # is_u_periodic = face['surface_definition']['is_u_periodic']
+#     # is_v_periodic = face['surface_definition']['is_v_periodic']
+#     # control_points = face['surface_definition']['control_points']
 
-    def compress_knots_and_mults(knots, mults):
-        # If already compressed, do nothing
-        if len(knots) == len(mults):
-            return knots, mults
-        # Otherwise, compress
-        unique_knots = []
-        new_mults = []
-        prev = None
-        count = 0
-        for k in knots:
-            if prev is None or abs(k - prev) > 1e-10:
-                if prev is not None:
-                    new_mults.append(count)
-                unique_knots.append(k)
-                prev = k
-                count = 1
-            else:
-                count += 1
-        new_mults.append(count)
-        return unique_knots, new_mults
+#     u_count = len(control_points)
+#     v_count = len(control_points[0]) if u_count > 0 else 0
+#     # Create a 2D array of gp_Pnt
+#     occ_control_points_array = TColgp_Array2OfPnt(1, u_count, 1, v_count)
+#     for i in range(u_count):
+#         for j in range(v_count):
+#             pt = control_points[i][j]
+#             occ_control_points_array.SetValue(i + 1, j + 1, gp_Pnt(pt[0], pt[1], pt[2]))
+#     u_knots = face['surface_definition']['u_knots']
+#     v_knots = face['surface_definition']['v_knots']
+#     u_multiplicities = face['surface_definition']['u_multiplicities']
+#     v_multiplicities = face['surface_definition']['v_multiplicities']
+
+#     def compress_knots_and_mults(knots, mults):
+#         # If already compressed, do nothing
+#         if len(knots) == len(mults):
+#             return knots, mults
+#         # Otherwise, compress
+#         unique_knots = []
+#         new_mults = []
+#         prev = None
+#         count = 0
+#         for k in knots:
+#             if prev is None or abs(k - prev) > 1e-10:
+#                 if prev is not None:
+#                     new_mults.append(count)
+#                 unique_knots.append(k)
+#                 prev = k
+#                 count = 1
+#             else:
+#                 count += 1
+#         new_mults.append(count)
+#         return unique_knots, new_mults
     
-    # Create and fill knot and multiplicity arrays
-    u_knots_compressed, u_mults_compressed = compress_knots_and_mults(u_knots, u_multiplicities)
-    v_knots_compressed, v_mults_compressed = compress_knots_and_mults(v_knots, v_multiplicities)
+#     # Create and fill knot and multiplicity arrays
+#     u_knots_compressed, u_mults_compressed = compress_knots_and_mults(u_knots, u_multiplicities)
+#     v_knots_compressed, v_mults_compressed = compress_knots_and_mults(v_knots, v_multiplicities)
 
-    occ_u_knots = TColStd_Array1OfReal(1, len(u_knots_compressed))
-    for i, val in enumerate(u_knots_compressed):
-        occ_u_knots.SetValue(i + 1, float(val))
-    occ_u_multiplicities = TColStd_Array1OfInteger(1, len(u_mults_compressed))
-    for i, val in enumerate(u_mults_compressed):
-        occ_u_multiplicities.SetValue(i + 1, int(val))
+#     occ_u_knots = TColStd_Array1OfReal(1, len(u_knots_compressed))
+#     for i, val in enumerate(u_knots_compressed):
+#         occ_u_knots.SetValue(i + 1, float(val))
+#     occ_u_multiplicities = TColStd_Array1OfInteger(1, len(u_mults_compressed))
+#     for i, val in enumerate(u_mults_compressed):
+#         occ_u_multiplicities.SetValue(i + 1, int(val))
 
-    # Repeat for v
-    occ_v_knots = TColStd_Array1OfReal(1, len(v_knots_compressed))
-    for i, val in enumerate(v_knots_compressed):
-        occ_v_knots.SetValue(i + 1, float(val))
-    occ_v_multiplicities = TColStd_Array1OfInteger(1, len(v_mults_compressed))
-    for i, val in enumerate(v_mults_compressed):
-        occ_v_multiplicities.SetValue(i + 1, int(val))
+#     # Repeat for v
+#     occ_v_knots = TColStd_Array1OfReal(1, len(v_knots_compressed))
+#     for i, val in enumerate(v_knots_compressed):
+#         occ_v_knots.SetValue(i + 1, float(val))
+#     occ_v_multiplicities = TColStd_Array1OfInteger(1, len(v_mults_compressed))
+#     for i, val in enumerate(v_mults_compressed):
+#         occ_v_multiplicities.SetValue(i + 1, int(val))
 
-    # print(f"u_degree={u_degree}, v_degree={v_degree}")
-    # print(f"u_knots={u_knots}, v_knots={v_knots}")
-    # print(f"u_mults={u_multiplicities}, v_mults={v_multiplicities}")
-    # print(f"u_count={u_count}, v_count={v_count}")
-    # print(f"sum(u_mults)-u_degree-1={sum(u_multiplicities)-u_degree-1}, expected u_count={u_count}")
-    # print(f"sum(v_mults)-v_degree-1={sum(v_multiplicities)-v_degree-1}, expected v_count={v_count}")
-    occ_bspline_surface = Geom_BSplineSurface(occ_control_points_array, occ_u_knots, occ_v_knots, occ_u_multiplicities, occ_v_multiplicities, u_degree, v_degree, is_u_periodic, is_v_periodic)
-    # Use the constructor with parameter bounds and deflection
-    # bspline_handle = handle_Geom_BSplineSurface(occ_bspline_surface)
-    # occ_bspline_surface.CheckAndSegment(u_min, u_max, v_min, v_max, 1e-6, 1e-6)
-    # print(type(occ_bspline_surface))
+#     # print(f"u_degree={u_degree}, v_degree={v_degree}")
+#     # print(f"u_knots={u_knots}, v_knots={v_knots}")
+#     # print(f"u_mults={u_multiplicities}, v_mults={v_multiplicities}")
+#     # print(f"u_count={u_count}, v_count={v_count}")
+#     # print(f"sum(u_mults)-u_degree-1={sum(u_multiplicities)-u_degree-1}, expected u_count={u_count}")
+#     # print(f"sum(v_mults)-v_degree-1={sum(v_multiplicities)-v_degree-1}, expected v_count={v_count}")
+#     occ_bspline_surface = Geom_BSplineSurface(occ_control_points_array, occ_u_knots, occ_v_knots, occ_u_multiplicities, occ_v_multiplicities, u_degree, v_degree, is_u_periodic, is_v_periodic)
+
+
+def build_bspline_surface(data: dict) -> Geom_BSplineSurface:
+    """
+    Reconstructs a Geom_BSplineSurface from a dictionary of its properties.
+
+    Args:
+        data (dict): A dictionary containing the bspline surface data.
+
+    Returns:
+        Geom_BSplineSurface: The reconstructed pythonOCC BSpline surface object.
+    """
+    # 1. Unpack scalar data
+    scalar_data = data["scalar"]
+    u_degree, v_degree, num_poles_u, num_poles_v, num_knots_u, num_knots_v = map(int, scalar_data[:6])
+    is_u_periodic = data["u_periodic"]
+    is_v_periodic = data["v_periodic"]
+    # 2. Extract knot and multiplicity lists from the scalar data
+    u_knots_list = scalar_data[6 : 6 + num_knots_u]
+    v_knots_list = scalar_data[6 + num_knots_u : 6 + num_knots_u + num_knots_v]
+    u_mults_list = scalar_data[6 + num_knots_u + num_knots_v : 6 + num_knots_u + num_knots_v + num_knots_u]
+    v_mults_list = scalar_data[6 + num_knots_u + num_knots_v + num_knots_u :]
+    # print('u_degree: ', u_degree, 'v_degree: ', v_degree)
+    # print('num_poles_u: ', num_poles_u, 'num_poles_v: ', num_poles_v)
+    # print('num_knots_u: ', num_knots_u, 'num_knots_v: ', num_knots_v)
+    # print('u_knots_list: ', len(u_knots_list), u_knots_list)
+    # print('v_knots_list: ', len(v_knots_list), v_knots_list)
+    # print('u_mults_list: ', sum(u_mults_list), u_mults_list)
+    # print('v_mults_list: ', sum(v_mults_list), v_mults_list)
+    # 3. Create and populate pythonOCC arrays for control points and weights
+    # The constructor expects 1-based indexing for these arrays
+    occ_control_points = TColgp_Array2OfPnt(1, num_poles_u, 1, num_poles_v)
+    occ_weights = TColStd_Array2OfReal(1, num_poles_u, 1, num_poles_v)
+    
+    poles_data = data["poles"]
+    print('poles_data: ', np.array(poles_data).shape, np.array(poles_data))
+    for i in range(num_poles_u):
+        for j in range(num_poles_v):
+            x, y, z, w = poles_data[i][j]
+            # SetValue uses 1-based indexing
+            occ_control_points.SetValue(i + 1, j + 1, gp_Pnt(x, y, z))
+            occ_weights.SetValue(i + 1, j + 1, w)
+
+    # 4. Create and populate pythonOCC arrays for knots
+    occ_u_knots = TColStd_Array1OfReal(1, num_knots_u)
+    for i, knot in enumerate(u_knots_list):
+        occ_u_knots.SetValue(i + 1, knot)
+
+    occ_v_knots = TColStd_Array1OfReal(1, num_knots_v)
+    for i, knot in enumerate(v_knots_list):
+        occ_v_knots.SetValue(i + 1, knot)
+
+    # 5. Create and populate pythonOCC arrays for multiplicities
+    occ_u_multiplicities = TColStd_Array1OfInteger(1, num_knots_u)
+    for i, mult in enumerate(u_mults_list):
+        occ_u_multiplicities.SetValue(i + 1, int(mult))
+
+    occ_v_multiplicities = TColStd_Array1OfInteger(1, num_knots_v)
+    for i, mult in enumerate(v_mults_list):
+        occ_v_multiplicities.SetValue(i + 1, int(mult))
+        
+    # 6. Recover periodicity information (see explanation below)
+    # For a non-periodic curve: NbPoles = NbKnots - Degree - 1
+    # For a periodic curve: NbPoles = NbKnots - 1
+
+
+    # 7. Construct the BSpline Surface
+    # The presence of weights indicates a rational surface (NURBS)
+    occ_bspline_surface = Geom_BSplineSurface(
+        occ_control_points,
+        occ_weights,
+        occ_u_knots,
+        occ_v_knots,
+        occ_u_multiplicities,
+        occ_v_multiplicities,
+        u_degree,
+        v_degree,
+        is_u_periodic,
+        is_v_periodic
+    )
+
+
     face_builder = BRepBuilderAPI_MakeFace(occ_bspline_surface, 1e-6)
     shape = face_builder.Face()
     mesher = BRepMesh_IncrementalMesh(shape, 0.1, True, 0.2)
@@ -180,25 +259,17 @@ def build_second_order_surface(face):
     parameter_range = face['uv']
     u_min, u_max, v_min, v_max = parameter_range
     position = np.array(face['location'])[0]
-    axis = np.array(face['direction'])[0]
+    direction = np.array(face['direction'], dtype=np.float64)[0]
+    XDirection = np.array(face['direction'], dtype=np.float64)[1]
+
     # orientation = face['orientation']
     # 归一化参数范围
-    if surface_type == 'cylinder' or surface_type == 'cone':
-        position = position + axis * v_min
+    if surface_type == 'cylinder':
+        position = position + direction * v_min
         v_max = v_max - v_min
         v_min = 0
-        u_min = 0
-        u_max = 2 * np.pi
-    elif surface_type == 'torus':
-        u_min = 0
-        u_max = 2 * np.pi
-        v_min = 0
-        v_max = 2 * np.pi
-    # elif surface_type == 'torus':
-    #     position = position + axis * u_min
-    #     u_max = u_max - u_min
-    #     u_min = 0
-    print(position, axis, u_min, u_max, v_min, v_max)
+
+    # print(position, direction, u_min, u_max, v_min, v_max)
     if surface_type == 'cylinder':
         radius = face['scalar'][0]
     elif surface_type == 'cone':
@@ -207,45 +278,31 @@ def build_second_order_surface(face):
     elif surface_type == 'torus':
         major_radius = face['scalar'][0]
         minor_radius = face['scalar'][1]
+    elif surface_type == 'sphere':
+        radius = face['scalar'][0]
     else:
         raise ValueError(f"Surface type {surface_type} not supported")
     
     occ_position = gp_Pnt(position[0], position[1], position[2])
-    occ_axis_dir = gp_Dir(axis[0], axis[1], axis[2])
+    occ_direction = gp_Dir(direction[0], direction[1], direction[2])
+    occ_XDirection = gp_Dir(XDirection[0], XDirection[1], XDirection[2])
+    # occ_YDirection = gp_Dir(YDirection[0], YDirection[1], YDirection[2])
     # 2. 创建定义圆柱位置和方向的坐标系
-    cylinder_ax3 = gp_Ax3(occ_position, occ_axis_dir)
+    cylinder_ax3 = gp_Ax3(occ_position, occ_direction, occ_XDirection)
     if surface_type == 'cylinder':
         occ_surface = gp_Cylinder(cylinder_ax3, radius)
     elif surface_type == 'cone':
         occ_surface = gp_Cone(cylinder_ax3, semi_angle, radius)
     elif surface_type == 'torus':
         occ_surface = gp_Torus(cylinder_ax3, major_radius, minor_radius)
-    # 4. 使用BRepBuilderAPI_MakeFace根据参数范围裁剪几何体，生成面
-    #    这是与C++ API最直接的对应
+    elif surface_type == 'sphere':
+        occ_surface = gp_Sphere(cylinder_ax3, radius)
+
     face_builder = BRepBuilderAPI_MakeFace(occ_surface, u_min, u_max, v_min, v_max)
     shape = face_builder.Face()
-    # return face_builder.Face()
-    # rotation_axis = np.array(face['rotation_axis'])
-    # rotation_angle = face['rotation_angle']
-    # occ_rotation_axis = gp_Dir(rotation_axis[0], rotation_axis[1], rotation_axis[2])
-    # occ_rotation_center = occ_position
-    # rotation_axis = gp_Ax1(occ_rotation_center, occ_rotation_axis)
-    # trsf = gp_Trsf()
-    # if surface_type == 'cylinder' or surface_type == 'cone':
-    #     trsf.SetRotation(rotation_axis, 0)
-    # elif surface_type == 'torus':
-    #     trsf.SetRotation(rotation_axis, rotation_angle)
-    # transformer = BRepBuilderAPI_Transform(face_builder.Shape(), trsf)
-    # # print(type(transformer.Shape()))
-    # shape = transformer.Shape()
+
     mesher = BRepMesh_IncrementalMesh(shape, 0.1, True, 0.2)
-    mesher.Perform() # 确保执行网格化
-
-    # if not mesher.IsDone():
-    #      print("警告: BRepMesh_IncrementalMesh 执行后报告未完成，网格可能无效。")
-
-    # --- 步骤 D: 提取网格数据 ---
-    # 从修复并网格化后的面中提取数据
+    mesher.Perform() 
     vertices, faces = extract_mesh_from_face(shape)
     vertices = np.array(vertices)
     faces = np.array(faces)
@@ -254,12 +311,17 @@ def build_second_order_surface(face):
 
 
 def build_plane_face(face):
-    position = np.array(face['surface_definition']['position'])
-    normal = np.array(face['surface_definition']['normal'])
-    u_min, u_max, v_min, v_max = face['parameter_range']
+    position = np.array(face['location'], dtype=np.float64)[0]
+    direction = np.array(face['direction'], dtype=np.float64)[0]
+    XDirection = np.array(face['direction'], dtype=np.float64)[1]
+
+
+    u_min, u_max, v_min, v_max = face['uv']
     occ_position = gp_Pnt(position[0], position[1], position[2])
-    occ_normal = gp_Dir(normal[0], normal[1], normal[2])
-    occ_plane = gp_Pln(occ_position, occ_normal)
+    occ_direction = gp_Dir(direction[0], direction[1], direction[2])
+    occ_XDirection = gp_Dir(XDirection[0], XDirection[1], XDirection[2])
+    occ_ax3 = gp_Ax3(occ_position, occ_direction, occ_XDirection)
+    occ_plane = gp_Pln(occ_ax3)
     face_builder = BRepBuilderAPI_MakeFace(occ_plane, u_min, u_max, v_min, v_max)
     shape = face_builder.Face()
     mesher = BRepMesh_IncrementalMesh(shape, 0.1, True, 0.2)
@@ -284,27 +346,21 @@ def visualize_json_interset(cad_data):
         surface_type = face['type']
         surface_index = face['idx'][0]
         print(f"Processing face {surface_type} with type {surface_index}")
-        if surface_type == 'Plane':
-            continue
+        if surface_type == 'plane':
+            # continue
             occ_face, vertices, faces = build_plane_face(face)
-        elif surface_type == 'cylinder' or surface_type == 'cone' or surface_type == 'torus':
+        elif surface_type == 'cylinder' or surface_type == 'cone' or surface_type == 'torus' or surface_type == 'sphere':
             occ_face, vertices, faces = build_second_order_surface(face)
         # elif surface_type == "Cone":
         #     face_builder = build_cone_face(face)
         # elif surface_type == 'torus':
         #     face_builder = build_torus_face(face)
-        elif surface_type == 'BSplineSurface':
-            continue
+        elif surface_type == 'bspline_surface':
+            # continue
             occ_face, vertices, faces = build_bspline_surface(face)
         else:
             continue
-        # if not face_builder.IsDone():
-        #     raise RuntimeError(f"BRepBuilderAPI_MakeFace {surface_type} {surface_index:03d} failed")
-
-        # final_face, vertices, faces = _build_and_mesh_face_robustly_from_topods(occ_face, linear_deflection=0.1, angular_deflection=0.2)
-        # vertices = np.array(vertices)
-        # faces = np.array(faces)
-        ps.register_surface_mesh(f"{surface_type}_face_{surface_index:03d}", vertices, faces)
+        ps.register_surface_mesh(f"{surface_index:03d}_{surface_type}", vertices, faces, transparency=0.7)
         all_faces[surface_index] = {
             'surface': occ_face,
             'vertices': vertices,
@@ -336,6 +392,7 @@ def visualize_json_interset(cad_data):
 if __name__ == "__main__":
     import sys
     data_path = sys.argv[1]
+    # data_path = r'F:\WORK\CAD\data\examples\056_002.json'
     # with open('Solid_reconstruction_data.json', 'r') as f:
     with open(data_path, 'r') as f:
         cad_data = json.load(f)
