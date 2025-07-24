@@ -393,26 +393,27 @@ class BRepDataProcessor:
                     ic(f'Too many faces in the solid: {len(list(solid.faces()))}')
                     raise ValueError("Too many faces in the solid.")
                 solid = solid.topods_shape()
-                bbox = Bnd_Box()
-                brepbndlib.Add(solid, bbox)
-                xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
-                max_dimension = max(xmax - xmin, ymax - ymin, zmax - zmin)
+                # bbox = Bnd_Box()
+                # brepbndlib.Add(solid, bbox)
+                # xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
+                # max_dimension = max(xmax - xmin, ymax - ymin, zmax - zmin)
                 # max_dimension = np.round(max_dimension*.5, 0) *2
                 # ic(f'Max dimension: {max_dimension}')
-                scale_factor = 2.0 / max_dimension
+                # scale_factor = 2.0 / max_dimension
+                # # ic(f'Scale factor: {scale_factor}')
+                # scale_factor = np.round(scale_factor * 500, 0) / 500
                 # ic(f'Scale factor: {scale_factor}')
-                scale_factor = np.round(scale_factor * 500, 0) / 500
-                ic(f'Scale factor: {scale_factor}')
-                center = gp_Pnt(np.round((xmin + xmax) / 2, 0), np.round((ymin + ymax) / 2, 0), np.round((zmin + zmax) / 2, 0))
-                ic(f'Center: {center.X()}, {center.Y()}, {center.Z()}')
-                trsf = gp_Trsf()
-                trsf.SetScale(center, scale_factor)
-                apply_transform = BRepBuilderAPI_Transform(trsf)
-                apply_transform.Perform(solid, True)
-                solid = apply_transform.Modified(solid)
-                assert solid.Size() == 1
-                solid = solid.First()
+                # center = gp_Pnt(np.round((xmin + xmax) / 2, 0), np.round((ymin + ymax) / 2, 0), np.round((zmin + zmax) / 2, 0))
+                # ic(f'Center: {center.X()}, {center.Y()}, {center.Z()}')
+                # trsf = gp_Trsf()
+                # trsf.SetScale(center, scale_factor)
+                # apply_transform = BRepBuilderAPI_Transform(trsf)
+                # apply_transform.Perform(solid, True)
+                # solid = apply_transform.Modified(solid)
+                # assert solid.Size() == 1
+                # solid = solid.First()
                 solid = Solid(solid)
+                solid = solid.scale_to_unit_box()
 
                 try:
                     graph = face_adjacency(solid, self_loops=True)
@@ -463,6 +464,8 @@ class BRepDataProcessor:
                         YDirection = np.round(surface_data['pos']['YDirection'], 7).tolist()
                         node_feature['direction'] = [direction, XDirection, YDirection]
 
+                    orient = face.topods_shape().Orientation()
+                    node_feature['orientation'] = 'Forward' if orient == 0 else 'Reversed'
                     data.append(node_feature)
             except Exception as e:
                 ic(f'Error processing solid {__idx:02d}: {e}')

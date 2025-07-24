@@ -16,7 +16,7 @@ from OCC.Core.TopLoc import TopLoc_Location
 from OCC.Core.Poly import Poly_Triangulation
 from OCC.Core.TColgp import TColgp_Array1OfPnt
 from OCC.Core.TColStd import TColStd_Array1OfReal, TColStd_Array1OfInteger, TColStd_Array2OfReal
-from OCC.Core.GeomAPI import GeomAPI_ProjectPointOnCurve
+from OCC.Core.GeomAPI import GeomAPI_ProjectPointOnCurve, GeomAPI_IntSS
 from OCC.Core.BRep import BRep_Tool
 from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
 from OCC.Display.SimpleGui import init_display
@@ -269,7 +269,7 @@ def build_second_order_surface(face):
         v_max = v_max - v_min
         v_min = 0
 
-    print(position, direction, u_min, u_max, v_min, v_max)
+    # print(position, direction, u_min, u_max, v_min, v_max)
     if surface_type == 'cylinder':
         radius = face['scalar'][0]
     elif surface_type == 'cone':
@@ -360,7 +360,7 @@ def visualize_json_interset(cad_data):
             occ_face, vertices, faces = build_bspline_surface(face)
         else:
             continue
-        ps.register_surface_mesh(f"{surface_index:03d}_{surface_type}", vertices, faces)
+        ps.register_surface_mesh(f"{surface_index:03d}_{surface_type}", vertices, faces, transparency=0.7)
         all_faces[surface_index] = {
             'surface': occ_face,
             'vertices': vertices,
@@ -391,8 +391,8 @@ def visualize_json_interset(cad_data):
 
 if __name__ == "__main__":
     import sys
-    # data_path = sys.argv[1]
-    data_path = r'F:\WORK\CAD\data\examples\032_000.json'
+    data_path = sys.argv[1]
+    # data_path = r'F:\WORK\CAD\data\examples\056_002.json'
     # with open('Solid_reconstruction_data.json', 'r') as f:
     with open(data_path, 'r') as f:
         cad_data = json.load(f)
