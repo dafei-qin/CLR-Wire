@@ -18,6 +18,7 @@ from OCC.Core.TColgp import TColgp_Array1OfPnt
 from OCC.Core.TColStd import TColStd_Array1OfReal, TColStd_Array1OfInteger, TColStd_Array2OfReal
 from OCC.Core.GeomAPI import GeomAPI_ProjectPointOnCurve, GeomAPI_IntSS
 from OCC.Core.BRep import BRep_Tool
+from OCC.Core.BRepTools import breptools_UVBounds
 from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
 from OCC.Display.SimpleGui import init_display
 from OCC.Core.BRepLib import breplib
@@ -331,7 +332,7 @@ def build_plane_face(face):
     vertices, faces = extract_mesh_from_face(shape)
     return shape, np.array(vertices), np.array(faces)
 
-def visualize_json_interset(cad_data):
+def visualize_json_interset(cad_data, plot=True):
 
     # vertex_positions = np.array(cad_data.get('vertices', []))
     # edges_list = cad_data.get('edges', [])
@@ -339,8 +340,10 @@ def visualize_json_interset(cad_data):
     # adjacency_matrix = build_adjacency_matrix(faces_list)
     faces_list = cad_data
     all_faces = {}
-
-    ps.init()
+    if plot:
+        ps.init()
+    else:
+        pass
 
     for face in faces_list:
         surface_type = face['type']
@@ -360,7 +363,9 @@ def visualize_json_interset(cad_data):
             occ_face, vertices, faces = build_bspline_surface(face)
         else:
             continue
-        ps.register_surface_mesh(f"{surface_index:03d}_{surface_type}", vertices, faces, transparency=0.7)
+        if plot:    
+            ps.register_surface_mesh(f"{surface_index:03d}_{surface_type}", vertices, faces, transparency=0.7)
+
         all_faces[surface_index] = {
             'surface': occ_face,
             'vertices': vertices,
@@ -384,8 +389,9 @@ def visualize_json_interset(cad_data):
     #         ps.register_surface_mesh(f"intersection_face_{face_index:03d}", face['vertices'], face['faces'])
 
 
-    print(ps.get_bounding_box())
-    ps.show()
+    if plot:
+        print(ps.get_bounding_box())
+        ps.show()
     return all_faces
 
 
@@ -398,7 +404,8 @@ if __name__ == "__main__":
     with open(data_path, 'r') as f:
         cad_data = json.load(f)
 
-    visualize_json_interset(cad_data)
+    all_faces = visualize_json_interset(cad_data, plot=False)
+    print()
 
 
 
