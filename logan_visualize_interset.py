@@ -386,6 +386,7 @@ def visualize_json_interset(cad_data):
 
     print(ps.get_bounding_box())
     ps.show()
+    return all_faces
 
 
 
