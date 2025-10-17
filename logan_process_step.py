@@ -3,8 +3,10 @@ import os
 import sys
 import tempfile
 import shutil
-from multiprocessing import Pool, cpu_count
+import multiprocessing as mp
+from multiprocessing import cpu_count
 from functools import partial
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 
 from logan_process_brep_data import BRepDataProcessor
@@ -28,19 +30,35 @@ def compute_output_path(input_root: str, output_root: str, step_file: str) -> st
     return os.path.join(step_output_dir, "index.json")
 
 
-def process_one(step_file: str, input_root: str, output_root: str):
+def _child_process(step_file: str, input_root: str, output_root: str, result_queue: mp.Queue):
     try:
         output_path = compute_output_path(input_root, output_root, step_file)
         if os.path.exists(output_path):
-            return {"ok": 0, "step": step_file, "error": None}
+            result_queue.put({"ok": 0, "step": step_file, "error": None})
+            return
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_step_path = os.path.join(tmp_dir, os.path.basename(step_file))
             shutil.copy2(step_file, tmp_step_path)
-            # API expects a directory containing exactly one STEP file
             status = BRepDataProcessor().tokenize_and_save_cad_data([tmp_dir, output_path])
-            return {"ok": 1 if status else 0, "step": step_file, "error": None}
+            result_queue.put({"ok": 1 if status else 0, "step": step_file, "error": None})
     except Exception as e:
-        return {"ok": 0, "step": step_file, "error": str(e)}
+        result_queue.put({"ok": 0, "step": step_file, "error": str(e)})
+
+
+def process_one(step_file: str, input_root: str, output_root: str, timeout_s: int = 50):
+    result_queue: mp.Queue = mp.Queue()
+    proc = mp.Process(target=_child_process, args=(step_file, input_root, output_root, result_queue))
+    proc.start()
+    proc.join(timeout=timeout_s)
+    if proc.is_alive():
+        proc.terminate()
+        proc.join()
+        return {"ok": 0, "step": step_file, "error": "timeout"}
+    try:
+        result = result_queue.get_nowait()
+        return result
+    except Exception:
+        return {"ok": 0, "step": step_file, "error": "unknown_error"}
 
 
 def main():
@@ -65,20 +83,20 @@ def main():
     num_converted = 0
     skipped = []
 
-    if args.workers <= 1:
-        for sf in tqdm(step_files, desc="Processing", unit="file"):
-            result = worker_fn(sf)
+    # Use threads to orchestrate per-file subprocess with timeout
+    with ThreadPoolExecutor(max_workers=args.workers) as executor:
+        future_to_step = {executor.submit(worker_fn, sf): sf for sf in step_files}
+        for future in tqdm(as_completed(future_to_step), total=total, desc="Processing", unit="file"):
+            try:
+                result = future.result()
+            except Exception as e:
+                sf = future_to_step[future]
+                skipped.append((sf, str(e)))
+                continue
             if result["ok"]:
                 num_converted += 1
             elif result.get("error"):
                 skipped.append((result["step"], result["error"]))
-    else:
-        with Pool(processes=args.workers) as pool:
-            for result in tqdm(pool.imap_unordered(worker_fn, step_files), total=total, desc="Processing", unit="file"):
-                if result["ok"]:
-                    num_converted += 1
-                elif result.get("error"):
-                    skipped.append((result["step"], result["error"]))
 
     print(f"Done. Converted {num_converted}/{total} files ({100.0 * num_converted / total:.2f}%).")
     if skipped:
