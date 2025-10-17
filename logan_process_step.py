@@ -55,7 +55,7 @@ def _child_process(step_file: str, input_root: str, output_root: str, result_que
         result_queue.put({"ok": 0, "step": step_file, "error": str(e)})
 
 
-def process_one(step_file: str, input_root: str, output_root: str, timeout_s: int = 50):
+def process_one(step_file: str, input_root: str, output_root: str, timeout_s: int = 120):
     result_queue: mp.Queue = mp.Queue()
     proc = mp.Process(target=_child_process, args=(step_file, input_root, output_root, result_queue))
     proc.start()
