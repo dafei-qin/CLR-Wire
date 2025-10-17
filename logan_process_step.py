@@ -28,15 +28,19 @@ def compute_output_path(input_root: str, output_root: str, step_file: str) -> st
     return os.path.join(step_output_dir, "index.json")
 
 
-def process_one(step_file: str, input_root: str, output_root: str) -> int:
-    output_path = compute_output_path(input_root, output_root, step_file)
-    if os.path.exists(output_path):
-        return 0
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp_step_path = os.path.join(tmp_dir, os.path.basename(step_file))
-        shutil.copy2(step_file, tmp_step_path)
-        # API expects a directory containing exactly one STEP file
-        return BRepDataProcessor().tokenize_and_save_cad_data([tmp_dir, output_path])
+def process_one(step_file: str, input_root: str, output_root: str):
+    try:
+        output_path = compute_output_path(input_root, output_root, step_file)
+        if os.path.exists(output_path):
+            return {"ok": 0, "step": step_file, "error": None}
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_step_path = os.path.join(tmp_dir, os.path.basename(step_file))
+            shutil.copy2(step_file, tmp_step_path)
+            # API expects a directory containing exactly one STEP file
+            status = BRepDataProcessor().tokenize_and_save_cad_data([tmp_dir, output_path])
+            return {"ok": 1 if status else 0, "step": step_file, "error": None}
+    except Exception as e:
+        return {"ok": 0, "step": step_file, "error": str(e)}
 
 
 def main():
@@ -59,16 +63,28 @@ def main():
 
     total = len(step_files)
     num_converted = 0
+    skipped = []
 
     if args.workers <= 1:
         for sf in tqdm(step_files, desc="Processing", unit="file"):
-            num_converted += 1 if worker_fn(sf) else 0
+            result = worker_fn(sf)
+            if result["ok"]:
+                num_converted += 1
+            elif result.get("error"):
+                skipped.append((result["step"], result["error"]))
     else:
         with Pool(processes=args.workers) as pool:
             for result in tqdm(pool.imap_unordered(worker_fn, step_files), total=total, desc="Processing", unit="file"):
-                num_converted += 1 if result else 0
+                if result["ok"]:
+                    num_converted += 1
+                elif result.get("error"):
+                    skipped.append((result["step"], result["error"]))
 
     print(f"Done. Converted {num_converted}/{total} files ({100.0 * num_converted / total:.2f}%).")
+    if skipped:
+        print(f"Skipped due to errors: {len(skipped)}")
+        for path, err in skipped:
+            print(f" - {path}: {err}")
     return 0
 
 
