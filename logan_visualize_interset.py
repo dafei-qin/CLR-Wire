@@ -12,7 +12,7 @@ from OCC.Core.Geom import Geom_Circle, Geom_Line, Geom_BSplineCurve, Geom_Trimme
 from OCC.Core.GC import GC_MakeArcOfCircle, GC_MakeSegment, GC_MakeArcOfEllipse, GC_MakeArcOfHyperbola, GC_MakeArcOfParabola
 from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeWire, BRepBuilderAPI_MakeFace ,BRepBuilderAPI_DisconnectedWire, BRepBuilderAPI_EmptyWire, BRepBuilderAPI_NonManifoldWire, BRepBuilderAPI_WireDone, BRepBuilderAPI_Transform
 from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_WIRE
-from OCC.Core.TopoDS import TopoDS_Edge
+from OCC.Core.TopoDS import TopoDS_Edge, TopoDS_Compound, topods_Face
 from OCC.Core.TopLoc import TopLoc_Location
 from OCC.Core.TopExp import TopExp_Explorer
 from OCC.Core.Poly import Poly_Triangulation
@@ -20,17 +20,18 @@ from OCC.Core.TColgp import TColgp_Array1OfPnt
 from OCC.Core.TColStd import TColStd_Array1OfReal, TColStd_Array1OfInteger, TColStd_Array2OfReal
 from OCC.Core.GeomAPI import GeomAPI_ProjectPointOnCurve, GeomAPI_IntSS
 from OCC.Core.GeomInt import GeomInt_IntSS 
-from OCC.Core.BRep import BRep_Tool
+from OCC.Core.BRep import BRep_Tool, BRep_Builder
 from OCC.Core.BRepTools import breptools_UVBounds
 from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
 from OCC.Core.BRepAlgo import BRepAlgo_Section
+from OCC.Core.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Section
 from OCC.Display.SimpleGui import init_display
 from OCC.Core.BRepLib import breplib
-from OCC.Core.ShapeFix import ShapeFix_Shape, ShapeFix_Wire, ShapeFix_Edge
+from OCC.Core.ShapeFix import ShapeFix_Shape, ShapeFix_Wire, ShapeFix_Edge, ShapeFix_ShapeTolerance
 from OCC.Core.ShapeExtend import ShapeExtend_DONE1
 from OCC.Core.BRepCheck import BRepCheck_Analyzer
 from OCC.Core.BRepOffsetAPI import BRepOffsetAPI_ThruSections
-from OCC.Core.ShapeAnalysis import ShapeAnalysis_Wire
+from OCC.Core.ShapeAnalysis import ShapeAnalysis_Wire, ShapeAnalysis_FreeBounds
 from OCC.Core.TopAbs import TopAbs_Orientation
 from OCC.Core.GeomAbs import GeomAbs_CurveType, GeomAbs_SurfaceType
 import sys
@@ -43,6 +44,22 @@ import polyscope.imgui as psim
 
 # from freecad_visualize_json_pythonocc import _build_and_mesh_face_robustly_from_topods, extract_mesh_from_face
 from itertools import combinations
+
+
+def Compound(faces):
+    # Convert list of faces to a compound
+    compound = TopoDS_Compound()
+    builder = BRep_Builder()
+    builder.MakeCompound(compound)
+
+    for face in faces:
+        explorer = TopExp_Explorer(face, TopAbs_FACE)
+        while explorer.More():
+            face = topods_Face(explorer.Current())
+            builder.Add(compound, face)
+            explorer.Next()
+
+    return compound
 
 def sample_line(line, num_points=32):
     start = line.FirstParameter()
@@ -110,7 +127,7 @@ def extract_mesh_from_face(face):
 
     return vertices, faces
 
-def build_plane_face(face):
+def build_plane_face(face, tol=1e-2):
     position = np.array(face['location'], dtype=np.float64)[0]
     direction = np.array(face['direction'], dtype=np.float64)[0]
     XDirection = np.array(face['direction'], dtype=np.float64)[1]
@@ -124,7 +141,8 @@ def build_plane_face(face):
     occ_plane = gp_Pln(occ_ax3)
     face_builder = BRepBuilderAPI_MakeFace(occ_plane, u_min, u_max, v_min, v_max)
     shape = face_builder.Face()
-
+    tol_fixer = ShapeFix_ShapeTolerance()
+    tol_fixer.SetTolerance(shape, tol)
     if orientation == 'Reversed':
         shape = shape.Reversed()
 
@@ -137,7 +155,7 @@ def build_plane_face(face):
 
 
 
-def build_second_order_surface(face):
+def build_second_order_surface(face, tol=1e-2):
     surface_type = face['type']
     parameter_range = face['uv']
     u_min, u_max, v_min, v_max = parameter_range
@@ -182,7 +200,8 @@ def build_second_order_surface(face):
 
     face_builder = BRepBuilderAPI_MakeFace(occ_surface, u_min, u_max, v_min, v_max)
     shape = face_builder.Face()
-
+    tol_fixer = ShapeFix_ShapeTolerance()
+    tol_fixer.SetTolerance(shape, tol)
     if orientation == 'Reversed':
         #shape = Face(shape).reversed_face().topods_shape()
         shape = shape.Reversed()
@@ -196,7 +215,7 @@ def build_second_order_surface(face):
     return shape, vertices, faces
 
 
-def build_bspline_surface(data: dict) -> Geom_BSplineSurface:
+def build_bspline_surface(data: dict, tol=1e-1) -> Geom_BSplineSurface:
     """
     Reconstructs a Geom_BSplineSurface from a dictionary of its properties.
 
@@ -270,8 +289,10 @@ def build_bspline_surface(data: dict) -> Geom_BSplineSurface:
     )
 
 
-    face_builder = BRepBuilderAPI_MakeFace(occ_bspline_surface, 1e-6)
+    face_builder = BRepBuilderAPI_MakeFace(occ_bspline_surface, 1e-7)
     shape = face_builder.Face()
+    tol_fixer = ShapeFix_ShapeTolerance()
+    tol_fixer.SetTolerance(shape, tol)
     mesher = BRepMesh_IncrementalMesh(shape, 0.1, True, 0.2)
     mesher.Perform() # 确保执行网格化
 
@@ -339,7 +360,7 @@ def build_adjacency_matrix(faces):
     return adjacency_matrix
 
 
-def visualize_json_interset(cad_data, plot=True):
+def visualize_json_interset(cad_data, plot=True, tol=1e-2):
 
 
     faces_list = cad_data
@@ -355,12 +376,12 @@ def visualize_json_interset(cad_data, plot=True):
         # print(f"Processing face {surface_type} with type {surface_index}")
         if surface_type == 'plane':
             # continue
-            occ_face, vertices, faces = build_plane_face(face)
+            occ_face, vertices, faces = build_plane_face(face, tol=tol)
         elif surface_type == 'cylinder' or surface_type == 'cone' or surface_type == 'torus' or surface_type == 'sphere':
-            occ_face, vertices, faces = build_second_order_surface(face)
+            occ_face, vertices, faces = build_second_order_surface(face, tol=tol)
         elif surface_type == 'bspline_surface':
             # continue
-            occ_face, vertices, faces = build_bspline_surface(face)
+            occ_face, vertices, faces = build_bspline_surface(face, tol=tol * 10)
         else:
             continue
         if plot:    
@@ -436,13 +457,17 @@ if __name__ == "__main__":
     # with open('Solid_reconstruction_data.json', 'r') as f:
     with open(data_path, 'r') as f:
         cad_data = json.load(f)
-
-    all_faces = visualize_json_interset(cad_data, plot=True)
+    global_tol = 1e-5 # A good value
+    all_faces = visualize_json_interset(cad_data, plot=True, tol=global_tol)
 
 
     ps.init()
+    all_edges = {}
+    all_ps_groups = []
     for idx_m in range(len(all_faces)):
-        all_edges = []
+        all_edges[idx_m] = []
+        new_group = ps.create_group(f"face_{idx_m:03d}_edges")
+        all_ps_groups.append(new_group)
         for idx_n in range(len(all_faces)):
             # if idx_m != 21 and idx_m != 22:
             #     continue
@@ -454,12 +479,12 @@ if __name__ == "__main__":
             print('\n', f'Intersecting face with index: {idx_m:03d}-{idx_n:03d}')
             face_m = all_faces[idx_m]['surface']
             face_n = all_faces[idx_n]['surface']
-            face_m = Face(face_m)
-            # face_m.scale(np.array([1.05, 1.05, 1.05]))
-            face_m = face_m.topods_shape()
-            face_n = Face(face_n)
-            # face_n.scale(np.array([1.05, 1.05, 1.05]))
-            face_n = face_n.topods_shape()
+            # face_m = Face(face_m)
+            # # face_m.scale(np.array([1.05, 1.05, 1.05]))
+            # face_m = face_m.topods_shape()
+            # face_n = Face(face_n)
+            # # face_n.scale(np.array([1.05, 1.05, 1.05]))
+            # face_n = face_n.topods_shape()
 
             geom_face_m = BRep_Tool.Surface(face_m)
             geom_face_n = BRep_Tool.Surface(face_n)
@@ -508,7 +533,7 @@ if __name__ == "__main__":
             #         # print(i)
 
     # Section Intersector
-            section = BRepAlgo_Section(face_m, face_n)
+            section = BRepAlgoAPI_Section(face_m, face_n)
             section_shape = section.Shape()
             # print(f'Section shape: ', type(section_shape))
             # vertices, faces = extract_mesh_from_face(section_shape)
@@ -519,14 +544,19 @@ if __name__ == "__main__":
                 print(type(exp.Current()))
                 # edge = TopoDS_Edge(exp.Current())
                 edges.append(exp.Current())
-                all_edges.append(exp.Current())
+                all_edges[idx_m].append(exp.Current())
                 exp.Next()
             for idx_line, edge in enumerate(edges):
                 a_curve = BRepAdaptor_Curve(edge)
                 line_type = a_curve.GetType()
                 points, edges = sample_line(a_curve)
-                ps.register_curve_network(f"{idx_m:03d}_{idx_n:03d}_line_{idx_line:03d}_{GeomAbs_CurveType(line_type).name}", points, edges, radius=0.001)
+                psEdge = ps.register_curve_network(f"{idx_m:03d}_{idx_n:03d}_line_{idx_line:03d}_{GeomAbs_CurveType(line_type).name}", points, edges, radius=0.001)
+                psEdge.add_to_group(new_group)
+        
 
+        new_group.set_enabled(False)
+        new_group.set_hide_descendants_from_structure_lists(True)
+        new_group.set_show_child_details(False)
             # faces = []
             # exp = TopExp_Explorer(section_shape, TopAbs_FACE)
             # while exp.More():
@@ -537,12 +567,44 @@ if __name__ == "__main__":
             #     vertices, faces = extract_mesh_from_face(face)
             #     ps.register_surface_mesh(f"{idx_m:03d}_{idx_n:03d}_section_{idx_face:03d}", vertices, faces, transparency=0.7)
             # # ps.register_surface_mesh(f"{idx_m:03d}_{idx_n:03d}_section", vertices, faces, transparency=0.7)
-        print(f'Number of edges: ', len(all_edges))
-        wires = edges_to_wires(face_m, all_edges)
-        outer_wire, inner_wires = classify_wires(face_m, wires)
-        print(f'Number of inner wires: ', len(inner_wires))
-        print(f'Number of outer wire: ', len(outer_wire))
+        # print(f'Number of edges: ', len(all_edges))
+        # wires = edges_to_wires(face_m, all_edges)
+        # outer_wire, inner_wires = classify_wires(face_m, wires)
+        # print(f'Number of inner wires: ', len(inner_wires))
+        # print(f'Number of outer wire: ', len(outer_wire))
 
+    all_ps_wire_groups = []
+    for idx_m in range(len(all_faces)):
+        new_group = ps.create_group(f"face_{idx_m:03d}_wires")
+        all_ps_wire_groups.append(new_group)
+        edges = all_edges[idx_m]
+        face =  all_faces[idx_m]['surface']
+        operator_fb = ShapeAnalysis_FreeBounds(Compound([face]), global_tol, False, False)
+        # edge_seq = TopTools_HSequenceOfShape()
+        # wires_seq = TopTools_HSequenceOfShape()
+        # for edge in edges:
+        #     edge_seq.Append(edge)
+        # operator_fb.ConnectEdgesToWires(edge_seq, global_tol, False, wires_seq)
+        # closed_wires = operator_fb.GetClosedWires()
+        # open_wires = operator_fb.GetOpenWires()
+        wires = edges_to_wires(face, edges, 1e-6)
+        for wire_idx, wire in enumerate(wires):
+            wire = wire.Topods_Shape()
+            psWire = ps.register_curve_network(f"wire_{wire_idx:03d}", wire, radius=0.001)
+            psWire.add_to_group(new_group)
+        # print(f'Number of closed wires: ', closed_wires.Length())
+        # print(f'Number of open wires: ', open_wires.Length())
+        # for wire_idx, wire in enumerate(closed_wires):
+        #     wire = wire.Topods_Shape()
+        #     psWire = ps.register_curve_network(f"closed_wire_{wire_idx:03d}", wire, radius=0.001)
+        #     psWire.add_to_group(new_group)
+        # for wire_idx, wire in enumerate(open_wires):
+        #     wire = wire.Topods_Shape()
+        #     psWire = ps.register_curve_network(f"open_wire_{wire_idx:03d}", wire, radius=0.001)
+        #     psWire.add_to_group(new_group)
+        new_group.set_enabled(True)
+        new_group.set_hide_descendants_from_structure_lists(True)
+        new_group.set_show_child_details(False)
     ps.show()
 
 

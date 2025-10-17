@@ -11,18 +11,19 @@ from occwl.solid import Solid
 from occwl.uvgrid import uvgrid, ugrid
 from occwl.graph import face_adjacency
 from occwl.io import load_step, save_step
+from occwl.compound import Compound
 from OCC.Core.BRepBndLib import brepbndlib
 from OCC.Core.Bnd import Bnd_Box
 import numpy as np
 from OCC.Core.TColStd import TColStd_Array1OfReal, TColStd_Array1OfInteger
 from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_Transform
-
+import occwl
 from tqdm import tqdm
 import os, json
 from icecream import ic
 from multiprocessing.pool import Pool
 import time
-# ic.disable()
+ic.disable()
 # from utils import load_step_with_timeout, load_abc_step, load_furniture_step
 
 '''
@@ -379,12 +380,15 @@ class BRepDataProcessor:
         # with zlw.Timer("Load step"):
         ic('Loading step file...')
         t = time.time()
-        solids = load_step(step_path)
+        # solids = load_step(step_path)
+        solids, attributes = Compound.load_step_with_attributes(step_path)
+        solids = list(solids.solids())
         ic(f'Finished loading step file: {time.time() - t:.2f}s')
         if solids is None or len(solids) < 1:
             raise ValueError("No solids found in the step file")
         # for this version, assert step is single solid.
         datas = []
+
         for __idx, solid in enumerate(solids):
             try:
                 ic(f'Processing solid {__idx:02d}...')
@@ -500,7 +504,7 @@ class BRepDataProcessor:
             #         edge_feature["points"] = None
             #     data.append(edge_feature)
             datas.append(data)
-        return datas
+        return datas, attributes
 
     def tokenize_and_save_cad_data(self, path):
         step_path, output_path = path
@@ -508,8 +512,13 @@ class BRepDataProcessor:
             return 0
         try:
             # with zlw.Timer("Process"):
-            datas = self.tokenize_cad_data(step_path)
+            datas, attributes = self.tokenize_cad_data(step_path)
+            solid_attributes = []
+            for key in attributes.keys():
+                if type(key) == occwl.solid.Solid:
+                    solid_attributes.append(attributes[key])
             for i, data in enumerate(datas):
+                # with open(output_path.replace('.json', f'_{i:03d}_{solid_attributes[i]["name"]}.json'), 'w', encoding='utf-8') as f: # Readable export
                 with open(output_path.replace('.json', f'_{i:03d}.json'), 'w', encoding='utf-8') as f: # Readable export
                     json.dump(data, f, ensure_ascii=False, indent=2)
 

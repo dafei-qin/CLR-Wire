@@ -9,6 +9,7 @@ import numpy as np
 
 from OCC.Core.gp import gp_Pnt, gp_Dir, gp_Ax2, gp_Vec, gp_Circ, gp_Lin, gp_Ax1, gp_Ax3, gp_Elips, gp_Hypr, gp_Parab, gp_Pln, gp_Cylinder, gp_Cone, gp_Sphere, gp_Torus, gp_Trsf
 from OCC.Core.Geom import Geom_Circle, Geom_Line, Geom_BSplineCurve, Geom_TrimmedCurve, Geom_Ellipse, Geom_Hyperbola, Geom_Parabola, Geom_Plane, Geom_CylindricalSurface, Geom_ConicalSurface, Geom_SphericalSurface
+from OCC.Core.Geom2d import Geom2d_Curve
 from OCC.Core.GC import GC_MakeArcOfCircle, GC_MakeSegment, GC_MakeArcOfEllipse, GC_MakeArcOfHyperbola, GC_MakeArcOfParabola
 from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeWire, BRepBuilderAPI_MakeFace ,BRepBuilderAPI_DisconnectedWire, BRepBuilderAPI_EmptyWire, BRepBuilderAPI_NonManifoldWire, BRepBuilderAPI_WireDone, BRepBuilderAPI_Transform
 from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_WIRE
@@ -36,8 +37,9 @@ from OCC.Core.TopAbs import TopAbs_Orientation
 from OCC.Core.GeomAbs import GeomAbs_CurveType, GeomAbs_SurfaceType
 import sys
 from OCC.Core.TopOpeBRep import TopOpeBRep_FacesIntersector
-from OCC.Core.BRepAdaptor import BRepAdaptor_Curve
-
+from OCC.Core.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
+from OCC.Core.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Section
+from OCC.Core.ShapeConstruct import ShapeConstruct_ProjectCurveOnSurface
 
 import FreeCAD as App
 
@@ -372,26 +374,69 @@ def load_json_to_faces(cad_data):
 
 
 
-entrys = json.load(open(r"F:\WORK\CAD\CLR-Wire\assets\examples\00000056\out_005.json", "r"))
+entrys = json.load(open(r"F:\WORK\CAD\CLR-Wire\assets\examples\00000084\out_000.json", "r"))
 # entrys = [e for e in entrys if e["type"] != "bspline_surface"]
 all_faces = load_json_to_faces(entrys)
-all_faces_freecad = []
-all_faces_show = []
 
 
-for face_index in all_faces.keys():
-    if face_index  not in [11, 12, 15, 21]:
-        continue
-    face = all_faces[face_index]
+
+
+all_edges = {}
+
+for idx_m in range(len(all_faces)):
+    # if idx_m != 8:
+    #     continue
+    all_edges[idx_m] = []
+
+    face = all_faces[idx_m]
+    # geom_face = BRepAdaptor_Surface(face['surface'])
     print(type(face['surface']))
     freecad_face = Part.__fromPythonOCC__(face['surface'])
-    freecad_face_show = Part.show(freecad_face, f"face_{face_index:03d}")
-    all_faces_freecad.append(freecad_face)
-    all_faces_show.append(freecad_face_show)
+    freecad_face_show = Part.show(freecad_face, f"face_{idx_m:03d}")
+
+    face_m = all_faces[idx_m]['surface']
+    geom_face_m = BRep_Tool.Surface(face_m)
+
+    projector = ShapeConstruct_ProjectCurveOnSurface()
+    projector.Init(geom_face_m, 1e-4)
+
+    for idx_n in range(len(all_faces)):
+        print('\n', f'Intersecting face with index: {idx_m:03d}-{idx_n:03d}')
+        face_n = all_faces[idx_n]['surface']
+
+        geom_face_n = BRep_Tool.Surface(face_n)
+
+# Section Intersector
+        section = BRepAlgoAPI_Section(face_m, face_n)
+        section.ComputePCurveOn1(True)
+        section_shape = section.Shape()
+        # print(f'Section shape: ', type(section_shape))
+        # vertices, faces = extract_mesh_from_face(section_shape)
 
 
-# for face_id, entry in enumerate(entrys):
-#     face = json_to_face(entry)
-#     all_faces.append(face)
-#     face_show = Part.show(face, f"face_{face_id:03d}")
-#     all_faces_show.append(face_show)
+        edges = []
+        exp = TopExp_Explorer(section_shape, TopAbs_EDGE)
+        while exp.More():
+            print(type(exp.Current()))
+            # edge = TopoDS_Edge(exp.Current())
+            edges.append(exp.Current())
+            all_edges[idx_m].append(exp.Current())
+            exp.Next()
+
+        for edge_idx, edge in enumerate(edges):
+            # geom_edge = BRep_Tool.Curve(edge)
+            # edge_2d = Geom2d_Curve()
+            # projector.Perform(geom_edge, 0, 1, edge_2d)
+            freecad_edge = Part.__fromPythonOCC__(edge)
+            freecad_edge_show = Part.show(freecad_edge, f"edge_{idx_m:03d}_{idx_n:03d}_edge_{edge_idx:03d}")
+
+        # for idx_line, edge in enumerate(edges):
+        #     a_curve = BRepAdaptor_Curve(edge)
+        #     line_type = a_curve.GetType()
+        #     # points, edges = sample_line(a_curve)
+        #     # psEdge = ps.register_curve_network(f"{idx_m:03d}_{idx_n:03d}_line_{idx_line:03d}_{GeomAbs_CurveType(line_type).name}", points, edges, radius=0.001)
+        #     # psEdge.add_to_group(new_group)
+    
+
+
+
