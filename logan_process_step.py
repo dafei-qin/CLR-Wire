@@ -30,9 +30,19 @@ def compute_output_path(input_root: str, output_root: str, step_file: str) -> st
     return os.path.join(step_output_dir, "index.json")
 
 
+def output_dir_exists(input_root: str, output_root: str, step_file: str) -> bool:
+    # The target directory is the parent of the output seed file
+    candidate = compute_output_path(input_root, output_root, step_file)
+    target_dir = os.path.dirname(candidate)
+    return os.path.isdir(target_dir)
+
+
 def _child_process(step_file: str, input_root: str, output_root: str, result_queue: mp.Queue):
     try:
         output_path = compute_output_path(input_root, output_root, step_file)
+        if output_dir_exists(input_root, output_root, step_file):
+            result_queue.put({"ok": 0, "step": step_file, "error": None})
+            return
         if os.path.exists(output_path):
             result_queue.put({"ok": 0, "step": step_file, "error": None})
             return
