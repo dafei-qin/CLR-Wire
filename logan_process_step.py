@@ -5,6 +5,7 @@ import tempfile
 import shutil
 from multiprocessing import Pool, cpu_count
 from functools import partial
+from tqdm import tqdm
 
 from logan_process_brep_data import BRepDataProcessor
 
@@ -48,6 +49,7 @@ def main():
     input_root = os.path.abspath(args.input)
     output_root = os.path.abspath(args.output)
 
+    # Discover all candidates first
     step_files = list(discover_step_files(input_root))
     if not step_files:
         print("No .step files found.")
@@ -55,14 +57,17 @@ def main():
 
     worker_fn = partial(process_one, input_root=input_root, output_root=output_root)
 
+    total = len(step_files)
+    num_converted = 0
+
     if args.workers <= 1:
-        results = [worker_fn(sf) for sf in step_files]
+        for sf in tqdm(step_files, desc="Processing", unit="file"):
+            num_converted += 1 if worker_fn(sf) else 0
     else:
         with Pool(processes=args.workers) as pool:
-            results = pool.map(worker_fn, step_files)
+            for result in tqdm(pool.imap_unordered(worker_fn, step_files), total=total, desc="Processing", unit="file"):
+                num_converted += 1 if result else 0
 
-    num_converted = sum(1 for r in results if r)
-    total = len(step_files)
     print(f"Done. Converted {num_converted}/{total} files ({100.0 * num_converted / total:.2f}%).")
     return 0
 
