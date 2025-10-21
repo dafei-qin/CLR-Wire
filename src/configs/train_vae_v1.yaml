@@ -39,3 +39,9 @@ model:
     param_raw_dim: [10, 11, 12, 12, 11]
     checkpoint_folder: checkpoints/vae_v1_debug
     checkpoint_file_name: model.pt 0
+
+
+loss:
+    recon_weight: 1.0
+    cls_weight: 1.0
+    kl_weight: 1e-2

@@ -39,6 +39,9 @@ class Trainer_vae_v1(BaseTrainer):
         val_every_step: int = 1000,
         val_num_batches: int = 10,
         accelerator_kwargs: dict = dict(),
+        loss_recon_weight: float = 1.0,
+        loss_cls_weight: float = 1.0,
+        loss_kl_weight: float = 1.0,
         **kwargs
     ):
         super().__init__(
@@ -71,6 +74,9 @@ class Trainer_vae_v1(BaseTrainer):
         
         self.loss_cls = nn.CrossEntropyLoss()
         self.loss_recon = nn.MSELoss()
+        self.loss_recon_weight = loss_recon_weight
+        self.loss_cls_weight = loss_cls_weight
+        self.loss_kl_weight = loss_kl_weight
 
     def compute_accuracy(self, logits, labels):
         predictions = torch.argmax(logits, dim=-1)
@@ -115,11 +121,11 @@ class Trainer_vae_v1(BaseTrainer):
                     # Forward pass
                     params_raw_recon, mask, class_logits, mu, logvar = self.model(params_padded, surface_type)
                     
-                    loss_recon = (self.loss_recon(params_raw_recon, params_padded) * mask.float()).mean()
+                    loss_recon = (self.loss_recon(params_raw_recon, params_padded) * mask.float()).mean() * self.loss_recon_weight
                     loss_cls = self.loss_cls(class_logits, surface_type.squeeze()).mean()
                     loss_kl = -0.5 * torch.mean(torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1))
 
-                    loss = loss_recon + loss_cls + loss_kl
+                    loss = loss_recon * self.loss_recon_weight + loss_cls * self.loss_cls_weight + loss_kl * self.loss_kl_weight
                     
                     accuracy = self.compute_accuracy(class_logits, surface_type.squeeze())
 
