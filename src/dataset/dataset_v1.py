@@ -109,7 +109,7 @@ class dataset_compound(Dataset):
         
         # Scan all JSON files to determine max_scalar_dim and max_num_surfaces
         # self._calculate_dataset_stats()
-        self.max_scalar_dim = max(self.SCALAR_DIM_MAP.values())
+        self.max_scalar_dim = max(SCALAR_DIM_MAP.values())
         self.max_param_dim = self.base_dim + self.max_scalar_dim
         
         # # Override max_num_surfaces if specified
@@ -155,7 +155,7 @@ class dataset_compound(Dataset):
             surface_type: Integer representing surface type
         """
         surface_type = surface_dict['type']
-        surface_type_idx = self.SURFACE_TYPE_MAP.get(surface_type, -1)
+        surface_type_idx = SURFACE_TYPE_MAP.get(surface_type, -1)
         
         # Extract P: location (first element of location array)
         P = np.array(surface_dict['location'][0], dtype=np.float32)  # (3,)

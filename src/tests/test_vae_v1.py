@@ -2,6 +2,8 @@ import torch
 import numpy as np
 import sys
 sys.path.append('/home/qindafei/CAD/CLR-Wire')
+sys.path.append(r'C:\drivers\CAD\CLR-Wire')
+
 
 from src.dataset.dataset_v1 import dataset_compound, SURFACE_TYPE_MAP, SCALAR_DIM_MAP
 from src.vae.vae_v1 import SurfaceVAE
@@ -22,7 +24,7 @@ def to_json(params_tensor, types_tensor, mask_tensor):
 
         surface_data = {
             'type': surface_type,
-            'idx': i,
+            'idx': [i, i],
             'location': params[:3].numpy(),
             'direction': np.array([N, X, Y]).tolist(),
             'scalar': scalar.numpy(),
@@ -38,7 +40,8 @@ def to_json(params_tensor, types_tensor, mask_tensor):
 
 if __name__ == '__main__':
 
-    dataset = dataset_compound('/home/qindafei/CAD/data/logan_jsons/abc/0/0000')
+    dataset = dataset_compound(sys.argv[1])
+    # dataset = dataset_compound('/home/qindafei/CAD/data/logan_jsons/abc/0/0000')
     params_tensor, types_tensor, mask_tensor = dataset[12]
     print(params_tensor.shape)
     print(types_tensor.shape)
@@ -50,7 +53,7 @@ if __name__ == '__main__':
 
 
     model = SurfaceVAE(param_raw_dim=[10, 11, 12, 12, 11])
-    checkpoint_path = '/home/qindafei/CAD/CLR-Wire/checkpoints/vae_v1_debug/model-26.pt'
+    checkpoint_path = sys.argv[2]
     checkpoint = torch.load(checkpoint_path, map_location="cpu")
     if 'ema_model' in checkpoint:
         ema_model = checkpoint['ema']
@@ -66,16 +69,16 @@ if __name__ == '__main__':
 
     # model.load_state_dict(torch.load(''))
     model.eval()
+    with torch.no_grad():
+        mu, logvar = model.encode(params_tensor, types_tensor)
+        z = model.reparameterize(mu, logvar)
+        type_logits_pred, types_pred = model.classify(z)
+        params_pred, mask = model.decode(z, types_pred)
 
-    mu, logvar = model.encode(params_tensor, types_tensor)
-    z = model.reparameterize(mu, logvar)
-    type_logits_pred, types_pred = model.classify(z)
-    params_pred, mask = model.decode(z, types_pred)
+        recon_fn = torch.nn.MSELoss()
+        recon_loss = (recon_fn(params_pred, params_tensor)) * mask.float().mean()
+        accuracy = (types_pred == types_tensor).float().mean()
+        print(f'recon_loss: {recon_loss.item()}, accuracy: {accuracy.item()}')
 
-    recon_fn = torch.nn.MSELoss()
-    recon_loss = (recon_fn(params_pred, params_tensor)) * mask.float().mean()
-    accuracy = (types_pred == types_tensor).float().mean()
-    print(f'recon_loss: {recon_loss.item()}, accuracy: {accuracy.item()}')
-
-    visualize_json_interset(to_json(params_pred, types_pred, mask), plot=True)
+        visualize_json_interset(to_json(params_pred, types_pred, mask), plot=True)
     
