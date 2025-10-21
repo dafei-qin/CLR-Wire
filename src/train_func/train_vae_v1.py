@@ -1,6 +1,7 @@
 import os
 import sys
 sys.path.append('/home/qindafei/CAD/CLR-Wire')
+sys.path.append('/data7/qindafei/CAD/CLR-Wire')
 from argparse import ArgumentParser
 
 from src.vae.vae_v1 import SurfaceVAE 
