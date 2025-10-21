@@ -1,6 +1,8 @@
 import torch
 import numpy as np
+import polyscope as ps
 import sys
+import json
 sys.path.append('/home/qindafei/CAD/CLR-Wire')
 sys.path.append(r'C:\drivers\CAD\CLR-Wire')
 
@@ -19,17 +21,18 @@ def to_json(params_tensor, types_tensor, mask_tensor):
         surface_type = SURFACE_TYPE_MAP_INVERSE[types_tensor[i].item()]
         assert params.shape[0] == 10 + SCALAR_DIM_MAP[surface_type]
         scalar = params[10:]
+        scalar = (scalar.abs() + scalar) / 2 + 1e-3
         direction = params[3:6]
         N, X, Y = orthonormal_basis_from_normal(direction.numpy())
 
         surface_data = {
             'type': surface_type,
             'idx': [i, i],
-            'location': params[:3].numpy(),
+            'location': [params[:3].numpy().tolist()],
             'direction': np.array([N, X, Y]).tolist(),
-            'scalar': scalar.numpy(),
+            'scalar': scalar.numpy().tolist(),
             'poles': [],
-            'uv': params[6:10].numpy(),
+            'uv': params[6:10].numpy().tolist(),
             "orientation": "Forward"
 
         }
@@ -42,14 +45,17 @@ if __name__ == '__main__':
 
     dataset = dataset_compound(sys.argv[1])
     # dataset = dataset_compound('/home/qindafei/CAD/data/logan_jsons/abc/0/0000')
-    params_tensor, types_tensor, mask_tensor = dataset[12]
+    idx = 21
+    params_tensor, types_tensor, mask_tensor = dataset[idx]
+    json_path = dataset.json_names[idx]
+    print(json_path)
     print(params_tensor.shape)
     print(types_tensor.shape)
     print(mask_tensor.shape)
 
     params_tensor = params_tensor[mask_tensor.bool()]
     types_tensor = types_tensor[mask_tensor.bool()]
-
+    print(params_tensor.shape)
 
 
     model = SurfaceVAE(param_raw_dim=[10, 11, 12, 12, 11])
@@ -82,3 +88,9 @@ if __name__ == '__main__':
 
         visualize_json_interset(to_json(params_pred, types_pred, mask), plot=True)
     
+
+
+    ps.remove_all_structures()
+    json_data = json.load(open(json_path, 'r'))
+    print(len(json_data))
+    visualize_json_interset(json_data, plot=True)

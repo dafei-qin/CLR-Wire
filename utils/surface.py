@@ -182,7 +182,7 @@ def build_second_order_surface(face, tol=1e-2):
         radius = face['scalar'][0]
     else:
         raise ValueError(f"Surface type {surface_type} not supported")
-    
+    # print(type(radius))
     occ_position = gp_Pnt(position[0], position[1], position[2])
     occ_direction = gp_Dir(direction[0], direction[1], direction[2])
     occ_XDirection = gp_Dir(XDirection[0], XDirection[1], XDirection[2])
