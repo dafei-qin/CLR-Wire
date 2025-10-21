@@ -1,0 +1,56 @@
+resume_training: false
+from_start: false
+
+epochs: 400
+batch_size: 256 # Reduced batch size for stability
+lr: 0.0001  # Lower learning rate for more stable training
+num_workers: 48
+num_gpus: 6
+
+grad_accum_every: 4  # Increased accumulation for larger effective batch
+ema_update_every: 20
+max_grad_norm: 2.0  # Lower gradient clipping
+
+val_every_epoch: 1
+save_every_epoch: 10
+log_every_step: 10
+
+# Visual evaluation settings
+visual_eval_every_step: 500
+num_visual_samples: 8
+
+use_wandb_tracking: true
+wandb_project_name: CLR-surface
+wandb_run_name: fixed_architecture_v1
+
+DATA:
+    train_set_file_path: /home/qindafei/CAD/abc_surfaces/balanced_train/normalized_surface_points_train.npy
+    val_set_file_path: /home/qindafei/CAD/abc_surfaces/normalized_surface_points_val.npy
+    replication: 1
+    recon_dir_path: /home/qindafei/CAD/abc_surfaces/normalized_surface_points_val.npy
+
+MODEL:
+    in_channels: 3
+    out_channels: 3
+    latent_channels: 8  # Increased latent channels
+
+    down_block_types: [
+      'DownEncoderBlock2D', 'DownEncoderBlock2D', 'DownEncoderBlock2D'  # Only 3 levels instead of 4
+    ]
+    up_block_types: [
+      'UpDecoderBlock2D', 'UpDecoderBlock2D', 'UpDecoderBlock2D'
+    ]
+    
+    block_out_channels: [
+      128, 256, 512  # Increased channel capacity
+    ]
+
+    layers_per_block: 2
+    act_fn: 'silu'
+    norm_num_groups: 8
+    sample_points_num: 16
+
+    kl_weight: 0.0001  # Significantly increased KL weight for better balance
+
+    checkpoint_folder: checkpoints/checkpoints_surface_vae_fixed
+    checkpoint_file_name: model-latest.pt 
