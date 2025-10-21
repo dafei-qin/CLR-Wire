@@ -22,6 +22,7 @@ class V1(Dataset):
 class V1_random(Dataset):
     def __init__(self):
         super().__init__()
+        self.replica = 1
         self.surface_types = 5
         self.param_raw_dim = [10, 11, 12, 12, 11]
         self.max_raw_dim = max(self.param_raw_dim)

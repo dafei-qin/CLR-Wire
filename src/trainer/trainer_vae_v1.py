@@ -77,13 +77,16 @@ class Trainer_vae_v1(BaseTrainer):
         correct = (predictions == labels).float()
         return correct.mean()
 
-    def log_loss(self, total_loss, accuracy, lr, total_norm, step):
+    def log_loss(self, total_loss, accuracy, loss_recon, loss_cls, loss_kl, lr, total_norm, step):
         if not self.use_wandb_tracking or not self.is_main:
             return
         
         log_dict = {
             'loss': total_loss,
             'accuracy': accuracy,
+            'loss_recon': loss_recon,
+            'loss_cls': loss_cls,
+            'loss_kl': loss_kl,
             'lr': lr,
             'grad_norm': total_norm,
             'step': step,
@@ -113,11 +116,14 @@ class Trainer_vae_v1(BaseTrainer):
                     params_raw_recon, mask, class_logits, mu, logvar = self.model(params_padded, surface_type)
                     
                     loss_recon = self.loss_recon(params_raw_recon, params_padded) * mask.float().mean()
-                    loss_cls = self.loss_cls(class_logits, surface_type)
+                    loss_cls = self.loss_cls(class_logits, surface_type.squeeze())
                     loss_kl = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
 
                     loss = loss_recon + loss_cls + loss_kl
                     
+                    accuracy = self.compute_accuracy(class_logits, surface_type.squeeze())
+
+
                     loss = loss / self.grad_accum_every
                     total_loss += loss.item()
                     total_accuracy += accuracy.item() / self.grad_accum_every
@@ -131,7 +137,7 @@ class Trainer_vae_v1(BaseTrainer):
                 cur_lr = get_lr(self.optimizer.optimizer)
                 total_norm = self.optimizer.total_norm
                                                         
-                self.log_loss(total_loss, total_accuracy, cur_lr, total_norm, step)
+                self.log_loss(total_loss, total_accuracy, loss_recon.item(), loss_cls.item(), loss_kl.item(), cur_lr, total_norm, step)
             
             step += 1
             self.step.add_(1)
@@ -155,22 +161,33 @@ class Trainer_vae_v1(BaseTrainer):
                 for _ in range(num_val_batches):
                     with self.accelerator.autocast(), torch.no_grad():
                         forward_kwargs = self.next_data_to_forward_kwargs(self.val_dl_iter)
-                        forward_kwargs = [fk.to(self.model.device) for fk in forward_kwargs]
-                        points, labels = forward_kwargs
+                        params_padded, surface_type = forward_kwargs
+                        
+                        params_padded = params_padded.to(self.model.device)
+                        surface_type = surface_type.to(self.model.device)
+
+                        params_raw_recon, mask, class_logits, mu, logvar = self.ema(params_padded, surface_type)
+
+                        loss_recon = self.loss_recon(params_raw_recon, params_padded) * mask.float().mean()
+                        loss_cls = self.loss_cls(class_logits, surface_type.squeeze())
+                        loss_kl = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+                        loss = loss_recon + loss_cls + loss_kl
+                        accuracy = self.compute_accuracy(class_logits, surface_type.squeeze())
+
                         
                         # Use EMA model for validation
-                        logits = self.ema(points)
+                        # logits = self.ema(points)
                         
-                        if logits.dim() == 3:
-                            logits = logits.mean(dim=1)
+                        # if logits.dim() == 3:
+                        #     logits = logits.mean(dim=1)
                         
-                        loss = self.loss_fn(logits, labels)
-                        accuracy = self.compute_accuracy(logits, labels)
+                        # loss = self.loss_fn(logits, labels)
+                        # accuracy = self.compute_accuracy(logits, labels)
                         
                         total_val_loss += (loss / num_val_batches)
                         total_val_accuracy += (accuracy / num_val_batches)
 
-                self.print(get_current_time() + f' valid loss: {total_val_loss:.3f} valid acc: {total_val_accuracy:.3f}')
+                self.print(get_current_time() + f' valid loss: {total_val_loss:.3f} valid acc: {total_val_accuracy:.3f} valid loss_recon: {loss_recon.item()} valid loss_cls: {loss_cls.item()} valid loss_kl: {loss_kl.item()}')
                 
                 # Calculate estimated finishing time
                 steps_remaining = self.num_train_steps - step
@@ -181,7 +198,10 @@ class Trainer_vae_v1(BaseTrainer):
                 
                 val_log_dict = {
                     "val_loss": total_val_loss,
-                    "val_accuracy": total_val_accuracy
+                    "val_accuracy": total_val_accuracy,
+                    "val_loss_recon": loss_recon.item(),
+                    "val_loss_cls": loss_cls.item(),
+                    "val_loss_kl": loss_kl.item()
                 }
                 self.log(**val_log_dict)
 
@@ -193,4 +213,4 @@ class Trainer_vae_v1(BaseTrainer):
                 self.save(milestone)
                 self.print(get_current_time() + f' checkpoint saved at {self.checkpoint_folder / f"model-{milestone}.pt"}')
 
-        self.print('Classification training complete') 
+        self.print('VAE V1 training complete') 

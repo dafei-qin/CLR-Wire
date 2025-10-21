@@ -1,5 +1,6 @@
 import os
 import sys
+sys.path.append('/home/qindafei/CAD/CLR-Wire')
 from argparse import ArgumentParser
 
 from src.vae.vae_v1 import SurfaceVAE 
@@ -32,6 +33,7 @@ train_dataset = V1_random()
 val_dataset = V1_random()
 
 model = SurfaceVAE(
+    param_raw_dim=args.model.param_raw_dim,
 )
 
 epochs = args.epochs
