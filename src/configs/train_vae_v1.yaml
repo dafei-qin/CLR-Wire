@@ -44,4 +44,4 @@ model:
 loss:
     recon_weight: 1.0
     cls_weight: 1.0
-    kl_weight: 1e-2
+    kl_weight: 0.01
