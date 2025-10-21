@@ -417,6 +417,8 @@ class BRepDataProcessor:
                 # assert solid.Size() == 1
                 # solid = solid.First()
                 solid = Solid(solid)
+
+                
                 solid = solid.scale_to_unit_box()
 
                 try:
@@ -446,6 +448,8 @@ class BRepDataProcessor:
                         node_feature = self.bspline_surface_feature(surface, [face_idx, face_idx])
                     else:
                         raise ValueError(f"Unknown surface type: {surf_type}")
+
+        # Currently we don't sample points on the surface.
                     # try:
                     #     points = uvgrid(face, method="point", num_u=32, num_v=32)
                     #     node_feature["approximation"] = self.get_approx_face(points)
@@ -475,34 +479,6 @@ class BRepDataProcessor:
                 ic(f'Error processing solid {__idx:02d}: {e}')
                 continue
 
-            # for edge_idx in graph.edges():
-            #     edge = graph.edges[edge_idx]["edge"]
-            #     curv_type = edge.curve_type()
-            #     curve = edge.specific_curve()
-            #     if curv_type == "line":
-            #         edge_feature = self.line_feature(curve, [edge_idx[0], edge_idx[1]])
-            #     elif curv_type == "circle":
-            #         edge_feature = self.circle_feature(curve, [edge_idx[0], edge_idx[1]])
-            #     elif curv_type == "ellipse":
-            #         edge_feature = self.ellipse_feature(curve, [edge_idx[0], edge_idx[1]])
-            #     elif curv_type == "hyperbola":
-            #         edge_feature = self.hyperbola_feature(curve, [edge_idx[0], edge_idx[1]])
-            #     elif curv_type == "parabola":
-            #         edge_feature = self.parabola_feature(curve, [edge_idx[0], edge_idx[1]])
-            #     elif curv_type == "bezier":
-            #         edge_feature = self.bezier_curve_feature(curve, [edge_idx[0], edge_idx[1]])
-            #     elif curv_type == "bspline":
-            #         edge_feature = self.bspline_curve_feature(curve, [edge_idx[0], edge_idx[1]])
-            #     else:
-            #         raise ValueError("Unknown curve type.")
-            #     try:
-            #         points = ugrid(edge, method="point", num_u=32)
-            #         edge_feature["approximation"] = self.get_approx_edge(points)
-            #         edge_feature["points"] = points.tolist()
-            #     except Exception as e:
-            #         edge_feature["approximation"] = None
-            #         edge_feature["points"] = None
-            #     data.append(edge_feature)
             datas.append(data)
         return datas, attributes
 

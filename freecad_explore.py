@@ -44,6 +44,7 @@ from OCC.Core.ShapeConstruct import ShapeConstruct_ProjectCurveOnSurface
 import FreeCAD as App
 
 def json_to_face(entry):
+    raise NotImplementedError("json_to_face is copied from CADDreamer and is not used yet")
     typ = entry["type"]
     loc = np.array(entry["location"][0])
     R = np.array(entry["direction"])  # 3 basis vectors (x,y,z)
@@ -374,7 +375,7 @@ def load_json_to_faces(cad_data):
 
 
 
-entrys = json.load(open(r"F:\WORK\CAD\CLR-Wire\assets\examples\00000084\out_000.json", "r"))
+entrys = json.load(open(r"F:\WORK\CAD\data\logan_jsons\0042\00420339\00420339_2323ceb4edb990b5e01e553b_step_000\index_000.json", "r"))
 # entrys = [e for e in entrys if e["type"] != "bspline_surface"]
 all_faces = load_json_to_faces(entrys)
 
