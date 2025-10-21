@@ -168,9 +168,9 @@ class Trainer_vae_v1(BaseTrainer):
 
                         params_raw_recon, mask, class_logits, mu, logvar = self.ema(params_padded, surface_type)
 
-                        loss_recon = self.loss_recon(params_raw_recon, params_padded) * mask.float().mean()
-                        loss_cls = self.loss_cls(class_logits, surface_type.squeeze())
-                        loss_kl = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+                        loss_recon = (self.loss_recon(params_raw_recon, params_padded) * mask.float()).mean()
+                        loss_cls = self.loss_cls(class_logits, surface_type.squeeze()).mean()
+                        loss_kl = -0.5 * torch.mean(torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1))
                         loss = loss_recon + loss_cls + loss_kl
                         accuracy = self.compute_accuracy(class_logits, surface_type.squeeze())
 
