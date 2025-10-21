@@ -12,7 +12,7 @@ from OCC.Core.Geom import Geom_Circle, Geom_Line, Geom_BSplineCurve, Geom_Trimme
 from OCC.Core.GC import GC_MakeArcOfCircle, GC_MakeSegment, GC_MakeArcOfEllipse, GC_MakeArcOfHyperbola, GC_MakeArcOfParabola
 from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeWire, BRepBuilderAPI_MakeFace ,BRepBuilderAPI_DisconnectedWire, BRepBuilderAPI_EmptyWire, BRepBuilderAPI_NonManifoldWire, BRepBuilderAPI_WireDone, BRepBuilderAPI_Transform
 from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_WIRE
-from OCC.Core.TopoDS import TopoDS_Edge, TopoDS_Compound, topods_Face
+from OCC.Core.TopoDS import TopoDS_Edge, TopoDS_Compound, TopoDS_Face
 from OCC.Core.TopLoc import TopLoc_Location
 from OCC.Core.TopExp import TopExp_Explorer
 from OCC.Core.Poly import Poly_Triangulation
@@ -55,7 +55,7 @@ def Compound(faces):
     for face in faces:
         explorer = TopExp_Explorer(face, TopAbs_FACE)
         while explorer.More():
-            face = topods_Face(explorer.Current())
+            face = TopoDS_Face(explorer.Current())
             builder.Add(compound, face)
             explorer.Next()
 
@@ -131,9 +131,21 @@ def build_plane_face(face, tol=1e-2):
     position = np.array(face['location'], dtype=np.float64)[0]
     direction = np.array(face['direction'], dtype=np.float64)[0]
     XDirection = np.array(face['direction'], dtype=np.float64)[1]
+    YDirection = np.cross(direction, XDirection)
     orientation = face['orientation']
 
     u_min, u_max, v_min, v_max = face['uv']
+    
+    centered = position + (u_max + u_min) / 2 * XDirection + (v_max + v_min) / 2 * YDirection
+    u = np.array([u_min, u_max])
+    u_new = u - (u_max + u_min) / 2
+    v = np.array([v_min, v_max])
+    v_new = v - (v_max + v_min) / 2
+    u_min = u_new[0]
+    u_max = u_new[1]
+    v_min = v_new[0]
+    v_max = v_new[1]
+    position = centered
     occ_position = gp_Pnt(position[0], position[1], position[2])
     occ_direction = gp_Dir(direction[0], direction[1], direction[2])
     occ_XDirection = gp_Dir(XDirection[0], XDirection[1], XDirection[2])
@@ -182,7 +194,7 @@ def build_second_order_surface(face, tol=1e-2):
         radius = face['scalar'][0]
     else:
         raise ValueError(f"Surface type {surface_type} not supported")
-    
+    # print(type(radius))
     occ_position = gp_Pnt(position[0], position[1], position[2])
     occ_direction = gp_Dir(direction[0], direction[1], direction[2])
     occ_XDirection = gp_Dir(XDirection[0], XDirection[1], XDirection[2])

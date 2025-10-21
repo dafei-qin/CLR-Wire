@@ -89,3 +89,17 @@ def interpolate_1d(
     interpolated = (1 - alpha) * left_values + alpha * right_values
     
     return interpolated
+
+
+
+def orthonormal_basis_from_normal(N):
+    N = N / np.linalg.norm(N)
+    # 选辅助向量
+    if abs(N[2]) < 0.9:
+        A = np.array([0.0, 0.0, 1.0])
+    else:
+        A = np.array([1.0, 0.0, 0.0])
+    X = np.cross(A, N)
+    X /= np.linalg.norm(X)
+    Y = np.cross(N, X)
+    return N, X, Y

@@ -10,7 +10,7 @@ from OCC.Core.ShapeAnalysis import ShapeAnalysis_FreeBounds
 
 import polyscope as ps
 
-from lib.surface import sample_line
+from utils.surface import sample_line
 
 def surf_surf_interset(face_m, face_n, face_group=None, tol=1e-2, plot_header=''):
     geom_face_m = BRep_Tool.Surface(face_m)
