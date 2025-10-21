@@ -64,11 +64,11 @@ class SurfaceVAE(nn.Module):
     # 
     def encode(self, params_raw, surface_type):
         assert params_raw.shape[1] == self.max_raw_dim # Padded to the max dim
-        emb = self.type_emb(surface_type)              # (B, emb_dim)
+        emb = self.type_emb(surface_type).squeeze(1)              # (B, emb_dim)
         # Apply type-specific input projection per unique type in batch
         batch_size = params_raw.size(0)
         device = params_raw.device
-        param_emb = torch.empty(batch_size, self.param_dim, device=device)
+        param_emb = torch.empty(batch_size, self.param_dim, device=device, dtype=emb.dtype) # Can't support half now
         unique_types = torch.unique(surface_type)
         for t in unique_types:
             idx = (surface_type == t).nonzero(as_tuple=True)[0]
@@ -94,7 +94,7 @@ class SurfaceVAE(nn.Module):
         
         # Input latent code and surface type, output padded raw parameters
 
-        emb = self.type_emb(surface_type)
+        emb = self.type_emb(surface_type).squeeze(1)
         x = torch.cat([z, emb], dim=-1)
         param_emb = self.decoder(x)
         # Apply type-specific output head per unique type in batch
@@ -111,7 +111,8 @@ class SurfaceVAE(nn.Module):
             dim_t = out_t.size(1)
             padded.index_copy_(0, idx, torch.cat([out_t, torch.zeros(out_t.size(0), max_dim - dim_t, device=device)], dim=1))
             # set mask true for valid positions
-            mask.index_put_((idx, torch.arange(dim_t, device=device)), torch.ones(out_t.size(0), dim_t, dtype=torch.bool, device=device))
+            mask[idx, :dim_t] = True
+            # mask.index_put_((idx, torch.arange(dim_t, device=device)), torch.ones(out_t.size(0), dim_t, dtype=torch.bool, device=device))
         return padded, mask
 
     def inference(self, z):
@@ -122,7 +123,7 @@ class SurfaceVAE(nn.Module):
     def forward(self, params, surface_type):
         mu, logvar = self.encode(params, surface_type)
         z = self.reparameterize(mu, logvar)
-        class_logits, surface_type = self.classify(z)
+        class_logits, surface_type_pred = self.classify(z)
         recon, mask = self.decode(z, surface_type)
         return recon, mask, class_logits, mu, logvar
 

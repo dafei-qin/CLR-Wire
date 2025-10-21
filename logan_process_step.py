@@ -20,39 +20,46 @@ def discover_step_files(root_dir: str):
 
 
 def compute_output_path(input_root: str, output_root: str, step_file: str) -> str:
+    """
+    Compute the output path for a given STEP file.
+    Note: This function does NOT create directories - caller is responsible.
+    """
     rel_dir = os.path.relpath(os.path.dirname(step_file), start=input_root)
     target_dir = os.path.normpath(os.path.join(output_root, rel_dir))
     base_name = os.path.splitext(os.path.basename(step_file))[0]
-    # step_output_dir = os.path.join(target_dir, base_name)
-    step_output_dir = os.path.join(target_dir)
-    os.makedirs(step_output_dir, exist_ok=True)
+    # Each STEP file gets its own subdirectory to avoid conflicts
+    step_output_dir = os.path.join(target_dir, base_name)
     # Seed file name for API which appends suffixes, ensuring files live inside the per-step folder
     return os.path.join(step_output_dir, "index.json")
 
 
-def output_dir_exists(input_root: str, output_root: str, step_file: str) -> bool:
-    # The target directory is the parent of the output seed file
-    candidate = compute_output_path(input_root, output_root, step_file)
-    target_dir = os.path.dirname(candidate)
-    return os.path.isdir(target_dir)
+def output_exists(input_root: str, output_root: str, step_file: str) -> bool:
+    """Check if output file already exists (to skip reprocessing)."""
+    output_path = compute_output_path(input_root, output_root, step_file)
+    return os.path.exists(output_path)
 
 
 def _child_process(step_file: str, input_root: str, output_root: str, result_queue: mp.Queue):
     try:
         output_path = compute_output_path(input_root, output_root, step_file)
-        if output_dir_exists(input_root, output_root, step_file):
-            result_queue.put({"ok": 0, "step": step_file, "error": None})
-            return
+        
+        # Check if already processed (idempotent operation)
         if os.path.exists(output_path):
-            result_queue.put({"ok": 0, "step": step_file, "error": None})
+            result_queue.put({"ok": 1, "step": step_file, "error": None, "skipped": True})
             return
+        
+        # Create output directory (only when needed)
+        output_dir = os.path.dirname(output_path)
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Process in temporary directory to avoid pollution
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_step_path = os.path.join(tmp_dir, os.path.basename(step_file))
             shutil.copy2(step_file, tmp_step_path)
             status = BRepDataProcessor().tokenize_and_save_cad_data([tmp_dir, output_path])
-            result_queue.put({"ok": 1 if status else 0, "step": step_file, "error": None})
+            result_queue.put({"ok": 1 if status else 0, "step": step_file, "error": None, "skipped": False})
     except Exception as e:
-        result_queue.put({"ok": 0, "step": step_file, "error": str(e)})
+        result_queue.put({"ok": 0, "step": step_file, "error": str(e), "skipped": False})
 
 
 def process_one(step_file: str, input_root: str, output_root: str, timeout_s: int = 120):
@@ -91,7 +98,8 @@ def main():
 
     total = len(step_files)
     num_converted = 0
-    skipped = []
+    num_already_existed = 0
+    failed = []
 
     # Use threads to orchestrate per-file subprocess with timeout
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
@@ -101,18 +109,25 @@ def main():
                 result = future.result()
             except Exception as e:
                 sf = future_to_step[future]
-                skipped.append((sf, str(e)))
+                failed.append((sf, str(e)))
                 continue
+            
             if result["ok"]:
-                num_converted += 1
+                if result.get("skipped"):
+                    num_already_existed += 1
+                else:
+                    num_converted += 1
             elif result.get("error"):
-                skipped.append((result["step"], result["error"]))
+                failed.append((result["step"], result["error"]))
 
-    print(f"Done. Converted {num_converted}/{total} files ({100.0 * num_converted / total:.2f}%).")
-    if skipped:
-        print(f"Skipped due to errors: {len(skipped)}")
-        for path, err in skipped:
-            print(f" - {path}: {err}")
+    num_success = num_converted + num_already_existed
+    print(f"\nDone. Processed {num_success}/{total} files successfully ({100.0 * num_success / total:.2f}%).")
+    print(f"  - Newly converted: {num_converted}")
+    print(f"  - Already existed: {num_already_existed}")
+    if failed:
+        print(f"  - Failed: {len(failed)}")
+        for path, err in failed:
+            print(f"    • {path}: {err}")
     return 0
 
 
