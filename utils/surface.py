@@ -12,7 +12,7 @@ from OCC.Core.Geom import Geom_Circle, Geom_Line, Geom_BSplineCurve, Geom_Trimme
 from OCC.Core.GC import GC_MakeArcOfCircle, GC_MakeSegment, GC_MakeArcOfEllipse, GC_MakeArcOfHyperbola, GC_MakeArcOfParabola
 from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeWire, BRepBuilderAPI_MakeFace ,BRepBuilderAPI_DisconnectedWire, BRepBuilderAPI_EmptyWire, BRepBuilderAPI_NonManifoldWire, BRepBuilderAPI_WireDone, BRepBuilderAPI_Transform
 from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_WIRE
-from OCC.Core.TopoDS import TopoDS_Edge, TopoDS_Compound, topods_Face
+from OCC.Core.TopoDS import TopoDS_Edge, TopoDS_Compound, TopoDS_Face
 from OCC.Core.TopLoc import TopLoc_Location
 from OCC.Core.TopExp import TopExp_Explorer
 from OCC.Core.Poly import Poly_Triangulation
@@ -55,7 +55,7 @@ def Compound(faces):
     for face in faces:
         explorer = TopExp_Explorer(face, TopAbs_FACE)
         while explorer.More():
-            face = topods_Face(explorer.Current())
+            face = TopoDS_Face(explorer.Current())
             builder.Add(compound, face)
             explorer.Next()
 
