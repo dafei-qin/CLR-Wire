@@ -115,9 +115,9 @@ class Trainer_vae_v1(BaseTrainer):
                     # Forward pass
                     params_raw_recon, mask, class_logits, mu, logvar = self.model(params_padded, surface_type)
                     
-                    loss_recon = self.loss_recon(params_raw_recon, params_padded) * mask.float().mean()
-                    loss_cls = self.loss_cls(class_logits, surface_type.squeeze())
-                    loss_kl = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+                    loss_recon = (self.loss_recon(params_raw_recon, params_padded) * mask.float()).mean()
+                    loss_cls = self.loss_cls(class_logits, surface_type.squeeze()).mean()
+                    loss_kl = -0.5 * torch.mean(torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1))
 
                     loss = loss_recon + loss_cls + loss_kl
                     
@@ -163,8 +163,8 @@ class Trainer_vae_v1(BaseTrainer):
                         forward_kwargs = self.next_data_to_forward_kwargs(self.val_dl_iter)
                         params_padded, surface_type = forward_kwargs
                         
-                        params_padded = params_padded.to(self.model.device)
-                        surface_type = surface_type.to(self.model.device)
+                        params_padded = params_padded.to(self.device)
+                        surface_type = surface_type.to(self.device)
 
                         params_raw_recon, mask, class_logits, mu, logvar = self.ema(params_padded, surface_type)
 
