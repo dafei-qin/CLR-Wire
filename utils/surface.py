@@ -131,9 +131,21 @@ def build_plane_face(face, tol=1e-2):
     position = np.array(face['location'], dtype=np.float64)[0]
     direction = np.array(face['direction'], dtype=np.float64)[0]
     XDirection = np.array(face['direction'], dtype=np.float64)[1]
+    YDirection = np.cross(direction, XDirection)
     orientation = face['orientation']
 
     u_min, u_max, v_min, v_max = face['uv']
+    
+    centered = position + (u_max + u_min) / 2 * XDirection + (v_max + v_min) / 2 * YDirection
+    u = np.array([u_min, u_max])
+    u_new = u - (u_max + u_min) / 2
+    v = np.array([v_min, v_max])
+    v_new = v - (v_max + v_min) / 2
+    u_min = u_new[0]
+    u_max = u_new[1]
+    v_min = v_new[0]
+    v_max = v_new[1]
+    position = centered
     occ_position = gp_Pnt(position[0], position[1], position[2])
     occ_direction = gp_Dir(direction[0], direction[1], direction[2])
     occ_XDirection = gp_Dir(XDirection[0], XDirection[1], XDirection[2])
