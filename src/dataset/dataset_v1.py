@@ -182,7 +182,7 @@ class dataset_compound(Dataset):
 
             radius, semi_angle = surface_dict['scalar'][0], surface_dict['scalar'][1]
             u_center = 0.5 * (u_min + u_max)
-            u_half = 0.5 * (u_max - u_min) / np.pi - 0.5 # (0 - pi) --> (0, 1)
+            u_half = 0.5 * (u_max - u_min) / np.pi  # (0 - pi) --> (0, 1)
             sin_u_center, cos_u_center = np.sin(u_center), np.cos(u_center)
             v_center = 0.5 * (v_min + v_max)
             v_half = 0.5 * (v_max - v_min)
@@ -235,20 +235,16 @@ class dataset_compound(Dataset):
             # scalar[0] = major_radius, scalar[1] = minor_radius
             scalar_params = [surface_dict['scalar'][0], surface_dict['scalar'][1]]
 
-            u_min, u_max = u_min % (2*np.pi), u_max % (2*np.pi)
-            v_min, v_max = v_min % (2*np.pi), v_max % (2*np.pi)
+            u_center = 0.5 * (u_min + u_max)
+            u_half = 0.5 * (u_max - u_min)
+            v_center = 0.5 * (v_min + v_max)
+            v_half = 0.5 * (v_max - v_min)
 
-            sin_u_min, cos_u_min = np.sin(u_min), np.cos(u_min)
-            sin_u_max, cos_u_max = np.sin(u_max), np.cos(u_max)
-            sin_v_min, cos_v_min = np.sin(v_min), np.cos(v_min)
-            sin_v_max, cos_v_max = np.sin(v_max), np.cos(v_max)
 
-            UV = np.array([
-                sin_u_min, cos_u_min,
-                sin_u_max, cos_u_max,
-                sin_v_min, cos_v_min,
-                sin_v_max, cos_v_max
-            ], dtype=np.float32)
+            sin_u_center, cos_u_center = np.sin(u_center), np.cos(u_center)
+            sin_v_center, cos_v_center = np.sin(v_center), np.cos(v_center)
+
+            UV = np.array([sin_u_center, cos_u_center, u_half / np.pi, sin_v_center, cos_v_center, v_half / np.pi, 0, 0], dtype=np.float32)
 
 
         elif surface_type == 'bspline_surface':
@@ -304,11 +300,9 @@ class dataset_compound(Dataset):
         elif surface_type == 'cone':
             sin_u_center, cos_u_center, u_half, v_center, v_half = UV[:5]
             uc = np.arctan2(sin_u_center, cos_u_center)
-            u_half = (u_half + 0.5) * np.pi
+            u_half = np.clip(u_half, 0, 1) * np.pi
             u_min, u_max = uc - u_half, uc + u_half
-            if np.abs(np.abs(u_max - u_min) - 2 * np.pi) < 1e-4:
-                # A full loop, make sure distance less than 2pi
-                u_max = u_min + 2 * np.pi - 1e-6
+   
 
             v_min, v_max = v_center - v_half, v_center + v_half
             v_min, v_max = v_center - v_half, v_center + v_half
@@ -322,19 +316,15 @@ class dataset_compound(Dataset):
             scalar = [radius, semi_angle]
         elif surface_type == 'torus':
 
-            sin_u_min, cos_u_min, sin_u_max, cos_u_max, sin_v_min, cos_v_min, sin_v_max, cos_v_max = UV[:8]
+            sin_u_center, cos_u_center, u_half, sin_v_center, cos_v_center, v_half = UV[:6]
 
-            u_min = np.arctan2(sin_u_min, cos_u_min) % (2*np.pi)
-            u_max = np.arctan2(sin_u_max, cos_u_max) % (2*np.pi)
-            if np.abs(np.abs(u_max - u_min) - 2 * np.pi) < 1e-4:
-                # A full loop, make sure distance less than 2pi
-                u_max = u_min + 2 * np.pi - 1e-4
-            v_min = np.arctan2(sin_v_min, cos_v_min) % (2*np.pi)
-            v_max = np.arctan2(sin_v_max, cos_v_max) % (2*np.pi)
+            u_center = np.arctan2(sin_u_center, cos_u_center)
+            u_half = np.clip(u_half, 0, 1) * np.pi
+            u_min, u_max = u_center - u_half, u_center + u_half
 
-            if np.abs(np.abs(v_max - v_min) - 2 * np.pi) < 1e-4:
-                # A full loop, make sure distance less than 2pi
-                v_max = v_min + 2 * np.pi - 1e-4
+            v_center = np.arctan2(sin_v_center, cos_v_center)
+            v_half = np.clip(v_half, 0, 1) * np.pi
+            v_min, v_max = v_center - v_half, v_center + v_half
 
             assert len(scalar_params) == 2
             major_radius = scalar_params[0]
