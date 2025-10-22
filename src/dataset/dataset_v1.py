@@ -215,7 +215,7 @@ class dataset_compound(Dataset):
             u_h_norm = u_half / np.pi - 0.5         # 在 [-1, 1]
             v_h_norm = v_half / (np.pi / 2) - 0.5  # 在 [-1, 1]
 
-            UV = np.concatenate([dir_vec, [u_h_norm, v_h_norm]])
+            UV = np.concatenate([dir_vec, [u_h_norm, v_h_norm, 0, 0, 0]])
 
 
         elif surface_type == 'torus':
@@ -309,7 +309,7 @@ class dataset_compound(Dataset):
             scalar = [radius, semi_angle]
         elif surface_type == 'torus':
 
-            sin_u_min, cos_u_min, sin_u_max, cos_u_max, sin_v_min, cos_v_min, sin_v_max, cos_v_max = UV[:5]
+            sin_u_min, cos_u_min, sin_u_max, cos_u_max, sin_v_min, cos_v_min, sin_v_max, cos_v_max = UV[:8]
 
             u_min = np.arctan2(sin_u_min, cos_u_min) % (2*np.pi)
             u_max = np.arctan2(sin_u_max, cos_u_max) % (2*np.pi)
