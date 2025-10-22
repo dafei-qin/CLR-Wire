@@ -172,21 +172,23 @@ class dataset_compound(Dataset):
             P = P + D * v_min
             v_max = v_max - v_min
             v_min = 0
-            sin_u_min, cos_u_min = np.sin(u_min % (2*np.pi)), np.cos(u_min % (2*np.pi))
-            sin_u_max, cos_u_max = np.sin(u_max % (2*np.pi)), np.cos(u_max % (2*np.pi)) 
-
-           
-            UV = np.array([sin_u_min, cos_u_min, sin_u_max, cos_u_max, v_max, 0, 0, 0], dtype=np.float32) # (8, )
+            # sin_u_min, cos_u_min = np.sin(u_min % (2*np.pi)), np.cos(u_min % (2*np.pi))
+            # sin_u_max, cos_u_max = np.sin(u_max % (2*np.pi)), np.cos(u_max % (2*np.pi)) 
+            u_center = 0.5 * (u_min + u_max)
+            u_half = 0.5 * (u_max - u_min) / np.pi - 0.5 # (0 - pi) --> (0, 1)
+            sin_u_center, cos_u_center = np.sin(u_center), np.cos(u_center)
+            UV = np.array([sin_u_center, cos_u_center, u_half, v_max, 0, 0, 0, 0], dtype=np.float32) # (8, )
 
         elif surface_type == 'cone':
 
             radius, semi_angle = surface_dict['scalar'][0], surface_dict['scalar'][1]
             u_center = 0.5 * (u_min + u_max)
             u_half = 0.5 * (u_max - u_min) / np.pi - 0.5 # (0 - pi) --> (0, 1)
+            sin_u_center, cos_u_center = np.sin(u_center), np.cos(u_center)
             v_center = 0.5 * (v_min + v_max)
             v_half = 0.5 * (v_max - v_min)
 
-            UV = [np.sin(u_center), np.cos(u_center), u_half, v_center, v_half, 0, 0, 0] # (8, )
+            UV = [sin_u_center, cos_u_center, u_half, v_center, v_half, 0, 0, 0] # (8, )
             scalar_params = [radius, semi_angle / (np.pi/2)]
             
 
@@ -263,15 +265,18 @@ class dataset_compound(Dataset):
             scalar = []
         elif surface_type == 'cylinder':
 
-            sin_u_min, cos_u_min, sin_u_max, cos_u_max, height = UV[:5]
-            radius = scalar_params[0]
-            u_min = np.arctan2(sin_u_min, cos_u_min) % (2*np.pi)
-            u_max = np.arctan2(sin_u_max, cos_u_max) % (2*np.pi)
+            sin_u_center, cos_u_center, u_half, height = UV[:4]
+            u_center = np.arctan2(sin_u_center, cos_u_center)
+            u_half = (u_half + 0.5) * np.pi
+            u_min, u_max = u_center - u_half, u_center + u_half
             if np.abs(np.abs(u_max - u_min) - 2 * np.pi) < 1e-4:
                 # A full loop, make sure distance less than 2pi
                 u_max = u_min + 2 * np.pi - 1e-4
+
             v_min = 0.0
             v_max = height
+
+            radius = scalar_params[0]
             scalar = [radius]
 
         elif surface_type == 'cone':
