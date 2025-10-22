@@ -106,12 +106,14 @@ class dataset_compound(Dataset):
         
         # Calculate maximum parameter dimension for padding
         # P(3) + D(3) + UV(4) + scalar(max_dim)
-        self.base_dim = 3 + 3 + 3 + 4   # P + D + X + UV = 10
+        self.base_dim = 3 + 3 + 3 + 8   # P + D + X + UV = 17
         
         # Scan all JSON files to determine max_scalar_dim and max_num_surfaces
         # self._calculate_dataset_stats()
         self.max_scalar_dim = max(SCALAR_DIM_MAP.values())
-        self.max_param_dim = self.base_dim + self.max_scalar_dim
+        self.max_param_dim = self.base_dim + self.max_scalar_dim # Should be 19
+        
+        self.replica = 1
         
         # # Override max_num_surfaces if specified
         # if self.max_surfaces_per_file is not None:
@@ -130,7 +132,7 @@ class dataset_compound(Dataset):
             
         Returns:
             params: Numpy array of shape (max_param_dim,) containing:
-                    [P(3), D(3), UV(8), scalar(max_scalar_dim)]
+                    [P(3), D(3), X(3), UV(8), scalar(max_scalar_dim)]
             surface_type: Integer representing surface type
         """
         surface_type = surface_dict['type']
@@ -162,7 +164,7 @@ class dataset_compound(Dataset):
             v_min = v_new[0]
             v_max = v_new[1]
             P = centered
-            UV = np.array([u_min, u_max, v_min, v_max, 0, 0, 0, 0], dtype=np.float32)
+            UV = np.array([u_min, u_max, v_min, v_max, 0, 0, 0, 0], dtype=np.float32) # (8, )
 
         elif surface_type == 'cylinder':
             # scalar[0] = radius
@@ -174,17 +176,17 @@ class dataset_compound(Dataset):
             sin_u_max, cos_u_max = np.sin(u_max % (2*np.pi)), np.cos(u_max % (2*np.pi)) 
 
            
-            UV = np.array([sin_u_min, cos_u_min, sin_u_max, cos_u_max, v_max, 0, 0, 0], dtype=np.float32)
+            UV = np.array([sin_u_min, cos_u_min, sin_u_max, cos_u_max, v_max, 0, 0, 0], dtype=np.float32) # (8, )
 
         elif surface_type == 'cone':
 
             radius, semi_angle = surface_dict['scalar'][0], surface_dict['scalar'][1]
             u_center = 0.5 * (u_min + u_max)
-            u_half = 0.5 * (u_max - u_min)
+            u_half = 0.5 * (u_max - u_min) / np.pi - 0.5 # (0 - pi) --> (0, 1)
             v_center = 0.5 * (v_min + v_max)
             v_half = 0.5 * (v_max - v_min)
 
-            UV = [np.sin(u_center), np.cos(u_center), u_half, v_center, v_half, 0, 0, 0]
+            UV = [np.sin(u_center), np.cos(u_center), u_half, v_center, v_half, 0, 0, 0] # (8, )
             scalar_params = [radius, semi_angle / (np.pi/2)]
             
 
@@ -238,7 +240,7 @@ class dataset_compound(Dataset):
         
         # Concatenate all parameters: P + D + UV + scalar
         params = np.concatenate([P, D, X, UV, scalar_params])
-        
+        assert len(params) == self.base_dim + SCALAR_DIM_MAP[surface_type], f"surface {surface_type} params length {len(params)} != base_dim {self.base_dim}"
         return params, surface_type_idx
     
 
@@ -275,7 +277,7 @@ class dataset_compound(Dataset):
         elif surface_type == 'cone':
             sin_u_center, cos_u_center, u_half, v_center, v_half = UV[:5]
             uc = np.arctan2(sin_u_center, cos_u_center)
-            
+            u_half = (u_half + 0.5) * np.pi
             u_min, u_max = uc - u_half, uc + u_half
             if np.abs(np.abs(u_max - u_min) - 2 * np.pi) < 1e-4:
                 # A full loop, make sure distance less than 2pi
