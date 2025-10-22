@@ -116,7 +116,9 @@ class Trainer_vae_v1(BaseTrainer):
                 forward_kwargs = self.next_data_to_forward_kwargs(self.train_dl_iter)
 
                 with self.accelerator.autocast(), maybe_no_sync():
-                    params_padded, surface_type = forward_kwargs
+                    params_padded, surface_type, masks = forward_kwargs
+                    params_padded = params_padded[masks.bool()] 
+                    surface_type = surface_type[masks.bool()]
                     
                     # Forward pass
                     params_raw_recon, mask, class_logits, mu, logvar = self.model(params_padded, surface_type)

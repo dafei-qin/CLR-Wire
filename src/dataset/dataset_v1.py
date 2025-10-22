@@ -41,6 +41,7 @@ SCALAR_DIM_MAP = {
 
 
 
+
 class V1(Dataset):
     pass
 
@@ -112,48 +113,15 @@ class dataset_compound(Dataset):
         self.max_scalar_dim = max(SCALAR_DIM_MAP.values())
         self.max_param_dim = self.base_dim + self.max_scalar_dim
         
-        # # Override max_num_surfaces if specified
-        # if self.max_surfaces_per_file is not None:
-        #     self.max_num_surfaces = self.max_surfaces_per_file
-    
-    # def _calculate_dataset_stats(self):
-    #     """Calculate max_scalar_dim and max_num_surfaces across all JSON files."""
-    #     max_scalar_dim = 0
-    #     max_num_surfaces = 0
-        
-    #     for json_path in self.json_names:
-    #         with open(json_path, 'r') as f:
-    #             surfaces_data = json.load(f)
-            
-    #         # Update max number of surfaces
-    #         max_num_surfaces = max(max_num_surfaces, len(surfaces_data))
-            
-    #         # Update max scalar dimension
-    #         for surface in surfaces_data:
-    #             surf_type = surface.get('type', '')
-    #             scalar_dim = self.SCALAR_DIM_MAP.get(surf_type, 0)
-    #             if scalar_dim >= 0:  # Ignore bspline_surface (-1)
-    #                 max_scalar_dim = max(max_scalar_dim, scalar_dim)
-        
-    #     self.max_scalar_dim = max_scalar_dim
-    #     self.max_num_surfaces = max_num_surfaces
+        self.replica = 1
+
     
     def __len__(self):
         """Return number of JSON files in the dataset."""
         return len(self.json_names)
     
     def _parse_surface(self, surface_dict: Dict) -> Tuple[np.ndarray, int]:
-        """
-        Parse a single surface from JSON format to parameter vector.
-        
-        Args:
-            surface_dict: Dictionary containing surface data
-            
-        Returns:
-            params: Numpy array of shape (max_param_dim,) containing:
-                    [P(3), D(3), UV(4), scalar(max_scalar_dim)]
-            surface_type: Integer representing surface type
-        """
+
         surface_type = surface_dict['type']
         surface_type_idx = SURFACE_TYPE_MAP.get(surface_type, -1)
         
@@ -174,6 +142,9 @@ class dataset_compound(Dataset):
         elif surface_type == 'cylinder':
             # scalar[0] = radius
             scalar_params = [surface_dict['scalar'][0]]
+            P = P + D * UV[2] # position = position + direction * v_min
+            UV[3] = UV[3] - UV[2] # uv_max = uv_max - uv_min
+            UV[2] = 0 # uv_min = 0
         elif surface_type == 'cone':
             # scalar[0] = semi_angle, scalar[1] = radius
             scalar_params = [surface_dict['scalar'][0], surface_dict['scalar'][1]]
@@ -236,7 +207,7 @@ class dataset_compound(Dataset):
                 mask[i] = 1.0
             except (KeyError, IndexError, NotImplementedError) as e:
                 # Skip invalid surfaces (leave as zeros with mask=0)
-                print(f"Warning: Skipping surface {i} in {json_path}: {e}")
+                # print(f"Warning: Skipping surface {i} in {json_path}: {e}")
                 continue
         
         # Convert to tensors

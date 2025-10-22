@@ -5,7 +5,7 @@ sys.path.append('/data7/qindafei/CAD/CLR-Wire')
 from argparse import ArgumentParser
 
 from src.vae.vae_v1 import SurfaceVAE 
-from src.dataset.dataset_v1 import V1, V1_random
+from src.dataset.dataset_v1 import V1, V1_random, dataset_compound
 from src.trainer.trainer_vae_v1 import Trainer_vae_v1 
 from src.utils.config import NestedDictToClass, load_config
 
@@ -29,9 +29,9 @@ if transform is None:
     transform = None
 
 
-train_dataset = V1_random()
+train_dataset = dataset_compound(json_dir=args.data.train_json_dir, max_num_surfaces=args.data.max_num_surfaces)
 
-val_dataset = V1_random()
+val_dataset = dataset_compound(json_dir=args.data.val_json_dir, max_num_surfaces=args.data.max_num_surfaces)
 
 model = SurfaceVAE(
     param_raw_dim=args.model.param_raw_dim,
