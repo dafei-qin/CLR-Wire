@@ -215,7 +215,7 @@ class dataset_compound(Dataset):
             u_h_norm = u_half / np.pi - 0.5         # 在 [-1, 1]
             v_h_norm = v_half / (np.pi / 2) - 0.5  # 在 [-1, 1]
 
-            UV = np.concatenate([dir_vec, [u_h_norm, v_h_norm, 0, 0, 0]])
+            UV = np.concatenate([dir_vec, [np.cos(v_center), u_h_norm, v_h_norm, 0, 0]])
 
 
         elif surface_type == 'torus':
@@ -330,13 +330,13 @@ class dataset_compound(Dataset):
 
         elif surface_type == 'sphere':
             dir_vec = UV[:3]
-            u_h_norm, v_h_norm = UV[3:5]
+            v_c_cos, u_h_norm, v_h_norm = UV[3:6]
 
             dir_vec = dir_vec / np.linalg.norm(dir_vec)
             x, y, z = dir_vec
 
             u_c = np.arctan2(y, x)
-            v_c = np.arcsin(z)
+            v_c = np.arctan2(z, v_c_cos)
 
             u_h = (u_h_norm + 0.5) * np.pi
             v_h = (v_h_norm + 0.5) * (np.pi / 2)
