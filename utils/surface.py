@@ -146,6 +146,7 @@ def build_plane_face(face, tol=1e-2):
     v_min = v_new[0]
     v_max = v_new[1]
     position = centered
+    
     occ_position = gp_Pnt(position[0], position[1], position[2])
     occ_direction = gp_Dir(direction[0], direction[1], direction[2])
     occ_XDirection = gp_Dir(XDirection[0], XDirection[1], XDirection[2])
