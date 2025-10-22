@@ -106,54 +106,125 @@ class dataset_compound(Dataset):
         
         # Calculate maximum parameter dimension for padding
         # P(3) + D(3) + UV(4) + scalar(max_dim)
-        self.base_dim = 3 + 3 + 4  # P + D + UV = 10
+        self.base_dim = 3 + 3 + 3 + 4   # P + D + X + UV = 10
         
         # Scan all JSON files to determine max_scalar_dim and max_num_surfaces
         # self._calculate_dataset_stats()
         self.max_scalar_dim = max(SCALAR_DIM_MAP.values())
         self.max_param_dim = self.base_dim + self.max_scalar_dim
         
-        self.replica = 1
+        # # Override max_num_surfaces if specified
+        # if self.max_surfaces_per_file is not None:
+        #     self.max_num_surfaces = self.max_surfaces_per_file
 
-    
     def __len__(self):
         """Return number of JSON files in the dataset."""
         return len(self.json_names)
     
     def _parse_surface(self, surface_dict: Dict) -> Tuple[np.ndarray, int]:
-
+        """
+        Parse a single surface from JSON format to parameter vector.
+        
+        Args:
+            surface_dict: Dictionary containing surface data
+            
+        Returns:
+            params: Numpy array of shape (max_param_dim,) containing:
+                    [P(3), D(3), UV(8), scalar(max_scalar_dim)]
+            surface_type: Integer representing surface type
+        """
         surface_type = surface_dict['type']
         surface_type_idx = SURFACE_TYPE_MAP.get(surface_type, -1)
         
         # Extract P: location (first element of location array)
         P = np.array(surface_dict['location'][0], dtype=np.float32)  # (3,)
         
-        # Extract D: direction[0] (first direction vector)
+        # Extract D: direction[0] (first direction vector), X: U direction
         D = np.array(surface_dict['direction'][0], dtype=np.float32)  # (3,)
-        
+        X = np.array(surface_dict['direction'][1], dtype=np.float32)  # (3,)
+        Y = np.cross(D, X)
         # Extract UV: parameter bounds
         UV = np.array(surface_dict['uv'], dtype=np.float32)  # (4,)
         
         # Extract scalar parameters based on surface type
         scalar_params = []
+        u_min, u_max, v_min, v_max = UV
+
         if surface_type == 'plane':
             # No scalar parameters
-            pass
+            centered = P + (u_max + u_min) / 2 * X + (v_max + v_min) / 2 * Y
+            u = np.array([u_min, u_max])
+            u_new = u - (u_max + u_min) / 2
+            v = np.array([v_min, v_max])
+            v_new = v - (v_max + v_min) / 2
+            u_min = u_new[0]
+            u_max = u_new[1]
+            v_min = v_new[0]
+            v_max = v_new[1]
+            P = centered
+            UV = np.array([u_min, u_max, v_min, v_max, 0, 0, 0, 0], dtype=np.float32)
+
         elif surface_type == 'cylinder':
             # scalar[0] = radius
             scalar_params = [surface_dict['scalar'][0]]
-            P = P + D * UV[2] # position = position + direction * v_min
-            UV[3] = UV[3] - UV[2] # uv_max = uv_max - uv_min
-            UV[2] = 0 # uv_min = 0
+            P = P + D * v_min
+            v_max = v_max - v_min
+            v_min = 0
+            sin_u_min, cos_u_min = np.sin(u_min % (2*np.pi)), np.cos(u_min % (2*np.pi))
+            sin_u_max, cos_u_max = np.sin(u_max % (2*np.pi)), np.cos(u_max % (2*np.pi)) 
+
+           
+            UV = np.array([sin_u_min, cos_u_min, sin_u_max, cos_u_max, v_max, 0, 0, 0], dtype=np.float32)
+
         elif surface_type == 'cone':
-            # scalar[0] = semi_angle, scalar[1] = radius
-            scalar_params = [surface_dict['scalar'][0], surface_dict['scalar'][1]]
+
+            radius, semi_angle = surface_dict['scalar'][0], surface_dict['scalar'][1]
+            u_center = 0.5 * (u_min + u_max)
+            u_half = 0.5 * (u_max - u_min)
+            v_center = 0.5 * (v_min + v_max)
+            v_half = 0.5 * (v_max - v_min)
+
+            UV = [np.sin(u_center), np.cos(u_center), u_half, v_center, v_half, 0, 0, 0]
+            scalar_params = [radius, semi_angle / (np.pi/2)]
+            
+
         elif surface_type == 'sphere':
             # scalar[0] = radius
+
             scalar_params = [surface_dict['scalar'][0]]
+
+            sin_u_min, cos_u_min = np.sin(u_min), np.cos(u_min)
+            sin_u_max, cos_u_max = np.sin(u_max), np.cos(u_max)
+            sin_v_min, cos_v_min = np.sin(v_min), np.cos(v_min)
+            sin_v_max, cos_v_max = np.sin(v_max), np.cos(v_max)
+
+            UV = np.array([
+                sin_u_min, cos_u_min,
+                sin_u_max, cos_u_max,
+                sin_v_min, cos_v_min,
+                sin_v_max, cos_v_max
+            ], dtype=np.float32)
+
         elif surface_type == 'torus':
             # scalar[0] = major_radius, scalar[1] = minor_radius
             scalar_params = [surface_dict['scalar'][0], surface_dict['scalar'][1]]
+
+            u_min, u_max = u_min % (2*np.pi), u_max % (2*np.pi)
+            v_min, v_max = v_min % (2*np.pi), v_max % (2*np.pi)
+
+            sin_u_min, cos_u_min = np.sin(u_min), np.cos(u_min)
+            sin_u_max, cos_u_max = np.sin(u_max), np.cos(u_max)
+            sin_v_min, cos_v_min = np.sin(v_min), np.cos(v_min)
+            sin_v_max, cos_v_max = np.sin(v_max), np.cos(v_max)
+
+            UV = np.array([
+                sin_u_min, cos_u_min,
+                sin_u_max, cos_u_max,
+                sin_v_min, cos_v_min,
+                sin_v_max, cos_v_max
+            ], dtype=np.float32)
+
+
         elif surface_type == 'bspline_surface':
             # Skip bspline surfaces for now (variable dimension)
             raise NotImplementedError("B-spline surfaces are not supported yet")
@@ -161,15 +232,113 @@ class dataset_compound(Dataset):
         scalar_params = np.array(scalar_params, dtype=np.float32)
         
         # Pad scalar parameters to max_scalar_dim
-        if len(scalar_params) < self.max_scalar_dim:
-            padding = np.zeros(self.max_scalar_dim - len(scalar_params), dtype=np.float32)
-            scalar_params = np.concatenate([scalar_params, padding])
+        # if len(scalar_params) < self.max_scalar_dim:
+        #     padding = np.zeros(self.max_scalar_dim - len(scalar_params), dtype=np.float32)
+        #     scalar_params = np.concatenate([scalar_params, padding])
         
         # Concatenate all parameters: P + D + UV + scalar
-        params = np.concatenate([P, D, UV, scalar_params])
+        params = np.concatenate([P, D, X, UV, scalar_params])
         
         return params, surface_type_idx
     
+
+    def _recover_surface(self, params, surface_type_idx):
+        """
+        Recover a surface from parameter vector.
+        """
+        SURFACE_TYPE_MAP_INV = {v: k for k, v in SURFACE_TYPE_MAP.items()}
+        surface_type = SURFACE_TYPE_MAP_INV.get(surface_type_idx, -1)
+        print(params.shape)
+        P = params[:3]
+        D = params[3:6] / np.linalg.norm(params[3:6])
+        X = params[6:9] / np.linalg.norm(params[6:9])
+        Y = np.cross(D, X)
+        UV = params[9:17]
+        scalar_params = params[17:]
+        if surface_type == 'plane':
+            assert len(scalar_params) == 0
+            u_min, u_max, v_min, v_max = UV[:4]
+            scalar = []
+        elif surface_type == 'cylinder':
+
+            sin_u_min, cos_u_min, sin_u_max, cos_u_max, height = UV[:5]
+            radius = scalar_params[0]
+            u_min = np.arctan2(sin_u_min, cos_u_min) % (2*np.pi)
+            u_max = np.arctan2(sin_u_max, cos_u_max) % (2*np.pi)
+            if np.abs(np.abs(u_max - u_min) - 2 * np.pi) < 1e-4:
+                # A full loop, make sure distance less than 2pi
+                u_max = u_min + 2 * np.pi - 1e-4
+            v_min = 0.0
+            v_max = height
+            scalar = [radius]
+
+        elif surface_type == 'cone':
+            sin_u_center, cos_u_center, u_half, v_center, v_half = UV[:5]
+            uc = np.arctan2(sin_u_center, cos_u_center)
+            
+            u_min, u_max = uc - u_half, uc + u_half
+            if np.abs(np.abs(u_max - u_min) - 2 * np.pi) < 1e-4:
+                # A full loop, make sure distance less than 2pi
+                u_max = u_min + 2 * np.pi - 1e-6
+
+            v_min, v_max = v_center - v_half, v_center + v_half
+            v_min, v_max = v_center - v_half, v_center + v_half
+
+
+            assert len(scalar_params) == 2
+            radius = scalar_params[0]
+            semi_angle = scalar_params[1]
+            semi_angle = semi_angle * (np.pi/2)
+
+            scalar = [radius, semi_angle]
+        elif surface_type == 'torus':
+
+            sin_u_min, cos_u_min, sin_u_max, cos_u_max, sin_v_min, cos_v_min, sin_v_max, cos_v_max = UV
+
+            u_min = np.arctan2(sin_u_min, cos_u_min) % (2*np.pi)
+            u_max = np.arctan2(sin_u_max, cos_u_max) % (2*np.pi)
+            if np.abs(np.abs(u_max - u_min) - 2 * np.pi) < 1e-4:
+                # A full loop, make sure distance less than 2pi
+                u_max = u_min + 2 * np.pi - 1e-4
+            v_min = np.arctan2(sin_v_min, cos_v_min) % (2*np.pi)
+            v_max = np.arctan2(sin_v_max, cos_v_max) % (2*np.pi)
+
+            if np.abs(np.abs(v_max - v_min) - 2 * np.pi) < 1e-4:
+                # A full loop, make sure distance less than 2pi
+                v_max = v_min + 2 * np.pi - 1e-4
+
+            assert len(scalar_params) == 2
+            major_radius = scalar_params[0]
+            minor_radius = scalar_params[1]
+            scalar = [major_radius, minor_radius]
+
+        elif surface_type == 'sphere':
+            sin_u_min, cos_u_min, sin_u_max, cos_u_max, sin_v_min, cos_v_min, sin_v_max, cos_v_max = UV
+
+            u_min = np.arctan2(sin_u_min, cos_u_min) % (2*np.pi)
+            u_max = np.arctan2(sin_u_max, cos_u_max) % (2*np.pi)
+            if np.abs(np.abs(u_max - u_min) - 2 * np.pi) < 1e-4:
+                # A full loop, make sure distance less than 2pi
+                u_max = u_min + 2 * np.pi - 1e-4
+            v_min = np.arctan2(sin_v_min, cos_v_min) % (np.pi)
+            v_max = np.arctan2(sin_v_max, cos_v_max) % (np.pi)
+            if np.abs(np.abs(v_max - v_min) - np.pi) < 1e-4:
+                # A full loop, make sure distance less than pi
+                v_max = v_min + np.pi - 1e-4
+
+            assert len(scalar_params) == 1
+            radius = scalar_params[0]   
+            scalar = [radius]
+        else:
+            raise NotImplementedError(f"Surface type {surface_type} not implemented")
+
+        return {
+            'type': surface_type,
+            'location': [P.tolist()],
+            'direction': [D.tolist(), X.tolist(), Y.tolist()],
+            'uv': [float(u_min), float(u_max), float(v_min), float(v_max)],
+            'scalar': [float(s) for s in scalar],
+        }
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Get all surfaces from a single JSON file.
@@ -202,7 +371,7 @@ class dataset_compound(Dataset):
             
             try:
                 params, surface_type_idx = self._parse_surface(surface_dict)
-                all_params[i] = params
+                all_params[i, :len(params)] = params
                 all_types[i] = surface_type_idx
                 mask[i] = 1.0
             except (KeyError, IndexError, NotImplementedError) as e:

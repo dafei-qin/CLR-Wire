@@ -136,6 +136,7 @@ def build_plane_face(face, tol=1e-2):
 
     u_min, u_max, v_min, v_max = face['uv']
     
+    # Normalization
     centered = position + (u_max + u_min) / 2 * XDirection + (v_max + v_min) / 2 * YDirection
     u = np.array([u_min, u_max])
     u_new = u - (u_max + u_min) / 2
@@ -146,6 +147,7 @@ def build_plane_face(face, tol=1e-2):
     v_min = v_new[0]
     v_max = v_new[1]
     position = centered
+    
     occ_position = gp_Pnt(position[0], position[1], position[2])
     occ_direction = gp_Dir(direction[0], direction[1], direction[2])
     occ_XDirection = gp_Dir(XDirection[0], XDirection[1], XDirection[2])
@@ -174,24 +176,37 @@ def build_second_order_surface(face, tol=1e-2):
     position = np.array(face['location'])[0]
     direction = np.array(face['direction'], dtype=np.float64)[0]
     XDirection = np.array(face['direction'], dtype=np.float64)[1]
-
+    YDirection = np.cross(direction, XDirection)
     orientation = face['orientation']
     # 归一化参数范围
+
+
     if surface_type == 'cylinder':
+        radius = face['scalar'][0]
         position = position + direction * v_min
         v_max = v_max - v_min
         v_min = 0
+        u_min = u_min % (2 * np.pi)
+        u_max = u_max % (2 * np.pi)
 
-    if surface_type == 'cylinder':
-        radius = face['scalar'][0]
     elif surface_type == 'cone':
         radius = face['scalar'][1]
         semi_angle = face['scalar'][0]
+        semi_angle = semi_angle % (0.5 * np.pi)
+
+
     elif surface_type == 'torus':
         major_radius = face['scalar'][0]
         minor_radius = face['scalar'][1]
+        u_min = u_min % (2 * np.pi)
+        u_max = u_max % (2 * np.pi)
+
     elif surface_type == 'sphere':
         radius = face['scalar'][0]
+        u_min = u_min % (2 * np.pi)
+        u_max = u_max % (2 * np.pi)
+        v_min = v_min % (np.pi) - np.pi/2
+        v_max = v_max % (np.pi) - np.pi/2
     else:
         raise ValueError(f"Surface type {surface_type} not supported")
     # print(type(radius))
@@ -382,6 +397,7 @@ def visualize_json_interset(cad_data, plot=True, tol=1e-2):
         pass
 
     for face in faces_list:
+        print(face)
         surface_type = face['type']
         surface_index = face['idx'][0]
         # print(f"Processing face {surface_type} with type {surface_index}")
