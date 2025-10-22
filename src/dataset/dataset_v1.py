@@ -192,19 +192,32 @@ class dataset_compound(Dataset):
             
 
         elif surface_type == 'sphere':
+            PI = np.pi
+            HALF_PI = np.pi/2
+            TWO_PI = 2*np.pi
+            def canonicalize_vc_uc(u_c, v_c):
+                # bring v_c into (-pi/2, pi/2], adjusting u_c accordingly, without extra flags
+                while v_c > HALF_PI:
+                    v_c -= PI
+                    u_c += PI
+                while v_c <= -HALF_PI:
+                    v_c += PI
+                    u_c += PI
+                # normalize u_c to (-pi, pi] or [0,2pi) if you prefer
+                u_c = (u_c + PI) % (2*PI) - PI
+                return u_c, v_c
             # scalar[0] = radius
 
             scalar_params = [surface_dict['scalar'][0]]
 
 
-            PI = np.pi
-            HALF_PI = np.pi/2
-            TWO_PI = 2*np.pi
+            
 
             u_center = 0.5 * (u_min + u_max)
             v_center = 0.5 * (v_min + v_max)
             u_half = 0.5 * (u_max - u_min)
             v_half = 0.5 * (v_max - v_min)
+            u_center, v_center = canonicalize_vc_uc(u_center, v_center)
 
             dir_vec = np.array([
                 np.cos(v_center) * np.cos(u_center),
@@ -212,10 +225,10 @@ class dataset_compound(Dataset):
                 np.sin(v_center)
             ], dtype=np.float32)
             
-            u_h_norm = u_half / np.pi - 0.5         # 在 [-1, 1]
-            v_h_norm = v_half / (np.pi / 2) - 0.5  # 在 [-1, 1]
+            u_h_norm = np.clip(u_half / np.pi, 0, 1)        # 在 [-1, 1]
+            v_h_norm = np.clip(v_half / (PI/2), 0.0, 1.0)   # 在 [-1, 1]
 
-            UV = np.concatenate([dir_vec, [np.cos(v_center), u_h_norm, v_h_norm, 0, 0]])
+            UV = np.concatenate([dir_vec, [u_h_norm, v_h_norm, 0, 0, 0]])
 
 
         elif surface_type == 'torus':
@@ -329,17 +342,21 @@ class dataset_compound(Dataset):
             scalar = [major_radius, minor_radius]
 
         elif surface_type == 'sphere':
-            dir_vec = UV[:3]
-            v_c_cos, u_h_norm, v_h_norm = UV[3:6]
+            dir_vec = UV[:3].astype(np.float64)
+            u_h_norm = float(UV[3])
+            v_h_norm = float(UV[4])
 
+            if np.linalg.norm(dir_vec) == 0:
+                raise ValueError("zero dir vector")
             dir_vec = dir_vec / np.linalg.norm(dir_vec)
             x, y, z = dir_vec
 
-            u_c = np.arctan2(y, x)
-            v_c = np.arctan2(z, v_c_cos)
+            u_c = np.arctan2(y, x)   # in (-pi, pi]
+            v_c = np.arcsin(np.clip(z, -1.0, 1.0))  # in [-pi/2, pi/2]
 
-            u_h = (u_h_norm + 0.5) * np.pi
-            v_h = (v_h_norm + 0.5) * (np.pi / 2)
+            # recover half widths
+            u_h = np.clip(u_h_norm, 0.0, 1.0) * np.pi
+            v_h = np.clip(v_h_norm, 0.0, 1.0) * (np.pi/2)
 
             u_min, u_max = u_c - u_h, u_c + u_h
             v_min, v_max = v_c - v_h, v_c + v_h
