@@ -186,27 +186,27 @@ def build_second_order_surface(face, tol=1e-2):
         position = position + direction * v_min
         v_max = v_max - v_min
         v_min = 0
-        u_min = u_min % (2 * np.pi)
-        u_max = u_max % (2 * np.pi)
+        # u_min = u_min % (2 * np.pi)
+        # u_max = u_max % (2 * np.pi)
 
     elif surface_type == 'cone':
         radius = face['scalar'][1]
         semi_angle = face['scalar'][0]
-        semi_angle = semi_angle % (0.5 * np.pi)
+        # semi_angle = semi_angle % (0.5 * np.pi)
 
 
     elif surface_type == 'torus':
         major_radius = face['scalar'][0]
         minor_radius = face['scalar'][1]
-        u_min = u_min % (2 * np.pi)
-        u_max = u_max % (2 * np.pi)
+        # u_min = u_min % (2 * np.pi)
+        # u_max = u_max % (2 * np.pi)
 
     elif surface_type == 'sphere':
         radius = face['scalar'][0]
-        u_min = u_min % (2 * np.pi)
-        u_max = u_max % (2 * np.pi)
-        v_min = v_min % (np.pi) - np.pi/2
-        v_max = v_max % (np.pi) - np.pi/2
+        # u_min = u_min % (2 * np.pi)
+        # u_max = u_max % (2 * np.pi)
+        # v_min = v_min % (np.pi) - np.pi/2
+        # v_max = v_max % (np.pi) - np.pi/2
     else:
         raise ValueError(f"Surface type {surface_type} not supported")
     # print(type(radius))
@@ -397,7 +397,7 @@ def visualize_json_interset(cad_data, plot=True, tol=1e-2):
         pass
 
     for face in faces_list:
-        print(face)
+
         surface_type = face['type']
         surface_index = face['idx'][0]
         # print(f"Processing face {surface_type} with type {surface_index}")
