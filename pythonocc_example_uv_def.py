@@ -40,42 +40,46 @@ class UVParameterVisualizer:
         self.current_surface_index = 1  # Index in surface_types list
         
         # UV parameter ranges for each surface type
+        # Using -2π to 2π for all ranges to allow maximum flexibility
+        two_pi = 2.0 * np.pi
+        neg_two_pi = -2.0 * np.pi
+        
         self.uv_params = {
             "plane": {
                 "u_min": 0.0, "u_max": 10.0,
                 "v_min": 0.0, "v_max": 10.0,
-                "u_range": [-20.0, 20.0],  # Allowable range
-                "v_range": [-20.0, 20.0]
+                "u_range": [neg_two_pi, two_pi],  # Allowable range
+                "v_range": [neg_two_pi, two_pi]
             },
             "cylinder": {
-                "u_min": 0.0, "u_max": 6.28,  # 0 to 2*pi
+                "u_min": 0.0, "u_max": two_pi,  # 0 to 2*pi
                 "v_min": 0.0, "v_max": 10.0,
-                "u_range": [0.0, 6.28],
-                "v_range": [0.0, 20.0]
+                "u_range": [neg_two_pi, two_pi],
+                "v_range": [neg_two_pi, two_pi]
             },
             "cone": {
-                "u_min": 0.0, "u_max": 6.28,
+                "u_min": 0.0, "u_max": two_pi,
                 "v_min": 0.0, "v_max": 10.0,
-                "u_range": [0.0, 6.28],
-                "v_range": [0.0, 20.0]
+                "u_range": [neg_two_pi, two_pi],
+                "v_range": [neg_two_pi, two_pi]
             },
             "sphere": {
-                "u_min": 0.0, "u_max": 6.28,  # 0 to 2*pi (longitude)
-                "v_min": -1.57, "v_max": 1.57,  # -pi/2 to pi/2 (latitude)
-                "u_range": [0.0, 6.28],
-                "v_range": [-1.57, 1.57]
+                "u_min": 0.0, "u_max": two_pi,  # 0 to 2*pi (longitude)
+                "v_min": -np.pi/2, "v_max": np.pi/2,  # -pi/2 to pi/2 (latitude)
+                "u_range": [neg_two_pi, two_pi],
+                "v_range": [neg_two_pi, two_pi]
             },
             "torus": {
-                "u_min": 0.0, "u_max": 6.28,
-                "v_min": 0.0, "v_max": 6.28,
-                "u_range": [0.0, 6.28],
-                "v_range": [0.0, 6.28]
+                "u_min": 0.0, "u_max": two_pi,
+                "v_min": 0.0, "v_max": two_pi,
+                "u_range": [neg_two_pi, two_pi],
+                "v_range": [neg_two_pi, two_pi]
             },
             "bspline_surface": {
                 "u_min": 0.0, "u_max": 1.0,
                 "v_min": 0.0, "v_max": 1.0,
-                "u_range": [0.0, 1.0],
-                "v_range": [0.0, 1.0]
+                "u_range": [neg_two_pi, two_pi],
+                "v_range": [neg_two_pi, two_pi]
             }
         }
         
@@ -632,37 +636,43 @@ class UVParameterVisualizer:
             
             # U min/max
             psim.Text("U Parameter:")
-            changed_u_min, new_u_min = psim.SliderFloat(
-                "U Min", uv["u_min"], uv["u_range"][0], uv["u_range"][1]
-            )
-            if changed_u_min and new_u_min < uv["u_max"]:
-                uv["u_min"] = new_u_min
-                updated = True
+            psim.Text(f"  Range: [{uv['u_range'][0]:.6f}, {uv['u_range'][1]:.6f}]")
+            changed_u_min, new_u_min = psim.InputFloat("U Min", uv["u_min"], step=1e-8, step_fast=1e-4, format="%.8f")
+            if changed_u_min:
+                # Clamp to valid range and ensure u_min < u_max
+                new_u_min = max(uv["u_range"][0], min(uv["u_range"][1], new_u_min))
+                if new_u_min < uv["u_max"]:
+                    uv["u_min"] = new_u_min
+                    updated = True
             
-            changed_u_max, new_u_max = psim.SliderFloat(
-                "U Max", uv["u_max"], uv["u_range"][0], uv["u_range"][1]
-            )
-            if changed_u_max and new_u_max > uv["u_min"]:
-                uv["u_max"] = new_u_max
-                updated = True
+            changed_u_max, new_u_max = psim.InputFloat("U Max", uv["u_max"], step=1e-8, step_fast=1e-4, format="%.8f")
+            if changed_u_max:
+                # Clamp to valid range and ensure u_max > u_min
+                new_u_max = max(uv["u_range"][0], min(uv["u_range"][1], new_u_max))
+                if new_u_max > uv["u_min"]:
+                    uv["u_max"] = new_u_max
+                    updated = True
             
             psim.Separator()
             
             # V min/max
             psim.Text("V Parameter:")
-            changed_v_min, new_v_min = psim.SliderFloat(
-                "V Min", uv["v_min"], uv["v_range"][0], uv["v_range"][1]
-            )
-            if changed_v_min and new_v_min < uv["v_max"]:
-                uv["v_min"] = new_v_min
-                updated = True
+            psim.Text(f"  Range: [{uv['v_range'][0]:.6f}, {uv['v_range'][1]:.6f}]")
+            changed_v_min, new_v_min = psim.InputFloat("V Min", uv["v_min"], step=1e-8, step_fast=1e-4, format="%.8f")
+            if changed_v_min:
+                # Clamp to valid range and ensure v_min < v_max
+                new_v_min = max(uv["v_range"][0], min(uv["v_range"][1], new_v_min))
+                if new_v_min < uv["v_max"]:
+                    uv["v_min"] = new_v_min
+                    updated = True
             
-            changed_v_max, new_v_max = psim.SliderFloat(
-                "V Max", uv["v_max"], uv["v_range"][0], uv["v_range"][1]
-            )
-            if changed_v_max and new_v_max > uv["v_min"]:
-                uv["v_max"] = new_v_max
-                updated = True
+            changed_v_max, new_v_max = psim.InputFloat("V Max", uv["v_max"], step=1e-8, step_fast=1e-4, format="%.8f")
+            if changed_v_max:
+                # Clamp to valid range and ensure v_max > v_min
+                new_v_max = max(uv["v_range"][0], min(uv["v_range"][1], new_v_max))
+                if new_v_max > uv["v_min"]:
+                    uv["v_max"] = new_v_max
+                    updated = True
             
             psim.Separator()
             
