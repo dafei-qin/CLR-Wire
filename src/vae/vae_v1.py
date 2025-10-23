@@ -65,7 +65,7 @@ class SurfaceVAE(nn.Module):
     # 
     def encode(self, params_raw, surface_type):
         assert params_raw.shape[1] == self.max_raw_dim # Padded to the max dim
-        emb = self.type_emb(surface_type).squeeze(1)              # (B, emb_dim)
+        emb = self.type_emb(surface_type)             # (B, emb_dim)
         # Apply type-specific input projection per unique type in batch
         batch_size = params_raw.size(0)
         device = params_raw.device
@@ -95,7 +95,7 @@ class SurfaceVAE(nn.Module):
         
         # Input latent code and surface type, output padded raw parameters
 
-        emb = self.type_emb(surface_type).squeeze(1)
+        emb = self.type_emb(surface_type)
         x = torch.cat([z, emb], dim=-1)
         param_emb = self.decoder(x)
         # Apply type-specific output head per unique type in batch

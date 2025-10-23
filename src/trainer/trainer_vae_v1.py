@@ -10,6 +10,7 @@ from functools import partial
 
 from src.trainer.trainer_base import BaseTrainer
 from src.utils.helpers import divisible_by, get_current_time, get_lr
+from src.dataset.dataset_v1 import get_surface_type
 
 class Trainer_vae_v1(BaseTrainer):
     def __init__(
@@ -77,6 +78,9 @@ class Trainer_vae_v1(BaseTrainer):
         self.loss_recon_weight = loss_recon_weight
         self.loss_cls_weight = loss_cls_weight
         self.loss_kl_weight = loss_kl_weight
+        
+        # Track abnormal values for logging
+        self.abnormal_values_buffer = []
 
     def compute_accuracy(self, logits, labels):
         predictions = torch.argmax(logits, dim=-1)
@@ -119,17 +123,38 @@ class Trainer_vae_v1(BaseTrainer):
                     params_padded, surface_type, masks = forward_kwargs
                     params_padded = params_padded[masks.bool()] 
                     surface_type = surface_type[masks.bool()]
-                    
+                    if surface_type.shape[0] == 0:
+                        continue
+                    # print(params_padded.abs().max())
+                    abnormal_value = params_padded.abs().max().item()
+
+
+                    if abnormal_value > 10:
+                        pos = torch.argmax(params_padded.abs())
+                        row = (pos // params_padded.shape[1]).item()
+                        col = (pos % params_padded.shape[1]).item()
+                        surface_type_abl = surface_type[row]
+                        surface_type_str = get_surface_type(surface_type_abl.item())
+
+                        # Accumulate abnormal values for batch logging
+                        self.log(**{
+                            "abnormal_value": abnormal_value,
+                            "surface_type": surface_type_abl,
+                            "param_position": col
+                        })
+                        # self.abnormal_values_buffer.append([abnormal_value, surface_type_str, col])
+
+
                     # Forward pass
                     params_raw_recon, mask, class_logits, mu, logvar = self.model(params_padded, surface_type)
                     
                     loss_recon = (self.loss_recon(params_raw_recon, params_padded) * mask.float()).mean() * self.loss_recon_weight
-                    loss_cls = self.loss_cls(class_logits, surface_type.squeeze()).mean()
+                    loss_cls = self.loss_cls(class_logits, surface_type).mean()
                     loss_kl = -0.5 * torch.mean(torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1))
 
                     loss = loss_recon * self.loss_recon_weight + loss_cls * self.loss_cls_weight + loss_kl * self.loss_kl_weight
                     
-                    accuracy = self.compute_accuracy(class_logits, surface_type.squeeze())
+                    accuracy = self.compute_accuracy(class_logits, surface_type)
 
 
                     loss = loss / self.grad_accum_every
@@ -146,6 +171,18 @@ class Trainer_vae_v1(BaseTrainer):
                 total_norm = self.optimizer.total_norm
                                                         
                 self.log_loss(total_loss, total_accuracy, loss_recon.item(), loss_cls.item(), loss_kl.item(), cur_lr, total_norm, step)
+                
+                # Log accumulated abnormal values table
+
+                # abnormal_table = wandb.Table(
+                #     columns=["abnormal_value", "surface_type", "param_position"],
+                #     data=self.abnormal_values_buffer
+                # )
+                # # print(self.abnormal_values_buffer)
+                # self.log(**{"Abnormal_params": abnormal_table})
+                # if len(self.abnormal_values_buffer) > 200000:
+                #     self.abnormal_values_buffer = self.abnormal_values_buffer[-200000:]
+                #     # self.abnormal_values_buffer = []  # Clear buffer after logging
             
             step += 1
             self.step.add_(1)
@@ -177,10 +214,10 @@ class Trainer_vae_v1(BaseTrainer):
                         params_raw_recon, mask, class_logits, mu, logvar = self.ema(params_padded, surface_type)
 
                         loss_recon = (self.loss_recon(params_raw_recon, params_padded) * mask.float()).mean()
-                        loss_cls = self.loss_cls(class_logits, surface_type.squeeze()).mean()
+                        loss_cls = self.loss_cls(class_logits, surface_type_str).mean()
                         loss_kl = -0.5 * torch.mean(torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1))
                         loss = loss_recon + loss_cls + loss_kl
-                        accuracy = self.compute_accuracy(class_logits, surface_type.squeeze())
+                        accuracy = self.compute_accuracy(class_logits, surface_type)
 
                         
                         # Use EMA model for validation

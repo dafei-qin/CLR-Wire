@@ -13,6 +13,7 @@ import numpy as np
 import pickle
 import os
 import json
+import warnings
 from einops import rearrange
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -38,7 +39,7 @@ SCALAR_DIM_MAP = {
     'torus': 2,      # [major_radius, minor_radius]
     'bspline_surface': -1,  # variable dimension
 }
-
+SURFACE_TYPE_MAP_INV = {v: k for k, v in SURFACE_TYPE_MAP.items()}
 
 
 
@@ -180,12 +181,21 @@ class dataset_compound(Dataset):
 
         elif surface_type == 'cone':
 
+            def cone_point(O, X, Y, Z, alpha, u, v):
+                # returns 3D point P(u,v)
+                return O + v*np.sin(alpha)*Z + v*np.cos(alpha)*(np.cos(u)*X + np.sin(u)*Y)
+
             radius, semi_angle = surface_dict['scalar'][0], surface_dict['scalar'][1]
             u_center = 0.5 * (u_min + u_max)
-            u_half = 0.5 * (u_max - u_min) / np.pi  # (0 - pi) --> (0, 1)
-            sin_u_center, cos_u_center = np.sin(u_center), np.cos(u_center)
+            u_half = 0.5 * (u_max - u_min) 
+            
             v_center = 0.5 * (v_min + v_max)
             v_half = 0.5 * (v_max - v_min)
+
+            Pc = cone_point(P, X, Y, D, semi_angle, u_center, v_center)
+
+            r_c = v_center * np.cos(semi_angle)
+            r_h = v_half * np.cos(semi_angle)
 
             UV = [sin_u_center, cos_u_center, u_half, v_center, v_half, 0, 0, 0] # (8, )
             scalar_params = [radius, semi_angle / (np.pi/2)]
@@ -397,20 +407,33 @@ class dataset_compound(Dataset):
                 break
             
             try:
-                params, surface_type_idx = self._parse_surface(surface_dict)
-                all_params[i, :len(params)] = params
-                all_types[i] = surface_type_idx
-                mask[i] = 1.0
-            except (KeyError, IndexError, NotImplementedError) as e:
+                # Catch RuntimeWarnings (overflow, invalid value) and convert to exceptions
+                with warnings.catch_warnings():
+                    warnings.filterwarnings('error', category=RuntimeWarning)
+                    params, surface_type_idx = self._parse_surface(surface_dict)
+                    all_params[i, :len(params)] = params
+                    all_types[i] = surface_type_idx
+                    mask[i] = 1.0
+            except (KeyError, IndexError, NotImplementedError, RuntimeWarning) as e:
                 # Skip invalid surfaces (leave as zeros with mask=0)
                 # print(f"Warning: Skipping surface {i} in {json_path}: {e}")
                 continue
+            
         
         # Convert to tensors
-        params_tensor = torch.from_numpy(all_params).float()
+        params_tensor = torch.from_numpy(all_params).float() 
         types_tensor = torch.from_numpy(all_types).long()
         mask_tensor = torch.from_numpy(mask).float()
         
+        if params_tensor.abs().max() > 10:
+            pos = torch.argmax(params_tensor.abs())
+            row = (pos // params_tensor.shape[1]).item()
+            col = (pos % params_tensor.shape[1]).item()
+            surface_type_abl = types_tensor[row]
+            surface_type_str = get_surface_type(surface_type_abl.item())
+            to_save = [json_path, str(int(row)), surface_type_str, str(int(col)), str(params_tensor.abs().max().item())]
+            with open('abnormal_params.csv', 'a') as f:
+                f.write(','.join(to_save) + '\n')
         return params_tensor, types_tensor, mask_tensor
     
     def get_file_info(self, idx: int) -> Dict:
@@ -438,3 +461,6 @@ class dataset_compound(Dataset):
             'mask': mask_tensor,
             'original_data': surfaces_data,
         }
+
+def get_surface_type(surf_type):
+    return SURFACE_TYPE_MAP_INV[surf_type]        
