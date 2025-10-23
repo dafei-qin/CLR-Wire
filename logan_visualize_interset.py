@@ -21,6 +21,8 @@ if __name__ == "__main__":
     all_edges = {}
     all_ps_groups = []
     for idx_m in range(len(all_faces)):
+        if idx_m != 7:
+            continue
         all_edges[idx_m] = []
         new_group = ps.create_group(f"face_{idx_m:03d}_edges")
         all_ps_groups.append(new_group)

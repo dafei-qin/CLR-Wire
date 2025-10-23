@@ -375,7 +375,8 @@ def load_json_to_faces(cad_data):
 
 
 
-entrys = json.load(open(r"F:\WORK\CAD\data\logan_jsons\0042\00420339\00420339_2323ceb4edb990b5e01e553b_step_000\index_000.json", "r"))
+# entrys = json.load(open(r"F:\WORK\CAD\data\logan_jsons\0042\00420339\00420339_2323ceb4edb990b5e01e553b_step_000\index_000.json", "r"))
+entrys = json.load(open(r"C:\drivers\CAD\CLR-Wire\assets\abnormal_cases\index_003.json", "r"))
 # entrys = [e for e in entrys if e["type"] != "bspline_surface"]
 all_faces = load_json_to_faces(entrys)
 
