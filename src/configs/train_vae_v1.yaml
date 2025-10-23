@@ -33,7 +33,7 @@ model:
     # num_nearby: 20
     # surface_dim: 256
     # surface_enc_block_out_channels: [16, 32, 64, 128]
-    param_raw_dim: [10, 11, 12, 12, 11]
+    param_raw_dim: [17, 18, 19, 19, 18]
     checkpoint_folder: checkpoints/vae_v1_debug
     checkpoint_file_name: model.pt 0
 

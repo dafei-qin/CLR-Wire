@@ -6,12 +6,12 @@
 
 # It has a total of 5 surface types:
 
-# 1. plane: position x 3 + direction x 3 + UV x 4 = 10
+# 1. plane: position x 3 + direction x 3 + XDirection x 3 + UV x 8 = 17
 
-# 2. cylinder: 10 + radius =                        11
-# 3. cone: 10 + radius + semi_angle =               12
-# 4. torus: 10 + major_radius + minor_radius =      12
-# 5. sphere: 10 + radius =                          11
+# 2. cylinder: 17 + radius =                        18
+# 3. cone: 17 + radius + semi_angle =               19
+# 4. torus: 17 + major_radius + minor_radius =      19
+# 5. sphere: 17 + radius =                          18
 
 
 '''
@@ -24,8 +24,8 @@ import torch.nn.functional as F
 class SurfaceVAE(nn.Module):
     def __init__(self, 
                  param_raw_dim,
-                 param_dim=16,       # 每个曲面参数向量长度（补齐后的）
-                 latent_dim=32,       # 潜空间维度
+                 param_dim=32,       # 每个曲面参数向量长度（补齐后的）
+                 latent_dim=128,       # 潜空间维度
                  n_surface_types=5,  # 曲面种类数
                  emb_dim=16):         # embedding维度
         super().__init__()
@@ -38,23 +38,24 @@ class SurfaceVAE(nn.Module):
         self.param_emb_list = nn.ModuleList([nn.Linear(param_raw_dim[i], param_dim) for i in range(n_surface_types)])
         # Encoder
         self.encoder = nn.Sequential(
-            nn.Linear(param_dim + emb_dim, 64),
+            nn.Linear(param_dim + emb_dim, 512),
             nn.ReLU(),
-            nn.Linear(64, 32),
+            nn.Linear(512, 256),
             nn.ReLU(),
+            nn.Linear(256, 128),
         )
         
         # 输出潜空间参数
-        self.fc_mu = nn.Linear(32, latent_dim)
-        self.fc_logvar = nn.Linear(32, latent_dim)
+        self.fc_mu = nn.Linear(128, latent_dim)
+        self.fc_logvar = nn.Linear(128, latent_dim)
         
         # Decoder
         self.decoder = nn.Sequential(
-            nn.Linear(latent_dim + emb_dim, 32),
+            nn.Linear(latent_dim + emb_dim, 256),
             nn.ReLU(),
-            nn.Linear(32, 64),
+            nn.Linear(256, 512),
             nn.ReLU(),
-            nn.Linear(64, param_dim)  # 输出重建参数
+            nn.Linear(512, param_dim)  # 输出重建参数
         )
 
         self.classifier = nn.Linear(latent_dim, n_surface_types)
