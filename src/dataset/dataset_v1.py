@@ -173,22 +173,43 @@ class dataset_compound(Dataset):
             v_max = v_max - v_min
             v_min = 0
 
+
+
+
             u_center = 0.5 * (u_min + u_max)
-            u_half = 0.5 * (u_max - u_min) / np.pi - 0.5 # (0 - pi) --> (0, 1)
+            u_diff = u_max - u_min
+
+            while u_diff > 2 * np.pi:
+                u_diff -= 2 * np.pi
+            u_half = 0.5 * (u_diff) / np.pi - 0.5 # (0 - pi) --> (0, 1)
+
             sin_u_center, cos_u_center = np.sin(u_center), np.cos(u_center)
             UV = np.array([sin_u_center, cos_u_center, u_half, v_max, 0, 0, 0, 0], dtype=np.float32) # (8, )
 
         elif surface_type == 'cone':
 
-            radius, semi_angle = surface_dict['scalar'][0], surface_dict['scalar'][1]
+            semi_angle, radius = surface_dict['scalar'][0], surface_dict['scalar'][1]
+
+
+            P_min = P + v_min * np.cos(semi_angle) * D
+            r_min = radius + v_min * np.sin(semi_angle)
+            v_max = v_max - v_min
+            v_min = 0
+            P = P_min
+            radius = r_min
+
+            
             u_center = 0.5 * (u_min + u_max)
-            u_half = 0.5 * (u_max - u_min) / np.pi  # (0 - pi) --> (0, 1)
+            u_diff = u_max - u_min
+            while u_diff > 2 * np.pi:
+                u_diff -= 2 * np.pi
+            u_half = 0.5 * (u_diff) / np.pi  # (0 - pi) --> (0, 1)
             sin_u_center, cos_u_center = np.sin(u_center), np.cos(u_center)
             v_center = 0.5 * (v_min + v_max)
             v_half = 0.5 * (v_max - v_min)
 
             UV = [sin_u_center, cos_u_center, u_half, v_center, v_half, 0, 0, 0] # (8, )
-            scalar_params = [radius, semi_angle / (np.pi/2)]
+            scalar_params = [semi_angle / (np.pi/2), radius]
             
 
         elif surface_type == 'sphere':
@@ -215,8 +236,15 @@ class dataset_compound(Dataset):
 
             u_center = 0.5 * (u_min + u_max)
             v_center = 0.5 * (v_min + v_max)
-            u_half = 0.5 * (u_max - u_min)
-            v_half = 0.5 * (v_max - v_min)
+            u_diff = u_max - u_min
+            v_diff = v_max - v_min
+            while u_diff > 2 * np.pi:
+                u_diff -= 2 * np.pi
+            while v_diff > np.pi:
+                v_diff -= np.pi
+            
+            u_half = 0.5 * (u_diff)
+            v_half = 0.5 * (v_diff)
             u_center, v_center = canonicalize_vc_uc(u_center, v_center)
 
             dir_vec = np.array([
@@ -236,9 +264,15 @@ class dataset_compound(Dataset):
             scalar_params = [surface_dict['scalar'][0], surface_dict['scalar'][1]]
 
             u_center = 0.5 * (u_min + u_max)
-            u_half = 0.5 * (u_max - u_min)
+            u_diff = u_max - u_min
+            while u_diff > 2 * np.pi:
+                u_diff -= 2 * np.pi
+            u_half = 0.5 * (u_diff)
+            v_diff = v_max - v_min
+            while v_diff > np.pi:
+                v_diff -= np.pi
             v_center = 0.5 * (v_min + v_max)
-            v_half = 0.5 * (v_max - v_min)
+            v_half = 0.5 * (v_diff)
 
 
             sin_u_center, cos_u_center = np.sin(u_center), np.cos(u_center)
@@ -309,11 +343,11 @@ class dataset_compound(Dataset):
 
 
             assert len(scalar_params) == 2
-            radius = scalar_params[0]
-            semi_angle = scalar_params[1]
+            radius = scalar_params[1]
+            semi_angle = scalar_params[0]
             semi_angle = semi_angle * (np.pi/2)
 
-            scalar = [radius, semi_angle]
+            scalar = [semi_angle, radius]
         elif surface_type == 'torus':
 
             sin_u_center, cos_u_center, u_half, sin_v_center, cos_v_center, v_half = UV[:6]

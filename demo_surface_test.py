@@ -21,9 +21,9 @@ def demo_json_file_test():
     """Demonstrate testing surfaces from a JSON file with visualization."""
     print("\n=== JSON File Test Demo ===")
     
-    # json_file = "assets/examples/00000084/out_000.json"
+    json_file = "assets/examples/00000084/out_000.json"
     # json_file = "assets/examples/00000056/out_005.json"
-    json_file = r"C:\drivers\CAD\CLR-Wire\assets\abnormal_cases\index_003.json"
+    # json_file = r"F:\WORK\CAD\CLR-Wire\assets\abnormal_cases\index_003.json"
     
     if not Path(json_file).exists():
         print(f"Error: File '{json_file}' not found")
