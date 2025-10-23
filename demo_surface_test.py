@@ -22,7 +22,8 @@ def demo_json_file_test():
     print("\n=== JSON File Test Demo ===")
     
     # json_file = "assets/examples/00000084/out_000.json"
-    json_file = "assets/examples/00000056/out_005.json"
+    # json_file = "assets/examples/00000056/out_005.json"
+    json_file = r"C:\drivers\CAD\CLR-Wire\assets\abnormal_cases\index_003.json"
     
     if not Path(json_file).exists():
         print(f"Error: File '{json_file}' not found")
@@ -53,12 +54,9 @@ def demo_json_file_test():
         # Recover
         recovered = dataset._recover_surface(params, surface_type_idx)
         
-        if recovered['type'] == 'sphere':
-            print('orig:\n', np.array(surface_dict['uv']) )
-            print('recovered:\n', np.array(recovered['uv']) )
-            # recovered['uv'][2] -= 1e-3
-            # recovered['uv'][2:] = surface_dict['uv'][2:]
-        # if i == 26:
+
+        if i == 7:
+            print()
         #     recovered['uv'] = [2.61729 - 2 * np.pi, 4.45059 - 2 * np.pi, -0.12568, 0.00030289]
         print(f"  Recovered: {recovered['type']}")
         recovered['idx'] = [i, i]
