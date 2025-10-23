@@ -180,8 +180,10 @@ class dataset_compound(Dataset):
             u_center = 0.5 * (u_min + u_max)
             u_diff = u_max - u_min
 
-            while u_diff > 2 * np.pi:
-                u_diff -= 2 * np.pi
+            # while u_diff > 2 * np.pi:
+            #     u_diff -= 2 * np.pi
+            if u_diff > 0:
+                u_diff -= u_diff // (2 * np.pi) * 2 * np.pi
             u_half = 0.5 * (u_diff) / np.pi - 0.5 # (0 - pi) --> (0, 1)
 
             sin_u_center, cos_u_center = np.sin(u_center), np.cos(u_center)
@@ -202,8 +204,11 @@ class dataset_compound(Dataset):
             
             u_center = 0.5 * (u_min + u_max)
             u_diff = u_max - u_min
-            while u_diff > 2 * np.pi:
-                u_diff -= 2 * np.pi
+            # while u_diff > 2 * np.pi:
+            #     u_diff -= 2 * np.pi
+            if u_diff > 0:
+                u_diff -= u_diff // (2 * np.pi) * 2 * np.pi
+                
             u_half = 0.5 * (u_diff) / np.pi  # (0 - pi) --> (0, 1)
             sin_u_center, cos_u_center = np.sin(u_center), np.cos(u_center)
             v_center = 0.5 * (v_min + v_max)
@@ -240,11 +245,14 @@ class dataset_compound(Dataset):
             v_center = 0.5 * (v_min + v_max)
             u_diff = u_max - u_min
             v_diff = v_max - v_min
-            while u_diff > 2 * np.pi:
-                u_diff -= 2 * np.pi
-            while v_diff > np.pi:
-                v_diff -= np.pi
-            
+            # while u_diff > 2 * np.pi:
+            #     u_diff -= 2 * np.pi
+            if u_diff > 0:
+                u_diff -= u_diff // (2 * np.pi) * 2 * np.pi
+            # while v_diff > np.pi:
+            #     v_diff -= np.pi
+            if v_diff > 0:
+                v_diff -= v_diff // np.pi * np.pi
             u_half = 0.5 * (u_diff)
             v_half = 0.5 * (v_diff)
             u_center, v_center = canonicalize_vc_uc(u_center, v_center)
@@ -267,12 +275,16 @@ class dataset_compound(Dataset):
 
             u_center = 0.5 * (u_min + u_max)
             u_diff = u_max - u_min
-            while u_diff > 2 * np.pi:
-                u_diff -= 2 * np.pi
+            # while u_diff > 2 * np.pi:
+            #     u_diff -= 2 * np.pi
+            if u_diff > 0:
+                u_diff -= u_diff // (2 * np.pi) * 2 * np.pi
             u_half = 0.5 * (u_diff)
             v_diff = v_max - v_min
-            while v_diff > np.pi:
-                v_diff -= np.pi
+            # while v_diff > np.pi:
+            #     v_diff -= np.pi
+            if v_diff > 0:
+                v_diff -= v_diff // np.pi * np.pi
             v_center = 0.5 * (v_min + v_max)
             v_half = 0.5 * (v_diff)
 
@@ -415,20 +427,30 @@ class dataset_compound(Dataset):
             mask: Tensor of shape (max_num_surfaces,) indicating valid surfaces (1) vs padding (0)
         """
         json_path = self.json_names[idx]
+        # print(json_path)
         
         # Load JSON file
-        with open(json_path, 'r') as f:
-            surfaces_data = json.load(f)
+
         
-        num_surfaces = len(surfaces_data)
         
         # Initialize arrays for all surfaces (padded)
         all_params = np.zeros((self.max_num_surfaces, self.max_param_dim), dtype=np.float32)
         all_types = np.zeros(self.max_num_surfaces, dtype=np.int64)
         mask = np.zeros(self.max_num_surfaces, dtype=np.float32)
+
+
+        try:
+            with open(json_path, 'r') as f:
+                surfaces_data = json.load(f)
+        except json.JSONDecodeError:
+            print(f"JSONDecodeError: {json_path}")
+            with open('./assets/abnormal_json.csv', 'w') as f:
+                f.write(json_path + '\n')
+            return torch.from_numpy(all_params).float(), torch.from_numpy(all_types).long(), torch.from_numpy(mask).float()
         
         # Parse each surface
         for i, surface_dict in enumerate(surfaces_data):
+            # print(i)
             if i >= self.max_num_surfaces:
                 break
             
@@ -458,8 +480,10 @@ class dataset_compound(Dataset):
             surface_type_abl = types_tensor[row]
             surface_type_str = get_surface_type(surface_type_abl.item())
             to_save = [json_path, str(int(row)), surface_type_str, str(int(col)), str(params_tensor.abs().max().item())]
-            with open('abnormal_params.csv', 'a') as f:
+            with open('abnormal_params_1023.csv', 'a') as f:
                 f.write(','.join(to_save) + '\n')
+        
+            mask_tensor[torch.where(params_tensor.abs() > 10)[0].unique()] = 0
         return params_tensor, types_tensor, mask_tensor
     
     def get_file_info(self, idx: int) -> Dict:

@@ -43,6 +43,8 @@ class Trainer_vae_v1(BaseTrainer):
         loss_recon_weight: float = 1.0,
         loss_cls_weight: float = 1.0,
         loss_kl_weight: float = 1.0,
+        kl_annealing_steps: int = 0,
+        kl_free_bits: float = 0.0,
         **kwargs
     ):
         super().__init__(
@@ -79,6 +81,10 @@ class Trainer_vae_v1(BaseTrainer):
         self.loss_cls_weight = loss_cls_weight
         self.loss_kl_weight = loss_kl_weight
         
+        # KL annealing and free bits parameters
+        self.kl_annealing_steps = kl_annealing_steps
+        self.kl_free_bits = kl_free_bits
+        
         # Track abnormal values for logging
         self.abnormal_values_buffer = []
 
@@ -87,7 +93,16 @@ class Trainer_vae_v1(BaseTrainer):
         correct = (predictions == labels).float()
         return correct.mean()
 
-    def log_loss(self, total_loss, accuracy, loss_recon, loss_cls, loss_kl, lr, total_norm, step):
+    def compute_kl_annealing_beta(self, step):
+        """
+        Compute KL annealing weight using linear schedule.
+        Returns value between 0 and 1 that will be multiplied by loss_kl_weight.
+        """
+        if self.kl_annealing_steps <= 0:
+            return 1.0
+        return min(1.0, step / self.kl_annealing_steps)
+
+    def log_loss(self, total_loss, accuracy, loss_recon, loss_cls, loss_kl, lr, total_norm, step, kl_beta=1.0, active_dims=None):
         if not self.use_wandb_tracking or not self.is_main:
             return
         
@@ -100,11 +115,15 @@ class Trainer_vae_v1(BaseTrainer):
             'lr': lr,
             'grad_norm': total_norm,
             'step': step,
+            'kl_beta': kl_beta,
         }
+        
+        if active_dims is not None:
+            log_dict['active_latent_dims'] = active_dims
         
         self.log(**log_dict)
         
-        self.print(get_current_time() + f' loss: {total_loss:.3f} acc: {accuracy:.3f} lr: {lr:.6f} norm: {total_norm:.3f}')
+        self.print(get_current_time() + f' loss: {total_loss:.3f} acc: {accuracy:.3f} lr: {lr:.6f} norm: {total_norm:.3f} kl_beta: {kl_beta:.3f}')
 
     def train(self):
         step = self.step.item()
@@ -129,19 +148,19 @@ class Trainer_vae_v1(BaseTrainer):
                     abnormal_value = params_padded.abs().max().item()
 
 
-                    if abnormal_value > 10:
-                        pos = torch.argmax(params_padded.abs())
-                        row = (pos // params_padded.shape[1]).item()
-                        col = (pos % params_padded.shape[1]).item()
-                        surface_type_abl = surface_type[row]
-                        surface_type_str = get_surface_type(surface_type_abl.item())
+                    # if abnormal_value > 10:
+                    #     pos = torch.argmax(params_padded.abs())
+                    #     row = (pos // params_padded.shape[1]).item()
+                    #     col = (pos % params_padded.shape[1]).item()
+                    #     surface_type_abl = surface_type[row]
+                    #     surface_type_str = get_surface_type(surface_type_abl.item())
 
-                        # Accumulate abnormal values for batch logging
-                        self.log(**{
-                            "abnormal_value": abnormal_value,
-                            "surface_type": surface_type_abl,
-                            "param_position": col
-                        })
+                    #     # Accumulate abnormal values for batch logging
+                    #     self.log(**{
+                    #         "abnormal_value": abnormal_value,
+                    #         "surface_type": surface_type_abl,
+                    #         "param_position": col
+                    #     })
                         # self.abnormal_values_buffer.append([abnormal_value, surface_type_str, col])
 
 
@@ -150,9 +169,23 @@ class Trainer_vae_v1(BaseTrainer):
                     
                     loss_recon = (self.loss_recon(params_raw_recon, params_padded) * mask.float()).mean() * self.loss_recon_weight
                     loss_cls = self.loss_cls(class_logits, surface_type).mean()
-                    loss_kl = -0.5 * torch.mean(torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1))
-
-                    loss = loss_recon * self.loss_recon_weight + loss_cls * self.loss_cls_weight + loss_kl * self.loss_kl_weight
+                    
+                    # Compute KL loss with free bits strategy
+                    # Per-dimension KL: [batch, latent_dim]
+                    kl_per_dim = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp())
+                    
+                    # Apply free bits: only penalize KL above the threshold
+                    if self.kl_free_bits > 0:
+                        kl_per_dim = torch.clamp(kl_per_dim - self.kl_free_bits, min=0.0)
+                    
+                    # Mean across batch and dimensions
+                    loss_kl = torch.mean(kl_per_dim)
+                    
+                    # Compute KL annealing beta
+                    kl_beta = self.compute_kl_annealing_beta(step)
+                    
+                    # Final loss with annealing
+                    loss = loss_recon * self.loss_recon_weight + loss_cls * self.loss_cls_weight + loss_kl * self.loss_kl_weight * kl_beta
                     
                     accuracy = self.compute_accuracy(class_logits, surface_type)
 
@@ -169,8 +202,15 @@ class Trainer_vae_v1(BaseTrainer):
             if self.is_main and divisible_by(step, self.log_every_step):
                 cur_lr = get_lr(self.optimizer.optimizer)
                 total_norm = self.optimizer.total_norm
+                
+                # Compute active dimensions if free bits is enabled
+                active_dims = None
+                if self.kl_free_bits > 0:
+                    # Count dimensions with KL above threshold
+                    kl_per_dim_mean = kl_per_dim.mean(dim=0)  # Average over batch
+                    active_dims = (kl_per_dim_mean > 0).float().sum().item()
                                                         
-                self.log_loss(total_loss, total_accuracy, loss_recon.item(), loss_cls.item(), loss_kl.item(), cur_lr, total_norm, step)
+                self.log_loss(total_loss, total_accuracy, loss_recon.item(), loss_cls.item(), loss_kl.item(), cur_lr, total_norm, step, kl_beta, active_dims)
                 
                 # Log accumulated abnormal values table
 
@@ -199,6 +239,7 @@ class Trainer_vae_v1(BaseTrainer):
                 print(f"Validating at step {step}")
                 total_val_loss = 0.
                 total_val_accuracy = 0.
+                device = next(self.model.parameters()).device
                 
                 self.ema.eval()
                 num_val_batches = self.val_num_batches * self.grad_accum_every
@@ -206,17 +247,31 @@ class Trainer_vae_v1(BaseTrainer):
                 for _ in range(num_val_batches):
                     with self.accelerator.autocast(), torch.no_grad():
                         forward_kwargs = self.next_data_to_forward_kwargs(self.val_dl_iter)
-                        params_padded, surface_type = forward_kwargs
-                        
-                        params_padded = params_padded.to(self.device)
-                        surface_type = surface_type.to(self.device)
+                        params_padded, surface_type, masks = forward_kwargs
+                        params_padded = params_padded[masks.bool()] 
+                        surface_type = surface_type[masks.bool()]
+
+                        params_padded = params_padded.to(device)
+                        surface_type = surface_type.to(device)
+                        if surface_type.shape[0] == 0:
+                            continue
+                        # print(params_padded.abs().max())
+                        abnormal_value = params_padded.abs().max().item()
 
                         params_raw_recon, mask, class_logits, mu, logvar = self.ema(params_padded, surface_type)
 
                         loss_recon = (self.loss_recon(params_raw_recon, params_padded) * mask.float()).mean()
-                        loss_cls = self.loss_cls(class_logits, surface_type_str).mean()
-                        loss_kl = -0.5 * torch.mean(torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1))
-                        loss = loss_recon + loss_cls + loss_kl
+                        loss_cls = self.loss_cls(class_logits, surface_type).mean()
+                        
+                        # Compute KL loss with free bits (same as training)
+                        kl_per_dim = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp())
+                        if self.kl_free_bits > 0:
+                            kl_per_dim = torch.clamp(kl_per_dim - self.kl_free_bits, min=0.0)
+                        loss_kl = torch.mean(kl_per_dim)
+                        
+                        # Use current annealing beta for validation loss
+                        val_kl_beta = self.compute_kl_annealing_beta(step)
+                        loss = loss_recon * self.loss_recon_weight + loss_cls * self.loss_cls_weight + loss_kl * self.loss_kl_weight * val_kl_beta
                         accuracy = self.compute_accuracy(class_logits, surface_type)
 
                         
@@ -246,7 +301,8 @@ class Trainer_vae_v1(BaseTrainer):
                     "val_accuracy": total_val_accuracy,
                     "val_loss_recon": loss_recon.item(),
                     "val_loss_cls": loss_cls.item(),
-                    "val_loss_kl": loss_kl.item()
+                    "val_loss_kl": loss_kl.item(),
+                    "val_kl_beta": val_kl_beta
                 }
                 self.log(**val_log_dict)
 
