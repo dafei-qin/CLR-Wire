@@ -239,8 +239,6 @@ class dataset_compound(Dataset):
             scalar_params = [surface_dict['scalar'][0]]
 
 
-            
-
             u_center = 0.5 * (u_min + u_max)
             v_center = 0.5 * (v_min + v_max)
             u_diff = u_max - u_min

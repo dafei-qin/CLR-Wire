@@ -387,7 +387,7 @@ def build_adjacency_matrix(faces):
     return adjacency_matrix
 
 
-def visualize_json_interset(cad_data, plot=True, tol=1e-2):
+def visualize_json_interset(cad_data, plot=True, plot_gui=True,tol=1e-2, ps_header=''):
 
     faces_list = cad_data
     all_faces = {}
@@ -412,17 +412,19 @@ def visualize_json_interset(cad_data, plot=True, tol=1e-2):
         else:
             continue
         if plot:    
-            ps.register_surface_mesh(f"{surface_index:03d}_{surface_type}", vertices, faces, transparency=0.7)
-
+            ps_handle = ps.register_surface_mesh(f"{ps_header}_{surface_index:03d}_{surface_type}", vertices, faces, transparency=0.7)
+        else:
+            ps_handle = None
         all_faces[surface_index] = {
             'surface': occ_face,
             'vertices': vertices,
             'faces': faces,
             'surface_type': surface_type,
             'surface_index': surface_index,
+            'ps_handler': ps_handle
         }
 
-    if plot:
+    if plot_gui and plot:
         print(ps.get_bounding_box())
         ps.show()
     return all_faces
