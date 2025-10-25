@@ -165,7 +165,9 @@ def build_plane_face(face, tol=1e-2):
     if not mesher.IsDone():
          print("警告: BRepMesh_IncrementalMesh 执行后报告未完成，网格可能无效。")
     vertices, faces = extract_mesh_from_face(shape)
-    return shape, np.array(vertices), np.array(faces)
+    attr_str = f"{position[0]:.2f},{position[1]:.2f},{position[2]:.2f}|{direction[0]:.2f},{direction[1]:.2f},{direction[2]:.2f}|{XDirection[0]:.2f},{XDirection[1]:.2f},{XDirection[2]:.2f}"
+    attr_str += f"|{u_min:.2f},{u_max:.2f},{v_min:.2f},{v_max:.2f}"
+    return shape, np.array(vertices), np.array(faces), attr_str
 
 
 
@@ -188,16 +190,21 @@ def build_second_order_surface(face, tol=1e-2):
         v_min = 0
         # u_min = u_min % (2 * np.pi)
         # u_max = u_max % (2 * np.pi)
-
+        attr_str = f"{position[0]:.2f},{position[1]:.2f},{position[2]:.2f}|{direction[0]:.2f},{direction[1]:.2f},{direction[2]:.2f}|{XDirection[0]:.2f},{XDirection[1]:.2f},{XDirection[2]:.2f}"
+        attr_str += f"|{u_min/np.pi:.2f},{u_max/np.pi:.2f},{v_min:.2f},{v_max:.2f}|{radius:.2f}"
     elif surface_type == 'cone':
         radius = face['scalar'][1]
         semi_angle = face['scalar'][0]
         # semi_angle = semi_angle % (0.5 * np.pi)
-
+        attr_str = f"{position[0]:.2f},{position[1]:.2f},{position[2]:.2f}|{direction[0]:.2f},{direction[1]:.2f},{direction[2]:.2f}|{XDirection[0]:.2f},{XDirection[1]:.2f},{XDirection[2]:.2f}"
+        attr_str += f"|{u_min/np.pi:.2f},{u_max/np.pi:.2f},{v_min:.2f},{v_max:.2f}|{semi_angle:.2f}|{radius:.2f}"
+    
 
     elif surface_type == 'torus':
         major_radius = face['scalar'][0]
         minor_radius = face['scalar'][1]
+        attr_str = f"{position[0]:.2f},{position[1]:.2f},{position[2]:.2f}|{direction[0]:.2f},{direction[1]:.2f},{direction[2]:.2f}|{XDirection[0]:.2f},{XDirection[1]:.2f},{XDirection[2]:.2f}"
+        attr_str += f"|{u_min/np.pi:.2f},{u_max/np.pi:.2f},{v_min/np.pi:.2f},{v_max/np.pi:.2f}|{major_radius:.2f}|{minor_radius:.2f}"
         # u_min = u_min % (2 * np.pi)
         # u_max = u_max % (2 * np.pi)
 
@@ -207,6 +214,8 @@ def build_second_order_surface(face, tol=1e-2):
         # u_max = u_max % (2 * np.pi)
         # v_min = v_min % (np.pi) - np.pi/2
         # v_max = v_max % (np.pi) - np.pi/2
+        attr_str = f"{position[0]:.2f},{position[1]:.2f},{position[2]:.2f}|{direction[0]:.2f},{direction[1]:.2f},{direction[2]:.2f}|{XDirection[0]:.2f},{XDirection[1]:.2f},{XDirection[2]:.2f}"
+        attr_str += f"|{u_min/np.pi:.2f},{u_max/np.pi:.2f},{v_min/np.pi:.2f},{v_max/np.pi:.2f}|{radius:.2f}"
     else:
         raise ValueError(f"Surface type {surface_type} not supported")
     # print(type(radius))
@@ -216,14 +225,19 @@ def build_second_order_surface(face, tol=1e-2):
     # occ_YDirection = gp_Dir(YDirection[0], YDirection[1], YDirection[2])
     # 2. 创建定义圆柱位置和方向的坐标系
     cylinder_ax3 = gp_Ax3(occ_position, occ_direction, occ_XDirection)
-    if surface_type == 'cylinder':
-        occ_surface = gp_Cylinder(cylinder_ax3, radius)
-    elif surface_type == 'cone':
-        occ_surface = gp_Cone(cylinder_ax3, semi_angle, radius)
-    elif surface_type == 'torus':
-        occ_surface = gp_Torus(cylinder_ax3, major_radius, minor_radius)
-    elif surface_type == 'sphere':
-        occ_surface = gp_Sphere(cylinder_ax3, radius)
+    try:
+        if surface_type == 'cylinder':
+            occ_surface = gp_Cylinder(cylinder_ax3, radius)
+        elif surface_type == 'cone':
+            occ_surface = gp_Cone(cylinder_ax3, semi_angle, radius)
+        elif surface_type == 'torus':
+            occ_surface = gp_Torus(cylinder_ax3, major_radius, minor_radius)
+        elif surface_type == 'sphere':
+            occ_surface = gp_Sphere(cylinder_ax3, radius)
+    except Exception as e:
+        print(face)
+        raise e
+        
 
     face_builder = BRepBuilderAPI_MakeFace(occ_surface, u_min, u_max, v_min, v_max)
     shape = face_builder.Face()
@@ -239,7 +253,8 @@ def build_second_order_surface(face, tol=1e-2):
     vertices = np.array(vertices)
     faces = np.array(faces)
     # print(vertices.max(axis=0), vertices.min(axis=0))
-    return shape, vertices, faces
+    attr_str = attr_str.replace('|', '\n')
+    return shape, vertices, faces, attr_str
 
 
 def build_bspline_surface(data: dict, tol=1e-1) -> Geom_BSplineSurface:
@@ -329,7 +344,7 @@ def build_bspline_surface(data: dict, tol=1e-1) -> Geom_BSplineSurface:
     # --- 步骤 D: 提取网格数据 ---
     # 从修复并网格化后的面中提取数据
     vertices, faces = extract_mesh_from_face(shape)
-    return shape, np.array(vertices), np.array(faces)
+    return shape, np.array(vertices), np.array(faces), ''
 
 def build_adjacency_matrix(faces):
     """
@@ -403,16 +418,16 @@ def visualize_json_interset(cad_data, plot=True, plot_gui=True,tol=1e-2, ps_head
         # print(f"Processing face {surface_type} with type {surface_index}")
         if surface_type == 'plane':
             # continue
-            occ_face, vertices, faces = build_plane_face(face, tol=tol)
+            occ_face, vertices, faces, attr_str = build_plane_face(face, tol=tol)
         elif surface_type == 'cylinder' or surface_type == 'cone' or surface_type == 'torus' or surface_type == 'sphere':
-            occ_face, vertices, faces = build_second_order_surface(face, tol=tol)
+            occ_face, vertices, faces, attr_str = build_second_order_surface(face, tol=tol)
         elif surface_type == 'bspline_surface':
             # continue
-            occ_face, vertices, faces = build_bspline_surface(face, tol=tol * 10)
+            occ_face, vertices, faces, attr_str = build_bspline_surface(face, tol=tol * 10)
         else:
             continue
         if plot:    
-            ps_handle = ps.register_surface_mesh(f"{ps_header}_{surface_index:03d}_{surface_type}", vertices, faces, transparency=0.7)
+            ps_handle = ps.register_surface_mesh(f"{ps_header}_{surface_index:03d}_{surface_type}_{attr_str}", vertices, faces, transparency=0.7)
         else:
             ps_handle = None
         all_faces[surface_index] = {
