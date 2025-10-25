@@ -14,7 +14,7 @@ if __name__ == "__main__":
     with open(data_path, 'r') as f:
         cad_data = json.load(f)
     global_tol = 1e-5 # A good value
-    all_faces = visualize_json_interset(cad_data, plot=True, tol=global_tol)
+    all_faces = visualize_json_interset(cad_data, plot=True, plot_gui=True, tol=global_tol)
 
 
     ps.init()

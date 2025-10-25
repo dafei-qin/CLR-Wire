@@ -179,9 +179,9 @@ class dataset_compound(Dataset):
 
             # while u_diff > 2 * np.pi:
             #     u_diff -= 2 * np.pi
-            if u_diff > 0:
+            if u_diff > 2 * np.pi:
                 u_diff -= u_diff // (2 * np.pi) * 2 * np.pi
-            u_half = 0.5 * (u_diff) / np.pi - 0.5 # (0 - pi) --> (0, 1)
+            u_half = 0.5 * (u_diff) / np.pi - 0.5 # (0 - pi) --> (-0.5, 0.5)
 
             sin_u_center, cos_u_center = np.sin(u_center), np.cos(u_center)
             UV = np.array([sin_u_center, cos_u_center, u_half, v_max, 0, 0, 0, 0], dtype=np.float32) # (8, )
@@ -203,7 +203,7 @@ class dataset_compound(Dataset):
             u_diff = u_max - u_min
             # while u_diff > 2 * np.pi:
             #     u_diff -= 2 * np.pi
-            if u_diff > 0:
+            if u_diff > 2 * np.pi:
                 u_diff -= u_diff // (2 * np.pi) * 2 * np.pi
                 
             u_half = 0.5 * (u_diff) / np.pi  # (0 - pi) --> (0, 1)
@@ -236,19 +236,17 @@ class dataset_compound(Dataset):
             scalar_params = [surface_dict['scalar'][0]]
 
 
-            
-
             u_center = 0.5 * (u_min + u_max)
             v_center = 0.5 * (v_min + v_max)
             u_diff = u_max - u_min
             v_diff = v_max - v_min
             # while u_diff > 2 * np.pi:
             #     u_diff -= 2 * np.pi
-            if u_diff > 0:
+            if u_diff > 2 * np.pi:
                 u_diff -= u_diff // (2 * np.pi) * 2 * np.pi
             # while v_diff > np.pi:
             #     v_diff -= np.pi
-            if v_diff > 0:
+            if v_diff > np.pi:
                 v_diff -= v_diff // np.pi * np.pi
             u_half = 0.5 * (u_diff)
             v_half = 0.5 * (v_diff)
@@ -274,13 +272,13 @@ class dataset_compound(Dataset):
             u_diff = u_max - u_min
             # while u_diff > 2 * np.pi:
             #     u_diff -= 2 * np.pi
-            if u_diff > 0:
+            if u_diff > 2 * np.pi:
                 u_diff -= u_diff // (2 * np.pi) * 2 * np.pi
             u_half = 0.5 * (u_diff)
             v_diff = v_max - v_min
             # while v_diff > np.pi:
             #     v_diff -= np.pi
-            if v_diff > 0:
+            if v_diff > np.pi:
                 v_diff -= v_diff // np.pi * np.pi
             v_center = 0.5 * (v_min + v_max)
             v_half = 0.5 * (v_diff)
@@ -315,7 +313,7 @@ class dataset_compound(Dataset):
         """
         SURFACE_TYPE_MAP_INV = {v: k for k, v in SURFACE_TYPE_MAP.items()}
         surface_type = SURFACE_TYPE_MAP_INV.get(surface_type_idx, -1)
-        print(params.shape)
+        print(surface_type, params, f'len params: {len(params)}')
         P = params[:3]
         D = params[3:6] / np.linalg.norm(params[3:6])
         X = params[6:9] / np.linalg.norm(params[6:9])
@@ -330,7 +328,8 @@ class dataset_compound(Dataset):
 
             sin_u_center, cos_u_center, u_half, height = UV[:4]
             u_center = np.arctan2(sin_u_center, cos_u_center)
-            u_half = (u_half + 0.5) * np.pi
+            u_half = np.clip((u_half + 0.5), 0, 1) * np.pi
+            
             u_min, u_max = u_center - u_half, u_center + u_half
             if np.abs(np.abs(u_max - u_min) - 2 * np.pi) < 1e-4:
                 # A full loop, make sure distance less than 2pi
@@ -371,7 +370,7 @@ class dataset_compound(Dataset):
             v_half = np.clip(v_half, 0, 1) * np.pi
             v_min, v_max = v_center - v_half, v_center + v_half
 
-            assert len(scalar_params) == 2
+            assert len(scalar_params) == 2, f"Wrong scalar number of torus, should be 2 but got {len(scalar_params)}"
             major_radius = scalar_params[0]
             minor_radius = scalar_params[1]
             scalar = [major_radius, minor_radius]
@@ -398,7 +397,7 @@ class dataset_compound(Dataset):
 
 
 
-            assert len(scalar_params) == 1
+            assert len(scalar_params) == 1, f"Wrong scalar number of torus, should be 2 but got {len(scalar_params)}"
             radius = scalar_params[0]   
             scalar = [radius]
         else:
