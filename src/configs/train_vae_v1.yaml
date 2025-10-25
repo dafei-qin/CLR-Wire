@@ -1,7 +1,7 @@
 resume_training: false
 from_start: false
 
-epochs: 50
+epochs: 100
 batch_size: 256
 lr: 0.0001
 num_workers: 6
@@ -17,7 +17,7 @@ log_every_step: 50
 
 use_wandb_tracking: true
 wandb_project_name: VAE_V1
-wandb_run_name: train_1023
+wandb_run_name: train_1024_no_kl
 
 data:
     train_json_dir: /home/qindafei/CAD/data/logan_jsons/abc/
@@ -34,13 +34,13 @@ model:
     # surface_dim: 256
     # surface_enc_block_out_channels: [16, 32, 64, 128]
     param_raw_dim: [17, 18, 19, 19, 18]
-    checkpoint_folder: checkpoints/vae_v1_debug
+    checkpoint_folder: checkpoints/train_1024_no_kl
     checkpoint_file_name: model.pt 0
 
 
 loss:
     recon_weight: 1.0
     cls_weight: 1.0
-    kl_weight: 0.1
+    kl_weight: 0
     kl_annealing_steps: 20000  # Number of steps to anneal KL weight from 0 to kl_weight
     kl_free_bits: 0.25  # Free bits per latent dimension (in nats)

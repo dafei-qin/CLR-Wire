@@ -174,9 +174,6 @@ class dataset_compound(Dataset):
             v_max = v_max - v_min
             v_min = 0
 
-
-
-
             u_center = 0.5 * (u_min + u_max)
             u_diff = u_max - u_min
 
