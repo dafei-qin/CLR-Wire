@@ -19,8 +19,10 @@ def to_json(params_tensor, types_tensor, mask_tensor):
     json_data = []
     # SURFACE_TYPE_MAP_INVERSE = {value: key for key, value in SURFACE_TYPE_MAP.items()}
     for i in range(len(params_tensor)):
+        # (types_tensor[i].item(), mask_tensor[i].sum())
         params = params_tensor[i][mask_tensor[i]]
         # surface_type = SURFACE_TYPE_MAP_INVERSE[types_tensor[i].item()]
+        print('surface index: ',i)
         recovered_surface = dataset._recover_surface(params, types_tensor[i].item())
 
         recovered_surface['idx'] = [i, i]
@@ -47,7 +49,7 @@ def load_model_and_dataset():
     dataset = dataset_compound(sys.argv[1])
     max_idx = len(dataset) - 1
     
-    model = SurfaceVAE(param_raw_dim=[17, 18, 19, 19, 18])
+    model = SurfaceVAE(param_raw_dim=[17, 18, 19, 18, 19]) # Should be changed to [17, 18, 19, 18, 19]
     checkpoint_path = sys.argv[2]
     checkpoint = torch.load(checkpoint_path, map_location="cpu")
     if 'ema_model' in checkpoint:
@@ -78,7 +80,10 @@ def process_sample(idx):
     # Load ground truth JSON data
     with open(json_path, 'r') as f:
         gt_json_data = json.load(f)
-    
+
+
+    print('-' * 10 + 'gt_json_data' + '-' * 10)
+    print(gt_json_data)
     # Run VAE inference
     with torch.no_grad():
         mu, logvar = model.encode(valid_params, valid_types)
@@ -90,14 +95,22 @@ def process_sample(idx):
         recon_fn = torch.nn.MSELoss()
         recon_loss = (recon_fn(params_pred, valid_params)) * mask.float().mean()
         accuracy = (types_pred == valid_types).float().mean()
-        
+        for i in range(valid_types.shape[0]):
+            print('surface index: ', i, 'type: ', valid_types[i].item())
+            print('input: ', valid_params[i])
+            print('output: ', params_pred[i])
+            print('diff: ', (params_pred[i] - valid_params[i]))
+            print('-' * 10)
         print(f'Index {idx}: recon_loss: {recon_loss.item():.6f}, accuracy: {accuracy.item():.4f}')
         print(f'Predicted types: {types_pred.cpu().numpy()}')
         print(f'Ground truth types: {valid_types.cpu().numpy()}')
     
     # Convert predictions to JSON format
+
     recovered_json_data = to_json(params_pred.cpu().numpy(), types_pred.cpu().numpy(), mask.cpu().numpy())
-    
+    # with open('./assets/temp/test_vae_v1_runtime.txt', 'w') as f:
+    #     json.dump(gt_json_data, f)
+    #     json.dump(recovered_json_data, f)
     return gt_json_data, recovered_json_data, recon_loss.item(), accuracy.item()
 
 def update_visualization():
@@ -114,15 +127,23 @@ def update_visualization():
 
     
     # Visualize ground truth surfaces
-    gt_surfaces = visualize_json_interset(gt_data, plot=True, plot_gui=False, tol=1e-5)
-    print(gt_surfaces)
+    try:
+        gt_surfaces = visualize_json_interset(gt_data, plot=True, plot_gui=False, tol=1e-5)
+    except ValueError:
+        print('GT has wrong visualization data!')
+        return
+    # print(gt_surfaces)
     for i, (surface_key, surface_data) in enumerate(gt_surfaces.items()):
         if 'surface' in surface_data and surface_data['surface'] is not None:
             # Add to ground truth group
             surface_data['ps_handler'].add_to_group(gt_group)
     
     # Visualize recovered surfaces  
-    recovered_surfaces = visualize_json_interset(recovered_data, plot=True, plot_gui=False, tol=1e-5, ps_header='z_rec')
+    try:
+        recovered_surfaces = visualize_json_interset(recovered_data, plot=True, plot_gui=False, tol=1e-5, ps_header='z_rec')
+    except ValueError:
+        print('Recovered has wrong visualization data!')
+        return
     for i, (surface_key, surface_data) in enumerate(recovered_surfaces.items()):
         if 'surface' in surface_data and surface_data['surface'] is not None:
             # Add to recovered group
