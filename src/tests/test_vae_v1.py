@@ -19,6 +19,7 @@ def to_json(params_tensor, types_tensor, mask_tensor):
     json_data = []
     # SURFACE_TYPE_MAP_INVERSE = {value: key for key, value in SURFACE_TYPE_MAP.items()}
     for i in range(len(params_tensor)):
+        print(types_tensor[i].item(), mask_tensor[i].sum())
         params = params_tensor[i][mask_tensor[i]]
         # surface_type = SURFACE_TYPE_MAP_INVERSE[types_tensor[i].item()]
         recovered_surface = dataset._recover_surface(params, types_tensor[i].item())
@@ -49,7 +50,7 @@ def load_model_and_dataset():
     dataset = dataset_compound(sys.argv[1])
     max_idx = len(dataset) - 1
     
-    model = SurfaceVAE(param_raw_dim=[17, 18, 19, 19, 18])
+    model = SurfaceVAE(param_raw_dim=[17, 18, 19, 19, 18]) # Should be changed to [17, 18, 19, 18, 19]
     checkpoint_path = sys.argv[2]
     checkpoint = torch.load(checkpoint_path, map_location="cpu")
     if 'ema_model' in checkpoint:
@@ -71,6 +72,7 @@ def process_sample(idx):
     global dataset, model
     
     params_tensor, types_tensor, mask_tensor = dataset[idx]
+    print('processing file: ', dataset.json_names[idx])
     json_path = dataset.json_names[idx]
     
     # Apply mask to get valid surfaces
@@ -84,6 +86,7 @@ def process_sample(idx):
     # Run VAE inference
     with torch.no_grad():
         mu, logvar = model.encode(valid_params, valid_types)
+        
         z = model.reparameterize(mu, logvar)
         type_logits_pred, types_pred = model.classify(z)
         params_pred, mask = model.decode(z, types_pred)
@@ -94,8 +97,8 @@ def process_sample(idx):
         accuracy = (types_pred == valid_types).float().mean()
         
         print(f'Index {idx}: recon_loss: {recon_loss.item():.6f}, accuracy: {accuracy.item():.4f}')
-        print(f'Predicted types: {types_pred.cpu().numpy()}')
-        print(f'Ground truth types: {valid_types.cpu().numpy()}')
+        # print(f'Predicted types: {types_pred.cpu().numpy()}')
+        # print(f'Ground truth types: {valid_types.cpu().numpy()}')
     
     # Convert predictions to JSON format
     recovered_json_data = to_json(params_pred.cpu().numpy(), types_pred.cpu().numpy(), mask.cpu().numpy())
@@ -104,25 +107,29 @@ def process_sample(idx):
 
 def resample_model():
     """Generate new samples from the VAE's latent space"""
-    global model, resampled_surfaces
+    global model, resampled_surfaces, current_idx
     
     if model is None:
         print("Model not loaded yet!")
         return
     
+    params_tensor, types_tensor, mask_tensor = dataset[current_idx]
+    valid_params = params_tensor[mask_tensor.bool()]
+    valid_types = types_tensor[mask_tensor.bool()]
+    
     with torch.no_grad():
         # Sample random latent vectors
-        latent_dim = 128  # Assuming latent dimension from model architecture
-        z_random = torch.randn(5, latent_dim)  # Generate 5 random samples
-        
+
+        mu, logvar = model.encode(valid_params, valid_types)
+        z_random = model.reparameterize(mu, logvar)
         # Classify the random latent vectors to get surface types
         type_logits_pred, types_pred = model.classify(z_random)
         
         # Decode to get surface parameters
         params_pred, mask = model.decode(z_random, types_pred)
         
-        print(f"Generated {len(params_pred)} resampled surfaces")
-        print(f"Resampled types: {types_pred.cpu().numpy()}")
+        # print(f"Generated {len(params_pred)} resampled surfaces")
+        # print(f"Resampled types: {types_pred.cpu().numpy()}")
         
         # Convert to JSON format
         resampled_json_data = to_json(params_pred.cpu().numpy(), types_pred.cpu().numpy(), mask.cpu().numpy())
@@ -135,7 +142,7 @@ def resample_model():
             if 'surface' in surface_data and surface_data['surface'] is not None and 'ps_handler' in surface_data:
                 surface_data['ps_handler'].add_to_group(resampled_group)
         
-        return resampled_json_data
+        return resampled_json_data, resampled_surfaces
 
 def update_visualization():
     """Update the visualization with current index"""
@@ -152,7 +159,7 @@ def update_visualization():
     
     # Visualize ground truth surfaces
     gt_surfaces = visualize_json_interset(gt_data, plot=True, plot_gui=False, tol=1e-5)
-    print(gt_surfaces)
+    # print(gt_surfaces)
     for i, (surface_key, surface_data) in enumerate(gt_surfaces.items()):
         if 'surface' in surface_data and surface_data['surface'] is not None:
             # Add to ground truth group
@@ -173,7 +180,7 @@ def update_visualization():
 
 def callback():
     """Polyscope callback function for UI controls"""
-    global current_idx, max_idx, show_gt, show_recovered, show_resampled
+    global current_idx, max_idx, show_gt, show_recovered, show_resampled, resampled_surfaces
     
     psim.Text("VAE Surface Reconstruction Test")
     psim.Separator()
@@ -192,7 +199,10 @@ def callback():
     psim.Separator()
     psim.Text("Model Controls:")
     if psim.Button("Resample Model"):
-        resample_model()
+        for surface in resampled_surfaces.values():
+            surface['ps_handler'].remove()
+        resampled_surfaces = {}
+        resampled_json_data, resampled_surfaces = resample_model()
     
     # Group controls
     if gt_group is not None:
@@ -221,6 +231,8 @@ if __name__ == '__main__':
     
     # Initialize polyscope
     ps.init()
+    resampled_surfaces = {}
+
     gt_group = ps.create_group("Ground Truth Surfaces")
     recovered_group = ps.create_group("Recovered Surfaces")
     resampled_group = ps.create_group("Resampled Surfaces")

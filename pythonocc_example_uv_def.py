@@ -22,6 +22,7 @@ from OCC.Core.BRep import BRep_Tool
 from OCC.Core.TopLoc import TopLoc_Location
 from OCC.Core.GeomAdaptor import GeomAdaptor_Surface
 
+from occwl.face import Face
 
 class UVParameterVisualizer:
     def __init__(self):
@@ -40,46 +41,46 @@ class UVParameterVisualizer:
         self.current_surface_index = 1  # Index in surface_types list
         
         # UV parameter ranges for each surface type
-        # Using -2π to 2π for all ranges to allow maximum flexibility
+        # Using ±1e5 for all ranges to allow maximum flexibility
         two_pi = 2.0 * np.pi
-        neg_two_pi = -2.0 * np.pi
+        param_range = 1e5
         
         self.uv_params = {
             "plane": {
                 "u_min": 0.0, "u_max": 10.0,
                 "v_min": 0.0, "v_max": 10.0,
-                "u_range": [neg_two_pi, two_pi],  # Allowable range
-                "v_range": [neg_two_pi, two_pi]
+                "u_range": [-param_range, param_range],  # Allowable range
+                "v_range": [-param_range, param_range]
             },
             "cylinder": {
                 "u_min": 0.0, "u_max": two_pi,  # 0 to 2*pi
                 "v_min": 0.0, "v_max": 10.0,
-                "u_range": [neg_two_pi, two_pi],
-                "v_range": [neg_two_pi, two_pi]
+                "u_range": [-param_range, param_range],
+                "v_range": [-param_range, param_range]
             },
             "cone": {
                 "u_min": 0.0, "u_max": two_pi,
                 "v_min": 0.0, "v_max": 10.0,
-                "u_range": [neg_two_pi, two_pi],
-                "v_range": [neg_two_pi, two_pi]
+                "u_range": [-param_range, param_range],
+                "v_range": [-param_range, param_range]
             },
             "sphere": {
                 "u_min": 0.0, "u_max": two_pi,  # 0 to 2*pi (longitude)
                 "v_min": -np.pi/2, "v_max": np.pi/2,  # -pi/2 to pi/2 (latitude)
-                "u_range": [neg_two_pi, two_pi],
-                "v_range": [neg_two_pi, two_pi]
+                "u_range": [-param_range, param_range],
+                "v_range": [-param_range, param_range]
             },
             "torus": {
                 "u_min": 0.0, "u_max": two_pi,
                 "v_min": 0.0, "v_max": two_pi,
-                "u_range": [neg_two_pi, two_pi],
-                "v_range": [neg_two_pi, two_pi]
+                "u_range": [-param_range, param_range],
+                "v_range": [-param_range, param_range]
             },
             "bspline_surface": {
                 "u_min": 0.0, "u_max": 1.0,
                 "v_min": 0.0, "v_max": 1.0,
-                "u_range": [neg_two_pi, two_pi],
-                "v_range": [neg_two_pi, two_pi]
+                "u_range": [-param_range, param_range],
+                "v_range": [-param_range, param_range]
             }
         }
         
@@ -136,10 +137,22 @@ class UVParameterVisualizer:
         self.uv_grid_points_obj = None
         self.reference_cube_obj = None
         self.coordinate_frame_obj = None
+        self.position_point_obj = None
         
         # Visualization settings for coordinate frame
         self.show_coordinate_frame = True
         self.coordinate_frame_scale = 5.0
+        
+        # Visualization settings for position point
+        self.show_position_point = True
+        self.position_point_radius = 0.1
+        
+        # Curvature analysis settings
+        self.show_curvature_analysis = True
+        self.curvature_grid_size = 8
+        self.max_curvature_value = 0.0
+        self.curvature_points_obj = None
+        self.curvature_values = None
         
     def normalize_vector(self, vec):
         """Normalize a vector to unit length"""
@@ -457,6 +470,63 @@ class UVParameterVisualizer:
         else:
             return None, None
     
+    def compute_curvature_on_grid(self, face, uv_params):
+        """Compute max curvature on a UV grid using occwl.face.Face"""
+        u_min = uv_params["u_min"]
+        u_max = uv_params["u_max"]
+        v_min = uv_params["v_min"]
+        v_max = uv_params["v_max"]
+        
+        try:
+            # Create occwl Face object
+            occwl_face = Face(face)
+            
+            # Sample on grid
+            grid_size = self.curvature_grid_size
+            points = []
+            curvature_values = []
+            
+            print(f"🔍 Computing curvature on {grid_size}x{grid_size} grid...")
+            print(f"   UV range: U=[{u_min:.3f}, {u_max:.3f}], V=[{v_min:.3f}, {v_max:.3f}]")
+            
+            for i in range(grid_size):
+                for j in range(grid_size):
+                    # Compute UV coordinates
+                    u = u_min + (u_max - u_min) * i / (grid_size - 1) if grid_size > 1 else u_min
+                    v = v_min + (v_max - v_min) * j / (grid_size - 1) if grid_size > 1 else v_min
+                    
+                    try:
+                        # Get max curvature at this UV location
+                        max_curv = occwl_face.max_curvature([u, v])
+                        
+                        # Get the 3D point at this UV location
+                        # geom_surface = occwl_face.surface
+                        # pnt = geom_surface.Value(u, v)
+                        points.append(occwl_face.point([u, v]))
+                        # points.append([pnt.X(), pnt.Y(), pnt.Z()])
+                        curvature_values.append(max_curv)
+                    except Exception as e:
+                        # Skip invalid UV points
+                        print(f"   ⚠️ Failed at UV({u:.3f}, {v:.3f}): {e}")
+                        continue
+            
+            print(f"   ✅ Computed curvature at {len(points)} points")
+            
+            if len(points) > 0:
+                points = np.array(points)
+                curvature_values = np.array(curvature_values)
+                max_curvature = np.max(curvature_values)
+                return points, curvature_values, max_curvature
+            else:
+                print(f"   ❌ No valid curvature points computed")
+                return None, None, 0.0
+                
+        except Exception as e:
+            print(f"⚠️ Curvature computation failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return None, None, 0.0
+    
     def create_uv_grid(self, geom_surface, uv_params):
         """Create UV grid lines on the surface"""
         u_min = uv_params["u_min"]
@@ -601,7 +671,53 @@ class UVParameterVisualizer:
                     ps.remove_curve_network("coordinate_frame")
                     self.coordinate_frame_obj = None
             
+            # Update position point visualization
+            if self.show_position_point:
+                params = self.surface_params.get(self.current_surface_type, {})
+                if "position" in params:
+                    position = np.array([params["position"]], dtype=np.float64)
+                    
+                    if self.position_point_obj is not None:
+                        ps.remove_point_cloud("position_point")
+                    
+                    self.position_point_obj = ps.register_point_cloud("position_point", position)
+                    self.position_point_obj.set_color([1.0, 0.0, 1.0])  # Magenta color
+                    self.position_point_obj.set_radius(self.position_point_radius)
+            else:
+                if self.position_point_obj is not None:
+                    ps.remove_point_cloud("position_point")
+                    self.position_point_obj = None
+            
+            # Compute and visualize curvature
+            if self.show_curvature_analysis:
+                uv_params = self.uv_params[self.current_surface_type]
+                curv_points, curv_values, max_curv = self.compute_curvature_on_grid(face, uv_params)
+                
+                if curv_points is not None and curv_values is not None:
+                    self.max_curvature_value = max_curv
+                    self.curvature_values = curv_values
+                    
+                    if self.curvature_points_obj is not None:
+                        ps.remove_point_cloud("curvature_points")
+                    
+                    self.curvature_points_obj = ps.register_point_cloud("curvature_points", curv_points)
+                    self.curvature_points_obj.set_radius(0.03)
+                    
+                    # Add curvature values as a scalar quantity with color map
+                    self.curvature_points_obj.add_scalar_quantity("max_curvature", curv_values, enabled=True, cmap='turbo')
+                else:
+                    self.max_curvature_value = 0.0
+                    self.curvature_values = None
+            else:
+                if self.curvature_points_obj is not None:
+                    ps.remove_point_cloud("curvature_points")
+                    self.curvature_points_obj = None
+                self.max_curvature_value = 0.0
+                self.curvature_values = None
+            
             print(f"✅ Updated {self.current_surface_type} surface with {len(vertices)} vertices, {len(faces)} faces")
+            if self.show_curvature_analysis and self.max_curvature_value > 0:
+                print(f"📊 Max curvature: {self.max_curvature_value:.6f}")
             
         except Exception as e:
             print(f"❌ Error updating visualization: {e}")
@@ -696,18 +812,21 @@ class UVParameterVisualizer:
                 psim.Text("Position (Center):")
                 psim.Separator()
                 
-                changed_x, new_x = psim.SliderFloat("X##pos", params["position"][0], -20.0, 20.0)
+                changed_x, new_x = psim.InputFloat("X##pos", params["position"][0], step=0.1, step_fast=1.0, format="%.6f")
                 if changed_x:
+                    new_x = max(-1e5, min(1e5, new_x))
                     params["position"][0] = new_x
                     updated = True
                 
-                changed_y, new_y = psim.SliderFloat("Y##pos", params["position"][1], -20.0, 20.0)
+                changed_y, new_y = psim.InputFloat("Y##pos", params["position"][1], step=0.1, step_fast=1.0, format="%.6f")
                 if changed_y:
+                    new_y = max(-1e5, min(1e5, new_y))
                     params["position"][1] = new_y
                     updated = True
                 
-                changed_z, new_z = psim.SliderFloat("Z##pos", params["position"][2], -20.0, 20.0)
+                changed_z, new_z = psim.InputFloat("Z##pos", params["position"][2], step=0.1, step_fast=1.0, format="%.6f")
                 if changed_z:
+                    new_z = max(-1e5, min(1e5, new_z))
                     params["position"][2] = new_z
                     updated = True
                 
@@ -718,20 +837,23 @@ class UVParameterVisualizer:
                 psim.Text("Direction (Z-axis, normalized):")
                 psim.Separator()
                 
-                changed_dx, new_dx = psim.SliderFloat("X##dir", params["direction"][0], -1.0, 1.0)
+                changed_dx, new_dx = psim.InputFloat("X##dir", params["direction"][0], step=0.01, step_fast=0.1, format="%.6f")
                 if changed_dx:
+                    new_dx = max(-1e5, min(1e5, new_dx))
                     params["direction"][0] = new_dx
                     self.update_surface_coordinate_system(self.current_surface_type)
                     updated = True
                 
-                changed_dy, new_dy = psim.SliderFloat("Y##dir", params["direction"][1], -1.0, 1.0)
+                changed_dy, new_dy = psim.InputFloat("Y##dir", params["direction"][1], step=0.01, step_fast=0.1, format="%.6f")
                 if changed_dy:
+                    new_dy = max(-1e5, min(1e5, new_dy))
                     params["direction"][1] = new_dy
                     self.update_surface_coordinate_system(self.current_surface_type)
                     updated = True
                 
-                changed_dz, new_dz = psim.SliderFloat("Z##dir", params["direction"][2], -1.0, 1.0)
+                changed_dz, new_dz = psim.InputFloat("Z##dir", params["direction"][2], step=0.01, step_fast=0.1, format="%.6f")
                 if changed_dz:
+                    new_dz = max(-1e5, min(1e5, new_dz))
                     params["direction"][2] = new_dz
                     self.update_surface_coordinate_system(self.current_surface_type)
                     updated = True
@@ -743,20 +865,23 @@ class UVParameterVisualizer:
                 psim.Text("X Direction (X-axis, orthogonalized):")
                 psim.Separator()
                 
-                changed_xdx, new_xdx = psim.SliderFloat("X##xdir", params["x_direction"][0], -1.0, 1.0)
+                changed_xdx, new_xdx = psim.InputFloat("X##xdir", params["x_direction"][0], step=0.01, step_fast=0.1, format="%.6f")
                 if changed_xdx:
+                    new_xdx = max(-1e5, min(1e5, new_xdx))
                     params["x_direction"][0] = new_xdx
                     self.update_surface_coordinate_system(self.current_surface_type)
                     updated = True
                 
-                changed_xdy, new_xdy = psim.SliderFloat("Y##xdir", params["x_direction"][1], -1.0, 1.0)
+                changed_xdy, new_xdy = psim.InputFloat("Y##xdir", params["x_direction"][1], step=0.01, step_fast=0.1, format="%.6f")
                 if changed_xdy:
+                    new_xdy = max(-1e5, min(1e5, new_xdy))
                     params["x_direction"][1] = new_xdy
                     self.update_surface_coordinate_system(self.current_surface_type)
                     updated = True
                 
-                changed_xdz, new_xdz = psim.SliderFloat("Z##xdir", params["x_direction"][2], -1.0, 1.0)
+                changed_xdz, new_xdz = psim.InputFloat("Z##xdir", params["x_direction"][2], step=0.01, step_fast=0.1, format="%.6f")
                 if changed_xdz:
+                    new_xdz = max(-1e5, min(1e5, new_xdz))
                     params["x_direction"][2] = new_xdz
                     self.update_surface_coordinate_system(self.current_surface_type)
                     updated = True
@@ -773,29 +898,33 @@ class UVParameterVisualizer:
             # Shape-specific parameters
             if "radius" in params:
                 psim.Text("Radius:")
-                changed, new_val = psim.SliderFloat("##radius", params["radius"], 1.0, 15.0)
+                changed, new_val = psim.InputFloat("##radius", params["radius"], step=0.1, step_fast=1.0, format="%.6f")
                 if changed:
+                    new_val = max(-1e5, min(1e5, new_val))
                     params["radius"] = new_val
                     updated = True
             
             if "semi_angle" in params:
                 psim.Text("Semi Angle (radians):")
-                changed, new_val = psim.SliderFloat("##semi_angle", params["semi_angle"], 0.1, 1.5)
+                changed, new_val = psim.InputFloat("##semi_angle", params["semi_angle"], step=0.01, step_fast=0.1, format="%.6f")
                 if changed:
+                    new_val = max(-1e5, min(1e5, new_val))
                     params["semi_angle"] = new_val
                     updated = True
             
             if "major_radius" in params:
                 psim.Text("Major Radius:")
-                changed, new_val = psim.SliderFloat("##major_radius", params["major_radius"], 3.0, 15.0)
+                changed, new_val = psim.InputFloat("##major_radius", params["major_radius"], step=0.1, step_fast=1.0, format="%.6f")
                 if changed:
+                    new_val = max(-1e5, min(1e5, new_val))
                     params["major_radius"] = new_val
                     updated = True
             
             if "minor_radius" in params:
                 psim.Text("Minor Radius:")
-                changed, new_val = psim.SliderFloat("##minor_radius", params["minor_radius"], 0.5, params.get("major_radius", 10.0) * 0.5)
+                changed, new_val = psim.InputFloat("##minor_radius", params["minor_radius"], step=0.1, step_fast=1.0, format="%.6f")
                 if changed:
+                    new_val = max(-1e5, min(1e5, new_val))
                     params["minor_radius"] = new_val
                     updated = True
             
@@ -881,6 +1010,40 @@ class UVParameterVisualizer:
                 
                 psim.Text("Red=X, Green=Y, Blue=Z(direction)")
             
+            psim.Separator()
+            
+            # Position point visibility
+            changed_pos_point, self.show_position_point = psim.Checkbox("Show Position Point", self.show_position_point)
+            if changed_pos_point:
+                self.update_visualization()
+            
+            # Position point radius
+            if self.show_position_point:
+                changed_radius, new_radius = psim.SliderFloat("Point Radius", self.position_point_radius, 0.01, 1.0)
+                if changed_radius:
+                    self.position_point_radius = new_radius
+                    if self.position_point_obj is not None:
+                        self.position_point_obj.set_radius(self.position_point_radius)
+                
+                psim.Text("Magenta point shows geometry center")
+            
+            psim.Separator()
+            
+            # Curvature analysis
+            changed_curv, self.show_curvature_analysis = psim.Checkbox("Show Curvature Analysis", self.show_curvature_analysis)
+            if changed_curv:
+                self.update_visualization()
+            
+            if self.show_curvature_analysis:
+                changed_grid, new_grid = psim.SliderInt("Curvature Grid Size", self.curvature_grid_size, 4, 16)
+                if changed_grid:
+                    self.curvature_grid_size = new_grid
+                    self.update_visualization()
+                
+                psim.Text("Color-coded max curvature values")
+                if self.max_curvature_value > 0:
+                    psim.Text(f"Max: {self.max_curvature_value:.6e}")
+            
             psim.TreePop()
         
         # Information panel
@@ -943,6 +1106,20 @@ class UVParameterVisualizer:
                     psim.Text(f"  Y·Z: {dot_yz:.6f} (should be ~0)")
             
             psim.Separator()
+            
+            # Curvature analysis results
+            if self.show_curvature_analysis:
+                psim.Text("Curvature Analysis:")
+                psim.Text(f"  Grid Size: {self.curvature_grid_size} x {self.curvature_grid_size}")
+                if self.curvature_values is not None and len(self.curvature_values) > 0:
+                    psim.Text(f"  Max Curvature: {self.max_curvature_value:.6e}")
+                    psim.Text(f"  Min Curvature: {np.min(self.curvature_values):.6e}")
+                    psim.Text(f"  Mean Curvature: {np.mean(self.curvature_values):.6e}")
+                    psim.Text(f"  Sample Points: {len(self.curvature_values)}")
+                else:
+                    psim.Text("  No curvature data available")
+                psim.Separator()
+            
             psim.Text("UV Parameterization Notes:")
             
             if self.current_surface_type == "plane":
@@ -1046,6 +1223,16 @@ class UVParameterVisualizer:
         print("  - Green axis: Y-direction (computed)")
         print("  - Blue axis: Z-direction (main direction)")
         print("  - All vectors are normalized and orthogonal")
+        print()
+        print("📍 Position Point:")
+        print("  - Magenta point shows the geometry center/position")
+        print("  - Adjustable radius in visualization settings")
+        print()
+        print("📊 Curvature Analysis:")
+        print("  - Computes max curvature on a UV grid (default 8x8)")
+        print("  - Color-coded points show curvature distribution")
+        print("  - Uses occwl.face.Face.max_curvature() method")
+        print("  - Displays max, min, and mean curvature values")
         print()
         print("=" * 70)
         
