@@ -289,7 +289,7 @@ class dataset_compound(Dataset):
     # Surface type to index mapping
     
     
-    def __init__(self, json_dir: str, max_num_surfaces: int = 200):
+    def __init__(self, json_dir: str, max_num_surfaces: int = 500):
         """
         Args:
             json_dir: Path to directory containing JSON files
@@ -374,32 +374,31 @@ class dataset_compound(Dataset):
             UV = np.array([u_min, u_max, v_min, v_max, 0, 0, 0, 0], dtype=np.float32) # (8, )
 
         elif surface_type == 'cylinder':
-            # # scalar[0] = radius
+            # scalar[0] = radius
             scalar_params = [surface_dict['scalar'][0]]
             if scalar_params[0] < 1e-5: 
                 return None, -1
-            # P = P + D * v_min
-            # v_max = v_max - v_min
-            # v_min = 0
+            P = P + D * v_min
+            v_max = v_max - v_min
+            v_min = 0
 
-            # u_center = 0.5 * (u_min + u_max)
-            # u_diff = u_max - u_min
+            # 1. guarantee u_min is positive
+            if u_min < 0:
+                k = (u_min // (2 * np.pi) - 1)
+                u_min -= k * 2 * np.pi
+                u_max -= k * 2 * np.pi
 
-            # # while u_diff > 2 * np.pi:
-            # #     u_diff -= 2 * np.pi
-            # if u_diff > 2 * np.pi:
-            #     u_diff -= u_diff // (2 * np.pi) * 2 * np.pi
-            # u_half = 0.5 * (u_diff) / np.pi - 0.5 # (0 - pi) --> (-0.5, 0.5)
+            # 2. guarantee u_diff < 2 * np.pi
+            if u_max - u_min > 2 * np.pi:
+                u_max -= (u_max - u_min) // (2 * np.pi) * 2 * np.pi
 
-            # sin_u_center, cos_u_center = np.sin(u_center), np.cos(u_center)
-            # UV = np.array([sin_u_center, cos_u_center, u_half, v_max, 0, 0, 0, 0], dtype=np.float32) # (8, )
-            normalized_params = normalize_cylinder_with_center(P, D, X, Y, u_min, u_max, v_min, v_max)
-            P = normalized_params['P']
-            D = normalized_params['D']
-            X = normalized_params['X_dir']
-            Y = normalized_params['Y_dir']
 
-            UV = normalized_params['UV']
+            u_center = 0.5 * (u_min + u_max)
+            u_diff = u_max - u_min
+            u_half = 0.5 * (u_diff) / np.pi - 0.5 # (0 - pi) --> (-0.5, 0.5)
+
+            sin_u_center, cos_u_center = np.sin(u_center), np.cos(u_center)
+            UV = np.array([sin_u_center, cos_u_center, u_half, v_max, 0, 0, 0, 0], dtype=np.float32) # (8, )
 
         elif surface_type == 'cone':
 
@@ -409,48 +408,49 @@ class dataset_compound(Dataset):
             if not (1e-6 < semi_angle < np.pi/2 - 1e-6):
                 return None, -1
                 # raise ValueError(f"Invalid semi-angle: {semi_angle}, should be in (0, pi/2)")
-            # TODO: Fix the problem that leads to extremely small radius sometime. When radius - v_min * np.sin(semi_angle) ~= 0
-            # if radius + v_min * np.sin(semi_angle) < 1e-2:
-            #     print(f"radius - v_min * np.sin(semi_angle) < 1e-2: {radius - v_min * np.sin(semi_angle)}")
-            #     v_min_head = v_min + (1e-2 - radius) / np.sin(semi_angle)
 
-            P, D, X, Y, UV, scalar_params = normalize_cone_with_center(P, D, X, u_min, u_max, v_min, v_max, semi_angle, radius)
-            # r_min_thresh = 1e-2
-            # P_min = P + v_min * np.cos(semi_angle) * D
-            # r_min = radius + v_min * np.sin(semi_angle)
 
-            # if r_min < r_min_thresh:
-            #     # Compute how much delta_v we need to increase to make r_min_thresh
-            #     delta_v = (r_min_thresh - r_min) / np.sin(semi_angle)
-            #     v_min_new = v_min + delta_v
-            #     P_min = P + v_min_new * np.cos(semi_angle) * D
-            #     r_min = radius + v_min_new * np.sin(semi_angle)
-            # else:
-            #     v_min_new = v_min
+            # Fix the problem that leads to extremely small radius sometime. When radius - v_min * np.sin(semi_angle) ~= 0
+            r_min_thresh = 1e-2
+            P_min = P + v_min * np.cos(semi_angle) * D
+            r_min = radius + v_min * np.sin(semi_angle)
 
-            # v_min = v_min_new    
-            # v_max = v_max - v_min
+            if r_min < r_min_thresh:
+                # Compute how much delta_v we need to increase to make r_min_thresh
+                delta_v = (r_min_thresh - r_min) / np.sin(semi_angle)
+                v_min_new = v_min + delta_v
+                P_min = P + v_min_new * np.cos(semi_angle) * D
+                r_min = radius + v_min_new * np.sin(semi_angle)
+            else:
+                v_min_new = v_min
 
-            # P = P_min
-            # radius = max(r_min, r_min_thresh)
+            v_min = v_min_new    
+            v_max = v_max - v_min
+
+            P = P_min
+            radius = max(r_min, r_min_thresh)
+
+            # 1. guarantee u_min is positive
+            if u_min < 0:
+                k = (u_min // (2 * np.pi) - 1)
+                u_min -= k * 2 * np.pi
+                u_max -= k * 2 * np.pi
+            # 2. guarantee u_diff < 2 * np.pi
+            if u_max - u_min > 2 * np.pi:
+                u_max -= (u_max - u_min) // (2 * np.pi) * 2 * np.pi
 
             
-            # u_center = 0.5 * (u_min + u_max)
-            # u_diff = u_max - u_min
-
-            # # while u_diff > 2 * np.pi:
-            # #     u_diff -= 2 * np.pi
-            # if u_diff > 2 * np.pi:
-            #     u_diff -= u_diff // (2 * np.pi) * 2 * np.pi
+            u_center = 0.5 * (u_min + u_max)
+            u_diff = u_max - u_min
                 
-            # u_half = 0.5 * (u_diff) / np.pi  # (0 - pi) --> (0, 1)
-            # sin_u_center, cos_u_center = np.sin(u_center), np.cos(u_center)
-            # v_center = 0.5 * (v_min + v_max)
-            # v_half = 0.5 * (v_max - v_min)
+            u_half = 0.5 * (u_diff) / np.pi  # (0 - pi) --> (0, 1)
+            sin_u_center, cos_u_center = np.sin(u_center), np.cos(u_center)
+            v_center = 0.5 * (v_min + v_max)
+            v_half = 0.5 * (v_max - v_min)
 
 
-            # UV = [sin_u_center, cos_u_center, u_half, v_center, v_half, 0, 0, 0] # (8, )
-            # scalar_params = [semi_angle / (np.pi/2), radius]
+            UV = [sin_u_center, cos_u_center, u_half, v_center, v_half, 0, 0, 0] # (8, )
+            scalar_params = [semi_angle / (np.pi/2), radius]
             
 
         elif surface_type == 'sphere':
@@ -507,24 +507,43 @@ class dataset_compound(Dataset):
             scalar_params = [surface_dict['scalar'][0], surface_dict['scalar'][1]]
             if scalar_params[0] < 1e-5 or scalar_params[1] < 1e-5:
                 return None, -1
+
+            # 1. guarantee u_min is positive
+            if u_min < 0:
+                k = (u_min // (2 * np.pi) - 1)
+                u_min -= k * 2 * np.pi
+                u_max -= k * 2 * np.pi
+            # 2. guarantee u_diff < 2 * np.pi
+            if u_max - u_min > 2 * np.pi:
+                u_max -= (u_max - u_min) // (2 * np.pi) * 2 * np.pi
+
+            # 3. guarantee v_min is positive
+            if v_min < 0:
+                k = (v_min // (np.pi) - 1)
+                v_min -= k * np.pi
+                v_max -= k * np.pi
+            # 4. guarantee v_diff < np.pi
+            if v_max - v_min > np.pi:
+                v_max -= (v_max - v_min) // np.pi * np.pi
+
             u_center = 0.5 * (u_min + u_max)
             u_diff = u_max - u_min
-            # while u_diff > 2 * np.pi:
-            #     u_diff -= 2 * np.pi
-            if u_diff > 2 * np.pi:
-                u_diff -= u_diff // (2 * np.pi) * 2 * np.pi
             u_half = 0.5 * (u_diff)
             v_diff = v_max - v_min
-            # while v_diff > np.pi:
-            #     v_diff -= np.pi
-            if v_diff > np.pi:
-                v_diff -= v_diff // np.pi * np.pi
             v_center = 0.5 * (v_min + v_max)
             v_half = 0.5 * (v_diff)
 
 
             sin_u_center, cos_u_center = np.sin(u_center), np.cos(u_center)
             sin_v_center, cos_v_center = np.sin(v_center), np.cos(v_center)
+
+            c, s = np.cos(-u_center), np.sin(-u_center)
+            Rz = np.array([[c, -s, 0],
+                        [s,  c, 0],
+                        [0,  0, 1]], dtype=np.float32)
+            X_new = Rz @ (X / np.linalg.norm(X))
+            X = X_new
+
 
             UV = np.array([sin_u_center, cos_u_center, u_half / np.pi, sin_v_center, cos_v_center, v_half / np.pi, 0, 0], dtype=np.float32)
 

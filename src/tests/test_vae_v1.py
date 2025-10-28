@@ -222,8 +222,10 @@ def callback():
     psim.Separator()
     psim.Text("Model Controls:")
     if psim.Button("Resample Model"):
-        for surface in resampled_surfaces.values():
-            surface['ps_handler'].remove()
+        #  This may lead to some unexpected crash, temporarily remove all structures instead
+        # for surface in resampled_surfaces.values():
+        #     surface['ps_handler'].remove()
+        ps.remove_all_structures()
         resampled_surfaces = {}
         resampled_json_data, resampled_surfaces = resample_model()
     
