@@ -254,13 +254,23 @@ class dataset_compound(Dataset):
             v_max = v_max - v_min
             v_min = 0
 
+            # 1. guarantee u_min is positive
+            if u_min < 0:
+                k = u_min // (2 * np.pi)
+                u_min -= k * 2 * np.pi
+                u_max -= k * 2 * np.pi
+            # 2. guarantee u_diff < 2 * np.pi
+            if u_max - u_min > 2 * np.pi:
+                u_max -= (u_max - u_min) // (2 * np.pi) * 2 * np.pi
+                
+
             u_center = 0.5 * (u_min + u_max)
             u_diff = u_max - u_min
 
             # while u_diff > 2 * np.pi:
             #     u_diff -= 2 * np.pi
-            if u_diff > 2 * np.pi:
-                u_diff -= u_diff // (2 * np.pi) * 2 * np.pi
+            # if u_diff > 2 * np.pi:
+            #     u_diff -= u_diff // (2 * np.pi) * 2 * np.pi
             u_half = 0.5 * (u_diff) / np.pi - 0.5 # (0 - pi) --> (-0.5, 0.5)
 
             sin_u_center, cos_u_center = np.sin(u_center), np.cos(u_center)
