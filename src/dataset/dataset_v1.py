@@ -20,6 +20,82 @@ from typing import Dict, List, Tuple
 
 
 
+
+def safe_exp(x):
+    return np.exp(x).clip(1e-6, 1e6)
+
+
+
+# 注册每种曲面的参数后处理函数
+# 定义每种曲面的参数结构
+SURFACE_PARAM_SCHEMAS = {
+    "plane": {
+        "fields": ["pos", "dir", "xdir", "UV"],
+        "dims": [3, 3, 3, 8],
+        "transforms": [None, None, None, None]
+    },
+    "cylinder": {
+        "fields": ["pos", "dir", "xdir", "UV", "radius"],
+        "dims": [3, 3, 3, 8, 1],
+        "transforms": [None, None, None, None, np.log]
+    },
+    "cone": {
+        "fields": ["pos", "dir", "xdir", "UV", "semi_angle", "radius"],
+        "dims": [3, 3, 3, 8, 1, 1],
+        "transforms": [None, None, None, None, None, np.log]
+    },
+    "torus": {
+        "fields": ["pos", "dir", "xdir", "UV", "major_radius", "minor_radius"],
+        "dims": [3, 3, 3, 8, 1, 1],
+        "transforms": [None, None, None, None, np.log, np.log]
+    },
+    "sphere": {
+        "fields": ["pos", "dir", "xdir", "UV", "radius"],
+        "dims": [3, 3, 3, 8, 1],
+        "transforms": [None, None, None, None, np.log]
+    },
+}
+
+
+def build_surface_process(schema):
+    """返回用于pre-processing的函数"""
+    split_indices = torch.cumsum(torch.tensor([0] + schema["dims"]), dim=0)
+    transforms = schema["transforms"]
+
+    def fn(raw):
+        parts = []
+        for i in range(len(transforms)):
+            s, e = split_indices[i], split_indices[i+1]
+            part = raw[..., s:e]
+            if transforms[i] is not None:
+                part = transforms[i](part)
+            parts.append(part)
+        return np.concatenate(parts, axis=-1)
+    return fn
+
+
+def build_surface_postpreprocess(schema):
+    """返回用于post-processing的逆变换"""
+    split_indices = torch.cumsum(torch.tensor([0] + schema["dims"]), dim=0)
+    transforms = schema["transforms"]
+
+    def fn(param):
+        parts = []
+        for i in range(len(transforms)):
+            s, e = split_indices[i], split_indices[i+1]
+            part = param[..., s:e]
+            if transforms[i] is not None:
+                # 找到对应的inverse
+                inv = {
+                    np.log: safe_exp,
+                }.get(transforms[i])
+                if inv is not None:
+                    part = inv(part)
+            parts.append(part)
+        return np.concatenate(parts, axis=-1)
+    return fn
+
+
 SURFACE_TYPE_MAP = {
         'plane': 0,
         'cylinder': 1,
@@ -116,6 +192,8 @@ class dataset_compound(Dataset):
         
         self.replica = 1
         
+        self.postprocess_funcs = {k: build_surface_postpreprocess(v) for k, v in SURFACE_PARAM_SCHEMAS.items()}
+        self.preprocess_funcs = {k: build_surface_process(v) for k, v in SURFACE_PARAM_SCHEMAS.items()}
         # # Override max_num_surfaces if specified
         # if self.max_surfaces_per_file is not None:
         #     self.max_num_surfaces = self.max_surfaces_per_file
@@ -170,6 +248,8 @@ class dataset_compound(Dataset):
         elif surface_type == 'cylinder':
             # scalar[0] = radius
             scalar_params = [surface_dict['scalar'][0]]
+            if scalar_params[0] < 1e-5: 
+                return None, -1
             P = P + D * v_min
             v_max = v_max - v_min
             v_min = 0
@@ -189,18 +269,38 @@ class dataset_compound(Dataset):
         elif surface_type == 'cone':
 
             semi_angle, radius = surface_dict['scalar'][0], surface_dict['scalar'][1]
-
-
+            if radius < 1e-5:
+                return None, -1
+            if not (1e-6 < semi_angle < np.pi/2 - 1e-6):
+                return None, -1
+                # raise ValueError(f"Invalid semi-angle: {semi_angle}, should be in (0, pi/2)")
+            # TODO: Fix the problem that leads to extremely small radius sometime. When radius - v_min * np.sin(semi_angle) ~= 0
+            # if radius + v_min * np.sin(semi_angle) < 1e-2:
+            #     print(f"radius - v_min * np.sin(semi_angle) < 1e-2: {radius - v_min * np.sin(semi_angle)}")
+            #     v_min_head = v_min + (1e-2 - radius) / np.sin(semi_angle)
+            r_min_thresh = 1e-2
             P_min = P + v_min * np.cos(semi_angle) * D
             r_min = radius + v_min * np.sin(semi_angle)
+
+            if r_min < r_min_thresh:
+                # Compute how much delta_v we need to increase to make r_min_thresh
+                delta_v = (r_min_thresh - r_min) / np.sin(semi_angle)
+                v_min_new = v_min + delta_v
+                P_min = P + v_min_new * np.cos(semi_angle) * D
+                r_min = radius + v_min_new * np.sin(semi_angle)
+            else:
+                v_min_new = v_min
+
+            v_min = v_min_new    
             v_max = v_max - v_min
-            v_min = 0
+
             P = P_min
-            radius = r_min
+            radius = max(r_min, r_min_thresh)
 
             
             u_center = 0.5 * (u_min + u_max)
             u_diff = u_max - u_min
+
             # while u_diff > 2 * np.pi:
             #     u_diff -= 2 * np.pi
             if u_diff > 2 * np.pi:
@@ -234,7 +334,8 @@ class dataset_compound(Dataset):
             # scalar[0] = radius
 
             scalar_params = [surface_dict['scalar'][0]]
-
+            if scalar_params[0] < 1e-5:
+                return None, -1
 
             u_center = 0.5 * (u_min + u_max)
             v_center = 0.5 * (v_min + v_max)
@@ -267,7 +368,8 @@ class dataset_compound(Dataset):
         elif surface_type == 'torus':
             # scalar[0] = major_radius, scalar[1] = minor_radius
             scalar_params = [surface_dict['scalar'][0], surface_dict['scalar'][1]]
-
+            if scalar_params[0] < 1e-5 or scalar_params[1] < 1e-5:
+                return None, -1
             u_center = 0.5 * (u_min + u_max)
             u_diff = u_max - u_min
             # while u_diff > 2 * np.pi:
@@ -303,6 +405,12 @@ class dataset_compound(Dataset):
         
         # Concatenate all parameters: P + D + UV + scalar
         params = np.concatenate([P, D, X, UV, scalar_params])
+        # Just control the max value of params to be 10
+        if np.max(np.abs(params)) > 10:
+            return None, -1
+        assert np.allclose(params, self.postprocess_funcs[surface_type](self.preprocess_funcs[surface_type](params))), f"type: {surface_type}, params: {params}, postprocess: {self.postprocess_funcs[surface_type](self.preprocess_funcs[surface_type](params))}"
+        # Do the log processing of radius
+        params = self.preprocess_funcs[surface_type](params)
         assert len(params) == self.base_dim + SCALAR_DIM_MAP[surface_type], f"surface {surface_type} params length {len(params)} != base_dim {self.base_dim}"
         return params, surface_type_idx
     
@@ -313,7 +421,9 @@ class dataset_compound(Dataset):
         """
         SURFACE_TYPE_MAP_INV = {v: k for k, v in SURFACE_TYPE_MAP.items()}
         surface_type = SURFACE_TYPE_MAP_INV.get(surface_type_idx, -1)
-        print(surface_type, params, f'len params: {len(params)}')
+        # print(surface_type, params, f'len params: {len(params)}')
+        # Apply exp to radius
+        params = self.postprocess_funcs[surface_type](params)
         P = params[:3]
         D = params[3:6] / np.linalg.norm(params[3:6])
         X = params[6:9] / np.linalg.norm(params[6:9])
@@ -455,9 +565,14 @@ class dataset_compound(Dataset):
                 with warnings.catch_warnings():
                     warnings.filterwarnings('error', category=RuntimeWarning)
                     params, surface_type_idx = self._parse_surface(surface_dict)
-                    all_params[i, :len(params)] = params
-                    all_types[i] = surface_type_idx
-                    mask[i] = 1.0
+                    if surface_type_idx == -1:
+                        with open('./assets/abnormal_surfaces.csv', 'a') as f:
+                            f.write(json_path + ',' + str(i) + ',' + str(surface_type_idx) + '\n')
+                    else:
+                        # Bad surface, skip
+                        all_params[i, :len(params)] = params
+                        all_types[i] = surface_type_idx
+                        mask[i] = 1.0
             except (KeyError, IndexError, NotImplementedError, RuntimeWarning) as e:
                 # Skip invalid surfaces (leave as zeros with mask=0)
                 # print(f"Warning: Skipping surface {i} in {json_path}: {e}")
