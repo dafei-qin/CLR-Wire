@@ -1,4 +1,4 @@
-<mxfile host="app.diagrams.net" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36" version="28.2.7">
+<mxfile host="app.diagrams.net" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36" version="28.2.8">
   <diagram name="第 1 页" id="W3_UTTQ6PQ7SQEcw9UUB">
     <mxGraphModel dx="2723" dy="876" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="827" math="0" shadow="0">
       <root>
@@ -566,10 +566,10 @@
         <mxCell id="iZ9JB_q65Qv8qcF91Kse-74" value="CE Loss" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#ffe6cc;strokeColor=#d79b00;" parent="iZ9JB_q65Qv8qcF91Kse-79" vertex="1">
           <mxGeometry y="10" width="80" height="80" as="geometry" />
         </mxCell>
-        <mxCell id="ys6ZgUNs7EwI22WxzVu1-5" value="1. 周期性参数统一区间(Second-order Surfaces)&lt;div&gt;2. 非周期函数尽量简化(Plane, Cylinder, Cone)&lt;/div&gt;&lt;div&gt;3. 过大参数曲面转化为bspline&lt;/div&gt;&lt;div&gt;4. 删除无法网格化曲面&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="1">
-          <mxGeometry x="-760" y="602.5" width="200" height="105" as="geometry" />
+        <mxCell id="ys6ZgUNs7EwI22WxzVu1-5" value="1. 周期性参数统一区间(Second-order Surfaces)&lt;div&gt;1.1 记得统一区间后更新XDirection位置，符合opencascade定义&lt;br&gt;&lt;div&gt;2. 非周期函数尽量简化(Plane, Cylinder, Cone)&lt;/div&gt;&lt;div&gt;3. 过大参数曲面转化为bspline&lt;/div&gt;&lt;div&gt;4. 删除无法网格化曲面&lt;/div&gt;&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;" parent="1" vertex="1">
+          <mxGeometry x="-760" y="602.5" width="200" height="157.5" as="geometry" />
         </mxCell>
-        <mxCell id="ys6ZgUNs7EwI22WxzVu1-6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="43Lu1swzMmdwhKiUgGnW-73" target="ys6ZgUNs7EwI22WxzVu1-5">
+        <mxCell id="ys6ZgUNs7EwI22WxzVu1-6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="43Lu1swzMmdwhKiUgGnW-73" target="ys6ZgUNs7EwI22WxzVu1-5" edge="1">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
       </root>

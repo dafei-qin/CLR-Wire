@@ -44,7 +44,9 @@ import polyscope.imgui as psim
 
 # from freecad_visualize_json_pythonocc import _build_and_mesh_face_robustly_from_topods, extract_mesh_from_face
 from itertools import combinations
+from icecream import ic
 
+ic.enable()
 
 def Compound(faces):
     # Convert list of faces to a compound
@@ -415,7 +417,7 @@ def visualize_json_interset(cad_data, plot=True, plot_gui=True,tol=1e-2, ps_head
 
         surface_type = face['type']
         surface_index = face['idx'][0]
-        # print(f"Processing face {surface_type} with type {surface_index}")
+        ic(f"Processing face {surface_index} with type {surface_type}, uv: {face['uv']}, scalar: {face['scalar']}...")
         if surface_type == 'plane':
             # continue
             occ_face, vertices, faces, attr_str = build_plane_face(face, tol=tol)
@@ -427,7 +429,8 @@ def visualize_json_interset(cad_data, plot=True, plot_gui=True,tol=1e-2, ps_head
         else:
             continue
         if plot:    
-            ps_handle = ps.register_surface_mesh(f"{ps_header}_{surface_index:03d}_{surface_type}_{attr_str}", vertices, faces, transparency=0.7)
+            # ps_handle = ps.register_surface_mesh(f"{ps_header}_{surface_index:03d}_{surface_type}_{attr_str}", vertices, faces, transparency=0.7)
+            ps_handle = ps.register_surface_mesh(f"{ps_header}_{surface_index:03d}_{surface_type}", vertices, faces, transparency=0.7)
         else:
             ps_handle = None
         all_faces[surface_index] = {
@@ -438,6 +441,7 @@ def visualize_json_interset(cad_data, plot=True, plot_gui=True,tol=1e-2, ps_head
             'surface_index': surface_index,
             'ps_handler': ps_handle
         }
+        ic('done!')
 
     if plot_gui and plot:
         print(ps.get_bounding_box())

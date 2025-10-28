@@ -22,7 +22,7 @@ wandb_run_name: train_1027_no_kl_logRadius
 data:
     train_json_dir: /home/qindafei/CAD/data/logan_jsons/abc/
     val_json_dir: /home/qindafei/CAD/data/logan_jsons/abc_test/
-    max_num_surfaces: 200
+    max_num_surfaces: 500
 
 model:
     # depth: 16
