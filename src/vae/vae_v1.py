@@ -20,18 +20,9 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from icecream import ic
 
-
-
-
-
-
-
-
-
-
-
-
+ic.disable()
 class SurfaceVAE(nn.Module):
     def __init__(self, 
                  param_raw_dim,
@@ -124,7 +115,7 @@ class SurfaceVAE(nn.Module):
             padded.index_copy_(0, idx, torch.cat([out_t, torch.zeros(out_t.size(0), max_dim - dim_t, device=device)], dim=1))
             # set mask true for valid positions
             mask[idx, :dim_t] = True
-            print('predicted type', t, 'mask dim', dim_t)
+            ic('predicted type', t, 'mask dim', dim_t)
             # mask.index_put_((idx, torch.arange(dim_t, device=device)), torch.ones(out_t.size(0), dim_t, dtype=torch.bool, device=device))
         return padded, mask
 

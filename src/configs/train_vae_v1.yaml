@@ -17,7 +17,7 @@ log_every_step: 50
 
 use_wandb_tracking: true
 wandb_project_name: VAE_V1
-wandb_run_name: train_1024_no_kl
+wandb_run_name: train_1027_no_kl_logRadius
 
 data:
     train_json_dir: /home/qindafei/CAD/data/logan_jsons/abc/
@@ -34,7 +34,7 @@ model:
     # surface_dim: 256
     # surface_enc_block_out_channels: [16, 32, 64, 128]
     param_raw_dim: [17, 18, 19, 18, 19]
-    checkpoint_folder: checkpoints/train_1025_no_kl
+    checkpoint_folder: checkpoints/train_1027_no_kl_logRadius
     checkpoint_file_name: model.pt 0
 
 
