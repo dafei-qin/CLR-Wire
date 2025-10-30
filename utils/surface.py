@@ -417,7 +417,7 @@ def visualize_json_interset(cad_data, plot=True, plot_gui=True,tol=1e-2, ps_head
 
         surface_type = face['type']
         surface_index = face['idx'][0]
-        ic(f"Processing face {surface_index} with type {surface_type}, uv: {face['uv']}, scalar: {face['scalar']}...")
+        ic(f"Processing face {surface_index} with type {surface_type}, uv: {face['uv']}, scalar: {face['scalar']}, D: {face['direction'][0]}, X: {face['direction'][1]}...")
         if surface_type == 'plane':
             # continue
             occ_face, vertices, faces, attr_str = build_plane_face(face, tol=tol)
