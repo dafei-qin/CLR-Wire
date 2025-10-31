@@ -268,15 +268,15 @@ class BSplineSurfaceViewer:
         # Convert row to surface data dict compatible with build_bspline_surface
         surface_data = {
             'scalar': [
-                row['u_degree'],
-                row['v_degree'],
-                row['num_poles_u'],
-                row['num_poles_v'],
-                row['num_knots_u'],
-                row['num_knots_v'],
+                row['u_degree'].item(),
+                row['v_degree'].item(),
+                row['num_poles_u'].item(),
+                row['num_poles_v'].item(),
+                row['num_knots_u'].item(),
+                row['num_knots_v'].item(),
             ] + row['u_knots'] + row['v_knots'] + row['u_mults'] + row['v_mults'],
-            'u_periodic': row['u_periodic'],
-            'v_periodic': row['v_periodic'],
+            'u_periodic': row['u_periodic'].item(),
+            'v_periodic': row['v_periodic'].item(),
             'poles': self._reshape_poles(row),
         }
         
