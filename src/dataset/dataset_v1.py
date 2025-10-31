@@ -677,6 +677,16 @@ class dataset_compound(Dataset):
             'uv': [float(u_min), float(u_max), float(v_min), float(v_max)],
             'scalar': [float(s) for s in scalar],
         }
+
+    def _load_approx(self, npz_data, surface_idx):
+        # points = npz_data[f'points_{surface_idx}']
+        approx = npz_data[f'approx_{surface_idx}']
+        return approx
+    
+    def _load_points(self, npz_data, surface_idx):  
+        points = npz_data[f'points_{surface_idx}']
+        return points
+
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Get all surfaces from a single JSON file.
@@ -711,6 +721,10 @@ class dataset_compound(Dataset):
                 f.write(json_path + '\n')
             return torch.from_numpy(all_params).float(), torch.from_numpy(all_types).long(), torch.from_numpy(mask).float()
         
+        # Here we load the .npz which stores the bspline approximation and the points data. 
+        npz_data = np.load(json_path.replace('.json', '.npz'))
+
+        # When the params are larger than 10, instead of dropping them we use the approx bspline instead.
         # Parse each surface
         for i, surface_dict in enumerate(surfaces_data):
             # print(i)

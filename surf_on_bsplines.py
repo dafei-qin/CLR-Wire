@@ -41,6 +41,9 @@ class BSplineSurfaceViewer:
         self.current_index = 0
         self.current_surface = None
         self.ps_mesh = None
+        self.ps_control_points = None
+        self.ps_control_mesh_u = None
+        self.ps_control_mesh_v = None
         
         # Filter settings
         self.filter_settings = {
@@ -75,6 +78,11 @@ class BSplineSurfaceViewer:
             # Weight statistics (for rational surfaces)
             'weight_std_min': 0.0,
             'weight_std_max': float(self.df_full['std_weight'].max()),
+            
+            # Multiplicity pattern filter
+            'enable_mult_filter': False,
+            'u_mult_pattern': '',  # e.g., "4,4" or "4,2,2,4"
+            'v_mult_pattern': '',  # e.g., "3,3" or "3,2,3"
         }
         
         # UI state
@@ -82,6 +90,11 @@ class BSplineSurfaceViewer:
         self.show_filter_window = True
         self.auto_update = True
         self.mesh_quality = 0.1  # Mesh refinement parameter
+        
+        # Visualization toggles
+        self.show_control_points = False
+        self.show_control_mesh = False
+        self.control_point_radius = 0.02
         
         # Statistics
         self._compute_statistics()
@@ -138,6 +151,40 @@ class BSplineSurfaceViewer:
         # For now, we use num_knots as a proxy
         return is_bezier
     
+    def _filter_by_multiplicities(self, df, u_pattern, v_pattern):
+        """
+        Filter surfaces by multiplicity patterns.
+        
+        Args:
+            df: DataFrame to filter
+            u_pattern: String like "4,4" or "4,2,2,4" for U direction
+            v_pattern: String like "3,3" or "3,2,3" for V direction
+        
+        Returns:
+            Boolean mask for matching surfaces
+        """
+        mask = np.ones(len(df), dtype=bool)
+        
+        # Parse U multiplicity pattern
+        if u_pattern.strip():
+            try:
+                u_target = [int(x.strip()) for x in u_pattern.split(',')]
+                u_mask = df['u_mults'].apply(lambda x: list(x) == u_target)
+                mask &= u_mask
+            except ValueError:
+                print(f"Warning: Invalid U multiplicity pattern: {u_pattern}")
+        
+        # Parse V multiplicity pattern
+        if v_pattern.strip():
+            try:
+                v_target = [int(x.strip()) for x in v_pattern.split(',')]
+                v_mask = df['v_mults'].apply(lambda x: list(x) == v_target)
+                mask &= v_mask
+            except ValueError:
+                print(f"Warning: Invalid V multiplicity pattern: {v_pattern}")
+        
+        return mask
+    
     def apply_filters(self):
         """Apply all filters to the dataset."""
         df = self.df_full.copy()
@@ -189,6 +236,11 @@ class BSplineSurfaceViewer:
         
         # Weight statistics filter (for rational surfaces)
         df = df[(df['std_weight'] >= s['weight_std_min']) & (df['std_weight'] <= s['weight_std_max'])]
+        
+        # Multiplicity pattern filter
+        if s['enable_mult_filter']:
+            mult_mask = self._filter_by_multiplicities(df, s['u_mult_pattern'], s['v_mult_pattern'])
+            df = df[mult_mask]
         
         self.df_filtered = df.reset_index(drop=True)
         
@@ -257,6 +309,9 @@ class BSplineSurfaceViewer:
             
             self.current_surface = row
             
+            # Visualize control points and mesh
+            self._update_control_visualizations(surface_data['poles'])
+            
             print(f"   ✓ Surface displayed ({len(vertices)} vertices, {len(faces)} faces)")
             
         except Exception as e:
@@ -284,6 +339,83 @@ class BSplineSurfaceViewer:
             poles_grid.append(row_poles)
         
         return poles_grid
+    
+    def _update_control_visualizations(self, poles_grid):
+        """Update control point and mesh visualizations."""
+        # Remove existing visualizations
+        if self.ps_control_points is not None:
+            ps.remove_point_cloud("control_points")
+            self.ps_control_points = None
+        if self.ps_control_mesh_u is not None:
+            ps.remove_curve_network("control_mesh_u")
+            self.ps_control_mesh_u = None
+        if self.ps_control_mesh_v is not None:
+            ps.remove_curve_network("control_mesh_v")
+            self.ps_control_mesh_v = None
+        
+        if not self.show_control_points and not self.show_control_mesh:
+            return
+        
+        # Extract control points
+        num_u = len(poles_grid)
+        num_v = len(poles_grid[0]) if num_u > 0 else 0
+        
+        points = []
+        for i in range(num_u):
+            for j in range(num_v):
+                x, y, z, w = poles_grid[i][j]
+                # Use homogeneous coordinates (multiply by weight for rational surfaces)
+                points.append([x, y, z])
+        
+        points = np.array(points)
+        
+        # Visualize control points
+        if self.show_control_points and len(points) > 0:
+            self.ps_control_points = ps.register_point_cloud(
+                "control_points",
+                points,
+                enabled=True,
+                radius=self.control_point_radius
+            )
+            self.ps_control_points.set_color((1.0, 0.2, 0.2))  # Red
+        
+        # Visualize control mesh
+        if self.show_control_mesh and len(points) > 0:
+            # Build edges in U direction
+            u_edges = []
+            for i in range(num_u):
+                for j in range(num_v - 1):
+                    idx1 = i * num_v + j
+                    idx2 = i * num_v + (j + 1)
+                    u_edges.append([idx1, idx2])
+            
+            if len(u_edges) > 0:
+                self.ps_control_mesh_u = ps.register_curve_network(
+                    "control_mesh_u",
+                    points,
+                    np.array(u_edges),
+                    enabled=True
+                )
+                self.ps_control_mesh_u.set_color((0.3, 0.8, 0.3))  # Green
+                self.ps_control_mesh_u.set_radius(self.control_point_radius * 0.5)
+            
+            # Build edges in V direction
+            v_edges = []
+            for i in range(num_u - 1):
+                for j in range(num_v):
+                    idx1 = i * num_v + j
+                    idx2 = (i + 1) * num_v + j
+                    v_edges.append([idx1, idx2])
+            
+            if len(v_edges) > 0:
+                self.ps_control_mesh_v = ps.register_curve_network(
+                    "control_mesh_v",
+                    points,
+                    np.array(v_edges),
+                    enabled=True
+                )
+                self.ps_control_mesh_v.set_color((0.3, 0.3, 0.8))  # Blue
+                self.ps_control_mesh_v.set_radius(self.control_point_radius * 0.5)
     
     def ui_callback(self):
         """ImGui callback for the UI."""
@@ -330,6 +462,30 @@ class BSplineSurfaceViewer:
             )
             if changed:
                 psim.TextUnformatted("Click Reload to apply")
+            
+            psim.Separator()
+            psim.TextUnformatted("Visualization Options:")
+            
+            # Control points toggle
+            changed, self.show_control_points = psim.Checkbox("Show Control Points", self.show_control_points)
+            if changed:
+                self._update_control_visualizations(self._reshape_poles(self.current_surface) if self.current_surface is not None else [])
+            
+            # Control mesh toggle
+            changed, self.show_control_mesh = psim.Checkbox("Show Control Mesh", self.show_control_mesh)
+            if changed:
+                self._update_control_visualizations(self._reshape_poles(self.current_surface) if self.current_surface is not None else [])
+            
+            # Control point radius
+            if self.show_control_points or self.show_control_mesh:
+                changed, self.control_point_radius = psim.SliderFloat(
+                    "Control Point Radius",
+                    self.control_point_radius,
+                    v_min=0.001,
+                    v_max=0.1
+                )
+                if changed:
+                    self._update_control_visualizations(self._reshape_poles(self.current_surface) if self.current_surface is not None else [])
             
             psim.TreePop()
         
@@ -485,6 +641,40 @@ class BSplineSurfaceViewer:
                 
                 psim.TreePop()
             
+            # Multiplicity pattern filter
+            if psim.TreeNode("Multiplicity Patterns"):
+                psim.TextUnformatted("Filter by exact knot multiplicity patterns")
+                psim.TextUnformatted("Example: '4,4' for Bezier, '4,2,2,4' for C1")
+                
+                changed, s['enable_mult_filter'] = psim.Checkbox("Enable Multiplicity Filter", s['enable_mult_filter'])
+                filters_changed |= changed
+                
+                if s['enable_mult_filter']:
+                    psim.PushItemWidth(150)
+                    changed, s['u_mult_pattern'] = psim.InputText("U Multiplicities", s['u_mult_pattern'])
+                    filters_changed |= changed
+                    psim.PopItemWidth()
+                    
+                    psim.PushItemWidth(150)
+                    changed, s['v_mult_pattern'] = psim.InputText("V Multiplicities", s['v_mult_pattern'])
+                    filters_changed |= changed
+                    psim.PopItemWidth()
+                    
+                    psim.TextUnformatted("Examples:")
+                    psim.TextUnformatted("  Simple Bezier: 4,4")
+                    psim.TextUnformatted("  C1 continuity: 4,2,2,4")
+                    psim.TextUnformatted("  C0 continuity: 4,3,3,4")
+                    
+                    # Show current surface multiplicities as reference
+                    if self.current_surface is not None:
+                        row = self.current_surface
+                        psim.Separator()
+                        psim.TextUnformatted("Current surface:")
+                        psim.TextUnformatted(f"  U: {','.join(map(str, row['u_mults']))}")
+                        psim.TextUnformatted(f"  V: {','.join(map(str, row['v_mults']))}")
+                
+                psim.TreePop()
+            
             # Apply filters button
             if filters_changed or psim.Button("Apply Filters"):
                 n_filtered = self.apply_filters()
@@ -515,6 +705,9 @@ class BSplineSurfaceViewer:
                 self.filter_settings['show_general_bspline'] = True
                 self.filter_settings['weight_std_min'] = 0.0
                 self.filter_settings['weight_std_max'] = float(self.df_full['std_weight'].max())
+                self.filter_settings['enable_mult_filter'] = False
+                self.filter_settings['u_mult_pattern'] = ''
+                self.filter_settings['v_mult_pattern'] = ''
                 
                 self.apply_filters()
                 self.load_and_display_surface(0)
@@ -533,6 +726,8 @@ class BSplineSurfaceViewer:
                 psim.TextUnformatted(f"Degrees: ({row['u_degree']}, {row['v_degree']})")
                 psim.TextUnformatted(f"Control Points: {row['num_poles_u']} × {row['num_poles_v']} = {row['total_poles']}")
                 psim.TextUnformatted(f"Knots: U={row['num_knots_u']}, V={row['num_knots_v']}")
+                psim.TextUnformatted(f"Multiplicities U: {','.join(map(str, row['u_mults']))}")
+                psim.TextUnformatted(f"Multiplicities V: {','.join(map(str, row['v_mults']))}")
                 psim.Separator()
                 
                 psim.TextUnformatted(f"Rational: {'Yes' if row['is_rational'] else 'No'}")
