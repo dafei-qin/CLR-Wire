@@ -465,7 +465,7 @@ def visualize_json_interset(cad_data, plot=True, plot_gui=True,tol=1e-2, ps_head
             occ_face, vertices, faces, attr_str = build_second_order_surface(face, tol=tol)
         elif surface_type == 'bspline_surface':
             # continue
-            occ_face, vertices, faces, attr_str = build_bspline_surface(face, tol=tol * 10, normalize_surface=False)
+            occ_face, vertices, faces, attr_str = build_bspline_surface(face, tol=tol * 10, normalize_surface=False, normalize_knots=True)
         else:
             continue
         if plot:    
