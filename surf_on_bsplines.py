@@ -40,7 +40,9 @@ class BSplineSurfaceViewer:
         self.df_filtered = self.df_full.copy()
         self.current_index = 0
         self.current_surface = None
-        self.ps_mesh = None
+        self.ps_mesh_unnormalized = None
+        self.ps_mesh_normalized = None
+        self.ps_mesh_normalized_surface = None
         self.ps_control_points = None
         self.ps_control_mesh_u = None
         self.ps_control_mesh_v = None
@@ -254,9 +256,15 @@ class BSplineSurfaceViewer:
         """Load and display the surface at the given index."""
         if len(self.df_filtered) == 0:
             print("No surfaces match the current filters!")
-            if self.ps_mesh is not None:
-                ps.remove_surface_mesh("bspline_surface")
-                self.ps_mesh = None
+            if self.ps_mesh_unnormalized is not None:
+                ps.remove_surface_mesh("bspline_surface_unnormalized")
+                self.ps_mesh_unnormalized = None
+            if self.ps_mesh_normalized is not None:
+                ps.remove_surface_mesh("bspline_surface_normalized")
+                self.ps_mesh_normalized = None
+            if self.ps_mesh_normalized_surface is not None:
+                ps.remove_surface_mesh("bspline_surface_normalized_surface")
+                self.ps_mesh_normalized_surface = None
             return
         
         # Clamp index
@@ -288,31 +296,69 @@ class BSplineSurfaceViewer:
             print(f"   Control points: {row['num_poles_u']} × {row['num_poles_v']}")
             print(f"   Rational: {row['is_rational']}")
             
-            occ_face, vertices, faces, _ = build_bspline_surface(surface_data, tol=self.mesh_quality)
+            # Build surface with different normalization settings
+            print(f"   Building with normalize_knots=False, normalize_surface=False...")
+            occ_face_unnorm, vertices_unnorm, faces_unnorm, _ = build_bspline_surface(
+                surface_data, tol=self.mesh_quality, normalize_knots=False, normalize_surface=False
+            )
             
-            # Display in polyscope
-            if self.ps_mesh is not None:
-                ps.remove_surface_mesh("bspline_surface")
+            print(f"   Building with normalize_knots=True, normalize_surface=False...")
+            occ_face_norm, vertices_norm, faces_norm, _ = build_bspline_surface(
+                surface_data, tol=self.mesh_quality, normalize_knots=True, normalize_surface=False
+            )
             
-            self.ps_mesh = ps.register_surface_mesh(
-                "bspline_surface",
-                vertices,
-                faces,
+            print(f"   Building with normalize_knots=True, normalize_surface=True...")
+            occ_face_norm_surf, vertices_norm_surf, faces_norm_surf, _ = build_bspline_surface(
+                surface_data, tol=self.mesh_quality, normalize_knots=True, normalize_surface=True
+            )
+            
+            # Display surface 1: unnormalized
+            if self.ps_mesh_unnormalized is not None:
+                ps.remove_surface_mesh("bspline_surface_unnormalized")
+            
+            self.ps_mesh_unnormalized = ps.register_surface_mesh(
+                "bspline_surface_unnormalized",
+                vertices_unnorm,
+                faces_unnorm,
                 enabled=True
             )
             
-            # Set some nice colors
-            if row['is_rational']:
-                self.ps_mesh.set_color((0.2, 0.6, 0.9))  # Blue for rational
-            else:
-                self.ps_mesh.set_color((0.9, 0.6, 0.2))  # Orange for polynomial
+            # Display surface 2: normalize_knots only
+            if self.ps_mesh_normalized is not None:
+                ps.remove_surface_mesh("bspline_surface_normalized")
+            
+            self.ps_mesh_normalized = ps.register_surface_mesh(
+                "bspline_surface_normalized",
+                vertices_norm,
+                faces_norm,
+                enabled=True
+            )
+            
+            # Display surface 3: normalize_knots + normalize_surface
+            if self.ps_mesh_normalized_surface is not None:
+                ps.remove_surface_mesh("bspline_surface_normalized_surface")
+            
+            self.ps_mesh_normalized_surface = ps.register_surface_mesh(
+                "bspline_surface_normalized_surface",
+                vertices_norm_surf,
+                faces_norm_surf,
+                enabled=True
+            )
+            
+            # Set colors - different for each version
+            self.ps_mesh_unnormalized.set_color((0.9, 0.3, 0.3))  # Red
+            self.ps_mesh_normalized.set_color((0.3, 0.9, 0.3))  # Green
+            self.ps_mesh_normalized_surface.set_color((0.3, 0.3, 0.9))  # Blue
             
             self.current_surface = row
             
-            # Visualize control points and mesh
+            # Visualize control points and mesh (for unnormalized version)
             self._update_control_visualizations(surface_data['poles'])
             
-            print(f"   ✓ Surface displayed ({len(vertices)} vertices, {len(faces)} faces)")
+            print(f"   ✓ Surfaces displayed (overlapping):")
+            print(f"     Red (no normalization): {len(vertices_unnorm)} vertices, {len(faces_unnorm)} faces")
+            print(f"     Green (normalize_knots only): {len(vertices_norm)} vertices, {len(faces_norm)} faces")
+            print(f"     Blue (normalize_knots + normalize_surface): {len(vertices_norm_surf)} vertices, {len(faces_norm_surf)} faces")
             
         except Exception as e:
             print(f"   ✗ Error building surface: {e}")
@@ -719,6 +765,16 @@ class BSplineSurfaceViewer:
             if self.current_surface is not None:
                 row = self.current_surface
                 
+                # Display legend for surface comparison
+                psim.TextUnformatted("📍 Surface Comparison (overlapping):")
+                psim.TextColored((0.9, 0.3, 0.3, 1.0), "  🔴 RED:")
+                psim.TextUnformatted("    normalize_knots=False, normalize_surface=False")
+                psim.TextColored((0.3, 0.9, 0.3, 1.0), "  🟢 GREEN:")
+                psim.TextUnformatted("    normalize_knots=True, normalize_surface=False")
+                psim.TextColored((0.3, 0.3, 0.9, 1.0), "  🔵 BLUE:")
+                psim.TextUnformatted("    normalize_knots=True, normalize_surface=True")
+                psim.Separator()
+                
                 psim.TextUnformatted(f"File: {Path(row['file_path']).name}")
                 psim.TextUnformatted(f"File Index: {row['file_idx']}, Face Index: {row['face_idx']}")
                 psim.Separator()
@@ -728,6 +784,7 @@ class BSplineSurfaceViewer:
                 psim.TextUnformatted(f"Knots: U={row['num_knots_u']}, V={row['num_knots_v']}")
                 psim.TextUnformatted(f"Multiplicities U: {','.join(map(str, row['u_mults']))}")
                 psim.TextUnformatted(f"Multiplicities V: {','.join(map(str, row['v_mults']))}")
+                psim.TextUnformatted(f"Knot Vector: U={','.join(map(str, row['u_knots']))}, V={','.join(map(str, row['v_knots']))}")
                 psim.Separator()
                 
                 psim.TextUnformatted(f"Rational: {'Yes' if row['is_rational'] else 'No'}")
