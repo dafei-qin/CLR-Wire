@@ -280,6 +280,14 @@ def build_bspline_surface(data: dict, tol=1e-1) -> Geom_BSplineSurface:
     u_mults_list = scalar_data[6 + num_knots_u + num_knots_v : 6 + num_knots_u + num_knots_v + num_knots_u]
     v_mults_list = scalar_data[6 + num_knots_u + num_knots_v + num_knots_u :]
   
+    u_knots_min = u_knots_list[0]
+    u_knots_max = u_knots_list[1]
+    u_knots_list = [i / (u_knots_max - u_knots_min) for i in u_knots_list]
+    v_knots_min = v_knots_list[0]
+    v_knots_max = v_knots_list[1]
+    v_knots_list = [i / (v_knots_max - v_knots_min) for i in v_knots_list]
+
+    
     # 3. Create and populate pythonOCC arrays for control points and weights
     # The constructor expects 1-based indexing for these arrays
     occ_control_points = TColgp_Array2OfPnt(1, num_poles_u, 1, num_poles_v)
