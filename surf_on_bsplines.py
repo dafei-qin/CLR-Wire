@@ -728,6 +728,7 @@ class BSplineSurfaceViewer:
                 psim.TextUnformatted(f"Knots: U={row['num_knots_u']}, V={row['num_knots_v']}")
                 psim.TextUnformatted(f"Multiplicities U: {','.join(map(str, row['u_mults']))}")
                 psim.TextUnformatted(f"Multiplicities V: {','.join(map(str, row['v_mults']))}")
+                psim.TextUnformatted(f"Knot Vector: U={','.join(map(str, row['u_knots']))}, V={','.join(map(str, row['v_knots']))}")
                 psim.Separator()
                 
                 psim.TextUnformatted(f"Rational: {'Yes' if row['is_rational'] else 'No'}")
