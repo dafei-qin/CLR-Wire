@@ -281,12 +281,28 @@ def build_bspline_surface(data: dict, tol=1e-1, normalize_knots=False, normalize
     v_mults_list = scalar_data[6 + num_knots_u + num_knots_v + num_knots_u :]
   
     if normalize_knots:
+
+        def mode_numpy(arr):
+                vals, counts = np.unique(arr, return_counts=True)
+                index = np.argmax(counts)
+                return vals[index]
         u_knots_min = u_knots_list[0]
         u_knots_max = u_knots_list[-1]
         u_knots_list = [(i - u_knots_min) / (u_knots_max - u_knots_min) for i in u_knots_list]
+        u_knots_list = np.array(u_knots_list)
+        u_knots_diff = np.diff(u_knots_list)
+        u_knits_diff_mode = mode_numpy(u_knots_diff)
+        u_knots_list = u_knots_list / u_knits_diff_mode
+
+
         v_knots_min = v_knots_list[0]
         v_knots_max = v_knots_list[-1]
         v_knots_list = [(i - v_knots_min) / (v_knots_max - v_knots_min) for i in v_knots_list]
+
+        v_knots_list = np.array(v_knots_list)
+        v_knots_diff = np.diff(v_knots_list)
+        v_knits_diff_mode = mode_numpy(v_knots_diff)
+        v_knots_list = v_knots_list / v_knits_diff_mode
 
         
     # 3. Create and populate pythonOCC arrays for control points and weights
