@@ -259,7 +259,7 @@ def build_second_order_surface(face, tol=1e-2):
     return shape, vertices, faces, attr_str
 
 
-def build_bspline_surface(data: dict, tol=1e-1) -> Geom_BSplineSurface:
+def build_bspline_surface(data: dict, tol=1e-1, normalize_knots=False, normalize_surface=False) -> Geom_BSplineSurface:
     """
     Reconstructs a Geom_BSplineSurface from a dictionary of its properties.
 
@@ -280,20 +280,35 @@ def build_bspline_surface(data: dict, tol=1e-1) -> Geom_BSplineSurface:
     u_mults_list = scalar_data[6 + num_knots_u + num_knots_v : 6 + num_knots_u + num_knots_v + num_knots_u]
     v_mults_list = scalar_data[6 + num_knots_u + num_knots_v + num_knots_u :]
   
-    u_knots_min = u_knots_list[0]
-    u_knots_max = u_knots_list[1]
-    u_knots_list = [i / (u_knots_max - u_knots_min) for i in u_knots_list]
-    v_knots_min = v_knots_list[0]
-    v_knots_max = v_knots_list[1]
-    v_knots_list = [i / (v_knots_max - v_knots_min) for i in v_knots_list]
+    if normalize_knots:
+        u_knots_min = u_knots_list[0]
+        u_knots_max = u_knots_list[-1]
+        u_knots_list = [(i - u_knots_min) / (u_knots_max - u_knots_min) for i in u_knots_list]
+        v_knots_min = v_knots_list[0]
+        v_knots_max = v_knots_list[-1]
+        v_knots_list = [(i - v_knots_min) / (v_knots_max - v_knots_min) for i in v_knots_list]
 
-    
+        
     # 3. Create and populate pythonOCC arrays for control points and weights
     # The constructor expects 1-based indexing for these arrays
+    print(f"u_knots_list: {u_knots_list}, v_knots_list: {v_knots_list}")
     occ_control_points = TColgp_Array2OfPnt(1, num_poles_u, 1, num_poles_v)
     occ_weights = TColStd_Array2OfReal(1, num_poles_u, 1, num_poles_v)
     
     poles_data = data["poles"]
+    print(np.array(poles_data).shape)
+    if normalize_surface:
+        # Scale the surface to have maximum bbox = 1, keep the xyz ratio
+        poles_data = np.array(poles_data)
+        poles_list = poles_data.reshape(-1, 4)
+        poles_data_min = poles_list.min(axis=0)
+        poles_data_min[-1] = 0
+        poles_data_max = poles_list.max(axis=0)
+        poles_data_max[-1] = 1
+        poles_max = max(poles_data_max[:3] - poles_data_min[:3])
+        poles_list = (poles_list - poles_data_min) / poles_max
+        # poles_list = (poles_list - poles_data_min) / (poles_data_max - poles_data_min)
+        poles_data = poles_list.reshape(poles_data.shape[0], poles_data.shape[1], 4).tolist()
     # print('poles_data: ', np.array(poles_data).shape, np.array(poles_data))
     for i in range(num_poles_u):
         for j in range(num_poles_v):
@@ -425,7 +440,8 @@ def visualize_json_interset(cad_data, plot=True, plot_gui=True,tol=1e-2, ps_head
 
         surface_type = face['type']
         surface_index = face['idx'][0]
-        ic(f"Processing face {surface_index} with type {surface_type}, uv: {face['uv']}, scalar: {face['scalar']}, D: {face['direction'][0]}, X: {face['direction'][1]}...")
+        if surface_type != 'bspline_surface':
+            ic(f"Processing face {surface_index} with type {surface_type}, uv: {face['uv']}, scalar: {face['scalar']}, D: {face['direction'][0]}, X: {face['direction'][1]}...")
         if surface_type == 'plane':
             # continue
             occ_face, vertices, faces, attr_str = build_plane_face(face, tol=tol)
@@ -433,7 +449,7 @@ def visualize_json_interset(cad_data, plot=True, plot_gui=True,tol=1e-2, ps_head
             occ_face, vertices, faces, attr_str = build_second_order_surface(face, tol=tol)
         elif surface_type == 'bspline_surface':
             # continue
-            occ_face, vertices, faces, attr_str = build_bspline_surface(face, tol=tol * 10)
+            occ_face, vertices, faces, attr_str = build_bspline_surface(face, tol=tol * 10, normalize_surface=False)
         else:
             continue
         if plot:    
