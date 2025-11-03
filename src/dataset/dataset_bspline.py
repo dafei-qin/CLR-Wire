@@ -49,7 +49,7 @@ class dataset_bspline(Dataset):
         return u_degree, v_degree, num_poles_u, num_poles_v, num_knots_u, num_knots_v, is_u_periodic, is_v_periodic, u_knots_list, v_knots_list, u_mults_list, v_mults_list, poles, valid
 
 
-    def mode_numpy(arr):
+    def mode_numpy(self, arr):
         vals, counts = np.unique(arr, return_counts=True)
         index = np.argmax(counts)
         return vals[index]
@@ -64,6 +64,7 @@ class dataset_bspline(Dataset):
         knots_gap = np.diff(knots_normalized)
         knots_gap_mode = self.mode_numpy(knots_gap)
         knots_gap = knots_gap  / knots_gap_mode
+        knots_gap = knots_gap / max(knots_gap)
         return knots_gap
 
     def normalize_poles(self, poles):
@@ -87,5 +88,12 @@ class dataset_bspline(Dataset):
 
 if __name__ == '__main__':
     dataset = dataset_bspline(data_path='/home/qindafei/CAD/data/logan_bspline/0/')
+
+    def print_knots_mults(index):
+        u_knots_list, v_knots_list, u_mults_list, v_mults_list, poles, valid = dataset[index]
+        U_info = np.stack([u_knots_list, u_mults_list[1:]])
+        V_info = np.stack([v_knots_list, v_mults_list[1:]])
+        print(f"U_info: {U_info}")
+        print(f"V_info: {V_info}")
     print(len(dataset))
 

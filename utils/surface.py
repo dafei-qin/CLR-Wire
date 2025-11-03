@@ -293,6 +293,7 @@ def build_bspline_surface(data: dict, tol=1e-1, normalize_knots=False, normalize
         u_knots_diff = np.diff(u_knots_list)
         u_knits_diff_mode = mode_numpy(u_knots_diff)
         u_knots_list = u_knots_list / u_knits_diff_mode
+        u_knots_list = u_knots_list / max(u_knots_list)
 
 
         v_knots_min = v_knots_list[0]
@@ -303,7 +304,7 @@ def build_bspline_surface(data: dict, tol=1e-1, normalize_knots=False, normalize
         v_knots_diff = np.diff(v_knots_list)
         v_knits_diff_mode = mode_numpy(v_knots_diff)
         v_knots_list = v_knots_list / v_knits_diff_mode
-
+        v_knots_list = v_knots_list / max(v_knots_list)
         
     # 3. Create and populate pythonOCC arrays for control points and weights
     # The constructor expects 1-based indexing for these arrays
