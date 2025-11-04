@@ -58,9 +58,6 @@ class BSplineDatasetViewer:
         self.mesh_quality = 0.1
         self.surface_transparency = 0.8
         
-        # Navigation settings
-        self.auto_update = False
-        
         print(f"✓ Viewer initialized with {len(self.dataset)} surfaces")
         
     def load_and_display_surface(self, index):
@@ -238,20 +235,19 @@ class BSplineDatasetViewer:
         # Navigation panel
         if psim.TreeNode("🎮 Navigation"):
             psim.TextUnformatted(f"Surface: {self.current_index + 1} / {len(self.dataset)}")
+            psim.TextUnformatted(f"Valid range: 0 to {len(self.dataset) - 1}")
             
-            # Slider for navigation
-            changed, new_index = psim.SliderInt(
-                "##surf_slider",
-                self.current_index,
-                v_min=0,
-                v_max=max(0, len(self.dataset) - 1)
-            )
+            # Input box for direct index entry
+            psim.PushItemWidth(150)
+            changed, new_index = psim.InputInt("Surface Index", self.current_index)
+            psim.PopItemWidth()
             
-            if changed and self.auto_update:
+            if changed:
+                # Clamp to valid range
+                new_index = max(0, min(new_index, len(self.dataset) - 1))
                 self.load_and_display_surface(new_index)
             
             # Navigation buttons
-            psim.SameLine()
             if psim.Button("◀ Prev"):
                 self.load_and_display_surface(self.current_index - 1)
             
@@ -263,8 +259,13 @@ class BSplineDatasetViewer:
             if psim.Button("⟲ Reload"):
                 self.load_and_display_surface(self.current_index)
             
-            # Auto-update toggle
-            _, self.auto_update = psim.Checkbox("Auto-update on slider", self.auto_update)
+            psim.SameLine()
+            if psim.Button("⏭ Jump to First"):
+                self.load_and_display_surface(0)
+            
+            psim.SameLine()
+            if psim.Button("⏮ Jump to Last"):
+                self.load_and_display_surface(len(self.dataset) - 1)
             
             psim.TreePop()
         
