@@ -108,8 +108,8 @@ class BSplineDatasetViewer:
             occ_face, vertices, faces, attr_str = build_bspline_surface(
                 surface_data, 
                 tol=self.mesh_quality, 
-                normalize_knots=False, 
-                normalize_surface=False
+                normalize_knots=True, 
+                normalize_surface=True
             )
             
             # Remove old surface
