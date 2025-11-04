@@ -25,14 +25,12 @@ from utils.surface import build_bspline_surface
 class BSplineDatasetViewer:
     """Interactive viewer for B-spline surfaces using dataset_bspline."""
     
-    def __init__(self, data_path, max_degree=3, max_knots=100):
+    def __init__(self, data_path):
         """
         Initialize the viewer.
         
         Args:
             data_path: Path to directory containing .npy B-spline files
-            max_degree: Maximum degree to include (filters out surfaces with degree > max_degree)
-            max_knots: Maximum number of knots to include
         """
         print("="*80)
         print("B-SPLINE DATASET VIEWER")
@@ -42,8 +40,6 @@ class BSplineDatasetViewer:
         print(f"\n📂 Loading dataset from {data_path}...")
         self.dataset = dataset_bspline(data_path=data_path, replica=1)
         print(f"✓ Found {len(self.dataset)} surfaces")
-
-        self.valid_indices = list(range(len(self.dataset)))
         
         # Current state
         self.current_index = 0
@@ -56,8 +52,8 @@ class BSplineDatasetViewer:
         self.ps_control_mesh_v = None
         
         # Visualization settings
-        self.show_control_points = False
-        self.show_control_mesh = False
+        self.show_control_points = True  # Show by default
+        self.show_control_mesh = True    # Show by default
         self.control_point_radius = 0.02
         self.mesh_quality = 0.1
         self.surface_transparency = 0.8
@@ -65,33 +61,32 @@ class BSplineDatasetViewer:
         # Navigation settings
         self.auto_update = False
         
-    def load_and_display_surface(self, list_index):
+        print(f"✓ Viewer initialized with {len(self.dataset)} surfaces")
+        
+    def load_and_display_surface(self, index):
         """
-        Load and display surface at the given index in the valid_indices list.
+        Load and display surface at the given index.
         
         Args:
-            list_index: Index in the valid_indices list (not the dataset index)
+            index: Index in the dataset
         """
-        if len(self.valid_indices) == 0:
-            print("No valid surfaces to display!")
+        if len(self.dataset) == 0:
+            print("No surfaces to display!")
             return
         
         # Clamp index
-        list_index = max(0, min(list_index, len(self.valid_indices) - 1))
-        self.current_index = list_index
-        
-        # Get actual dataset index
-        dataset_idx = self.valid_indices[list_index]
+        index = max(0, min(index, len(self.dataset) - 1))
+        self.current_index = index
         
         # Load surface data
-        data_path_file = self.dataset.data_names[dataset_idx]
+        data_path_file = self.dataset.data_names[index]
         
         try:
             u_degree, v_degree, num_poles_u, num_poles_v, num_knots_u, num_knots_v, \
                 is_u_periodic, is_v_periodic, u_knots_list, v_knots_list, \
                 u_mults_list, v_mults_list, poles, valid = self.dataset.load_data(data_path_file)
             
-            print(f"\n[{list_index + 1}/{len(self.valid_indices)}] Loading surface...")
+            print(f"\n[{index + 1}/{len(self.dataset)}] Loading surface...")
             print(f"   File: {Path(data_path_file).name}")
             print(f"   Degrees: (u={u_degree}, v={v_degree})")
             print(f"   Control points: {num_poles_u} × {num_poles_v} = {num_poles_u * num_poles_v}")
@@ -242,14 +237,14 @@ class BSplineDatasetViewer:
         
         # Navigation panel
         if psim.TreeNode("🎮 Navigation"):
-            psim.TextUnformatted(f"Surface: {self.current_index + 1} / {len(self.valid_indices)}")
+            psim.TextUnformatted(f"Surface: {self.current_index + 1} / {len(self.dataset)}")
             
             # Slider for navigation
             changed, new_index = psim.SliderInt(
                 "##surf_slider",
                 self.current_index,
                 v_min=0,
-                v_max=max(0, len(self.valid_indices) - 1)
+                v_max=max(0, len(self.dataset) - 1)
             )
             
             if changed and self.auto_update:
@@ -373,12 +368,7 @@ class BSplineDatasetViewer:
         # Dataset statistics
         if psim.TreeNode("📊 Dataset Info"):
             psim.TextUnformatted(f"Total surfaces in dataset: {len(self.dataset)}")
-            psim.TextUnformatted(f"Valid surfaces (filtered): {len(self.valid_indices)}")
-            psim.TextUnformatted(f"Dropped surfaces: {len(self.dataset) - len(self.valid_indices)}")
-            psim.Separator()
-            psim.TextUnformatted(f"Filter criteria:")
-            psim.TextUnformatted(f"  Max degree: {self.max_degree}")
-            psim.TextUnformatted(f"  Max knots: {self.max_knots}")
+            psim.TextUnformatted(f"Current index: {self.current_index}")
             
             psim.TreePop()
     
@@ -386,8 +376,8 @@ class BSplineDatasetViewer:
         """Run the interactive viewer."""
         print("\n🚀 Starting interactive viewer...")
         
-        if len(self.valid_indices) == 0:
-            print("❌ No valid surfaces to display after filtering!")
+        if len(self.dataset) == 0:
+            print("❌ No surfaces to display!")
             return
         
         # Initialize polyscope
@@ -423,27 +413,11 @@ def main():
         type=str,
         help="Path to directory containing .npy B-spline files"
     )
-    parser.add_argument(
-        "--max_degree",
-        type=int,
-        default=3,
-        help="Maximum degree to include (default: 3)"
-    )
-    parser.add_argument(
-        "--max_knots",
-        type=int,
-        default=100,
-        help="Maximum number of knots to include (default: 100)"
-    )
     
     args = parser.parse_args()
     
     # Create and run viewer
-    viewer = BSplineDatasetViewer(
-        data_path=args.data_path,
-        max_degree=args.max_degree,
-        max_knots=args.max_knots
-    )
+    viewer = BSplineDatasetViewer(data_path=args.data_path)
     viewer.run()
     
     return 0
