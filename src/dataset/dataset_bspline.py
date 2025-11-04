@@ -91,8 +91,10 @@ if __name__ == '__main__':
 
     def print_knots_mults(index):
         u_knots_list, v_knots_list, u_mults_list, v_mults_list, poles, valid = dataset[index]
-        U_info = np.stack([u_knots_list, u_mults_list[1:]])
-        V_info = np.stack([v_knots_list, v_mults_list[1:]])
+        u_knots_list = np.insert(u_knots_list, 0, 0)
+        v_knots_list = np.insert(v_knots_list, 0, 0)
+        U_info = np.stack([u_knots_list, u_mults_list])
+        V_info = np.stack([v_knots_list, v_mults_list])
         print(f"U_info: {U_info}")
         print(f"V_info: {V_info}")
     print(len(dataset))
