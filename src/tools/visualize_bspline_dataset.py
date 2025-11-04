@@ -42,44 +42,8 @@ class BSplineDatasetViewer:
         print(f"\n📂 Loading dataset from {data_path}...")
         self.dataset = dataset_bspline(data_path=data_path, replica=1)
         print(f"✓ Found {len(self.dataset)} surfaces")
-        
-        # Filter settings
-        self.max_degree = max_degree
-        self.max_knots = max_knots
-        
-        # Build valid indices list (filtering by degree and knot count)
-        print(f"\n🔍 Filtering surfaces (degree ≤ {max_degree}, knots ≤ {max_knots})...")
-        self.valid_indices = []
-        self.surface_info = []
-        
-        for idx in range(len(self.dataset)):
-            data_path_file = self.dataset.data_names[idx]
-            try:
-                u_degree, v_degree, num_poles_u, num_poles_v, num_knots_u, num_knots_v, \
-                    is_u_periodic, is_v_periodic, u_knots_list, v_knots_list, \
-                    u_mults_list, v_mults_list, poles, valid = self.dataset.load_data(data_path_file)
-                
-                # Apply filters
-                if u_degree <= max_degree and v_degree <= max_degree and \
-                   len(u_knots_list) <= max_knots and len(v_knots_list) <= max_knots:
-                    self.valid_indices.append(idx)
-                    self.surface_info.append({
-                        'u_degree': u_degree,
-                        'v_degree': v_degree,
-                        'num_poles_u': num_poles_u,
-                        'num_poles_v': num_poles_v,
-                        'num_knots_u': num_knots_u,
-                        'num_knots_v': num_knots_v,
-                        'is_u_periodic': is_u_periodic,
-                        'is_v_periodic': is_v_periodic,
-                        'file_path': data_path_file
-                    })
-            except Exception as e:
-                print(f"Error loading surface {idx}: {e}")
-                continue
-        
-        print(f"✓ {len(self.valid_indices)} surfaces passed filters")
-        print(f"  Dropped: {len(self.dataset) - len(self.valid_indices)} surfaces")
+
+        self.valid_indices = list(range(len(self.dataset)))
         
         # Current state
         self.current_index = 0

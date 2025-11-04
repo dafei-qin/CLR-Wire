@@ -722,7 +722,7 @@ class dataset_compound(Dataset):
             return torch.from_numpy(all_params).float(), torch.from_numpy(all_types).long(), torch.from_numpy(mask).float()
         
         # Here we load the .npz which stores the bspline approximation and the points data. 
-        npz_data = np.load(json_path.replace('.json', '.npz'))
+        # npz_data = np.load(json_path.replace('.json', '.npz'))
 
         # When the params are larger than 10, instead of dropping them we use the approx bspline instead.
         # Parse each surface
