@@ -29,9 +29,9 @@ if transform is None:
     transform = None
 
 
-train_dataset = dataset_bspline(data_path=args.data.train_json_dir)
+train_dataset = dataset_bspline(path_file=args.data.train_file, num_surfaces=args.data.train_num)
 
-val_dataset = dataset_bspline(data_path=args.data.val_json_dir)
+val_dataset = dataset_bspline(path_file=args.data.val_file, num_surfaces=args.data.val_num)
 
 model = BSplineVAE(
     
