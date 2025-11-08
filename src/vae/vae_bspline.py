@@ -305,15 +305,18 @@ class CrossAttentionFuser(nn.Module):
 
 
 class NonlinearMLP(nn.Module):
-    def __init__(self, in_dim, hidden_dim, out_dim):
+    def __init__(self, input_dim, model_dim: int = 64, output_dim: int = None, num_heads: int = 4):
+        # Dummy heads for num_heads
         super().__init__()
+        if output_dim is None:
+            output_dim = input_dim
         self.net = nn.Sequential(
-            nn.Linear(in_dim, hidden_dim),
+            nn.Linear(input_dim, model_dim),
             nn.GELU(),          # 或 nn.ReLU()
-            nn.Linear(hidden_dim, out_dim)
+            nn.Linear(model_dim, output_dim)
         )
     
-    def forward(self, x):
+    def forward(self, x, padding_mask=None):
         return self.net(x)
 
 
@@ -396,9 +399,9 @@ class BSplineVAE(nn.Module):
         self.v_knots_proj = nn.Linear(1, embd_dim)
 
  
-
-        self.U_encoder = NonlinearMLPwithAttn(input_dim=mults_dim + embd_dim, model_dim=embd_dim, output_dim=embd_dim, num_heads=4)
-        self.V_encoder = NonlinearMLPwithAttn(input_dim=mults_dim + embd_dim, model_dim=embd_dim, output_dim=embd_dim, num_heads=4)
+        # Remove Attn
+        self.U_encoder = NonlinearMLP(input_dim=mults_dim + embd_dim, model_dim=embd_dim, output_dim=embd_dim, num_heads=4)
+        self.V_encoder = NonlinearMLP(input_dim=mults_dim + embd_dim, model_dim=embd_dim, output_dim=embd_dim, num_heads=4)
 
         self.u_knots_pe = LearnedRelativePE1D(embed_dim=embd_dim)
         self.v_knots_pe = LearnedRelativePE1D(embed_dim=embd_dim)
@@ -434,10 +437,11 @@ class BSplineVAE(nn.Module):
         self.token_proj_u = NonlinearMLP(embd_dim, embd_dim, max_num_u_knots * embd_dim)
         self.token_proj_v = NonlinearMLP(embd_dim, embd_dim, max_num_v_knots * embd_dim)
 
-        self.knots_head_u = NonlinearMLPwithAttn(embd_dim, embd_dim, 1)
-        self.knots_head_v = NonlinearMLPwithAttn(embd_dim, embd_dim, 1)
-        self.mults_head_u = NonlinearMLPwithAttn(embd_dim, embd_dim, max_degree + 1)
-        self.mults_head_v = NonlinearMLPwithAttn(embd_dim, embd_dim, max_degree + 1)
+        # Remove attn
+        self.knots_head_u = NonlinearMLP(embd_dim, embd_dim, 1)
+        self.knots_head_v = NonlinearMLP(embd_dim, embd_dim, 1)
+        self.mults_head_u = NonlinearMLP(embd_dim, embd_dim, max_degree + 1)
+        self.mults_head_v = NonlinearMLP(embd_dim, embd_dim, max_degree + 1)
         self.softplus = nn.Softplus()
 
         self.token_proj_poles = NonlinearMLP(embd_dim, embd_dim, embd_dim)

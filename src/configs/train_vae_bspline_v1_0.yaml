@@ -4,8 +4,8 @@ from_start: false
 epochs: 100
 batch_size: 32
 lr: 0.0001
-num_workers: 2
-num_gpus: 2
+num_workers: 4
+num_gpus: 4
 
 grad_accum_every: 1
 ema_update_every: 10
@@ -17,23 +17,16 @@ log_every_step: 50
 
 use_wandb_tracking: true
 wandb_project_name: BSPLINE_VAE_V1
-wandb_run_name: train_1107_bspline_0_meta_after_fuser
+wandb_run_name: train_1108_bspline_1_meta_after_fuser_wo_attn_mults_dim_64
 
 data:
-    train_json_dir: /home/qindafei/CAD/data/logan_bspline/0
+    train_json_dir: /home/qindafei/CAD/data/logan_bspline/1
     val_json_dir: /home/qindafei/CAD/data/logan_bspline_test/0009
     max_num_surfaces: 500
 
 model:
-    # depth: 16
-    # dim: 512
-    # heads: 8
-    # surface_res: 32
-    # num_types: 6
-    # num_nearby: 20
-    # surface_dim: 256
-    # surface_enc_block_out_channels: [16, 32, 64, 128]
-    checkpoint_folder: checkpoints/train_1107_bspline_0_meta_after_fuser
+    mults_dim: 64
+    checkpoint_folder: checkpoints/train_1108_bspline_1_meta_after_fuser_wo_attn_mults_dim_64
     checkpoint_file_name: model.pt 0
 
 
