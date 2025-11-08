@@ -20,8 +20,8 @@ wandb_project_name: BSPLINE_VAE_V1
 wandb_run_name: train_1108_bspline_1_meta_after_fuser_wo_attn_mults_dim_64
 
 data:
-    train_json_dir: /home/qindafei/CAD/data/logan_bspline/1
-    val_json_dir: /home/qindafei/CAD/data/logan_bspline_test/0009
+    train_json_dir: ../data/logan_bspline/0/0000
+    val_json_dir: ../data/logan_bspline_test/0009
     max_num_surfaces: 500
 
 model:
