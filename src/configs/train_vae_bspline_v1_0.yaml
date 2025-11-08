@@ -20,9 +20,10 @@ wandb_project_name: BSPLINE_VAE_V1
 wandb_run_name: train_1108_bspline_1_meta_after_fuser_wo_attn_mults_dim_64
 
 data:
-    train_json_dir: ../data/logan_bspline/0/0000
-    val_json_dir: ../data/logan_bspline_test/0009
-    max_num_surfaces: 500
+    train_file: ./assets/all_bspline_paths.txt
+    train_num: 100000
+    val_file: ./assets/all_bspline_paths_test.txt
+    val_num: 10000
 
 model:
     mults_dim: 64
