@@ -12,7 +12,7 @@ from typing import Dict, List, Tuple
 
 
 class dataset_bspline(Dataset):
-    def __init__(self, data_path: str, replica=1):
+    def __init__(self, data_path: str, replica=1, max_degree=3, max_num_u_knots=64, max_num_v_knots=32, max_num_u_poles=64, max_num_v_poles=32):
         """
         Args:
             data_path: Path to directory containing bspline files
@@ -23,6 +23,11 @@ class dataset_bspline(Dataset):
         ])
 
         self.replica = replica
+        self.max_degree = max_degree
+        self.max_num_u_knots = max_num_u_knots
+        self.max_num_v_knots = max_num_v_knots
+        self.max_num_u_poles = max_num_u_poles
+        self.max_num_v_poles = max_num_v_poles
 
     def __len__(self):
         return len(self.data_names) * self.replica
@@ -36,14 +41,23 @@ class dataset_bspline(Dataset):
         v_knots_list = np.array(data_vec[8 + num_knots_u : 8 + num_knots_u + num_knots_v])
         u_mults_list = np.array(data_vec[8 + num_knots_u + num_knots_v : 8 + num_knots_u + num_knots_v + num_knots_u])
         v_mults_list = np.array(data_vec[8 + num_knots_u + num_knots_v + num_knots_u : 8 + num_knots_u + num_knots_v + num_knots_u + num_knots_v])
+        
+        
         poles = np.array(data_vec[8 + num_knots_u + num_knots_v + num_knots_u + num_knots_v :])
         poles = poles.reshape(num_poles_u, num_poles_v, 4)
 
         valid = True
-        
-        if u_degree > 3:
+        if u_degree > self.max_degree:
             valid = False
-        if v_degree > 3:
+        if v_degree > self.max_degree:
+            valid = False
+        if num_poles_u > self.max_num_u_poles:
+            valid = False
+        if num_poles_v > self.max_num_v_poles:
+            valid = False
+        if num_knots_u > self.max_num_u_knots:
+            valid = False
+        if num_knots_v > self.max_num_v_knots:
             valid = False
 
         return u_degree, v_degree, num_poles_u, num_poles_v, num_knots_u, num_knots_v, is_u_periodic, is_v_periodic, u_knots_list, v_knots_list, u_mults_list, v_mults_list, poles, valid
@@ -65,25 +79,42 @@ class dataset_bspline(Dataset):
         knots_gap_mode = self.mode_numpy(knots_gap)
         knots_gap = knots_gap  / knots_gap_mode
         knots_gap = knots_gap / max(knots_gap)
+        knots_gap = np.insert(knots_gap, 0, 0)
         return knots_gap
 
     def normalize_poles(self, poles):
-        poles_min = poles.min(axis=(0, 1))
-        poles_max = poles.max(axis=(0, 1))
-        length = max(poles_max - poles_min)
-        poles = (poles - poles_min) / length
+        poles_xyz = poles[..., :3]
+        poles_xyz_min = poles_xyz.min(axis=(0, 1))
+        poles_xyz_max = poles_xyz.max(axis=(0, 1))
+        length = max(poles_xyz_max - poles_xyz_min)
+        poles_xyz = (poles_xyz - poles_xyz_min) / length
+        poles[..., :3] = poles_xyz
         return poles, length
+
     def __getitem__(self, idx):
         idx = idx % len(self.data_names)
         data_path = self.data_names[idx]
 
         u_degree, v_degree, num_poles_u, num_poles_v, num_knots_u, num_knots_v, is_u_periodic, is_v_periodic, u_knots_list, v_knots_list, u_mults_list, v_mults_list, poles, valid = self.load_data(data_path)
 
-        u_knots_list = self.normalize_knots(u_knots_list)
+        u_knots_list = self.normalize_knots(u_knots_list) 
         v_knots_list = self.normalize_knots(v_knots_list)
         poles, length = self.normalize_poles(poles)
 
-        return u_knots_list, v_knots_list, u_mults_list, v_mults_list, poles, valid
+        u_knots_list_padded = np.zeros(self.max_num_u_knots)
+        v_knots_list_padded = np.zeros(self.max_num_v_knots)
+        u_mults_list_padded = np.zeros(self.max_num_u_knots)
+        v_mults_list_padded = np.zeros(self.max_num_v_knots)
+        poles_padded = np.zeros((self.max_num_u_poles, self.max_num_v_poles, 4))
+        if valid:
+            u_knots_list_padded[:num_knots_u] = u_knots_list
+            v_knots_list_padded[:num_knots_v] = v_knots_list
+            u_mults_list_padded[:num_knots_u] = u_mults_list
+            v_mults_list_padded[:num_knots_v] = v_mults_list
+            poles_padded[:num_poles_u, :num_poles_v, :] = poles
+        else:
+            pass
+        return torch.tensor(u_degree), torch.tensor(v_degree), torch.tensor(num_poles_u), torch.tensor(num_poles_v), torch.tensor(num_knots_u), torch.tensor(num_knots_v), torch.tensor(is_u_periodic), torch.tensor(is_v_periodic), torch.tensor(u_knots_list_padded), torch.tensor(v_knots_list_padded), torch.tensor(u_mults_list_padded), torch.tensor(v_mults_list_padded), torch.tensor(poles_padded), torch.tensor(valid).bool()
 
 
 if __name__ == '__main__':
