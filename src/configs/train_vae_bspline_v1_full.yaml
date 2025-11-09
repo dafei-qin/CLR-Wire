@@ -1,4 +1,4 @@
-resume_training: false
+resume_training: true
 from_start: false
 
 epochs: 100
@@ -21,14 +21,14 @@ wandb_run_name: train_1108_bspline_1_meta_after_fuser_wo_attn_mults_dim_64
 
 data:
     train_file: ./assets/all_bspline_paths.txt
-    train_num: 100000
+    train_num: -1
     val_file: ./assets/all_bspline_paths_test.txt
-    val_num: 10000
+    val_num: -1
 
 model:
     mults_dim: 64
     checkpoint_folder: checkpoints/train_1108_bspline_1_meta_after_fuser_wo_attn_mults_dim_64
-    checkpoint_file_name: model.pt 0
+    checkpoint_file_name: model-20.pt
 
 
 loss:
