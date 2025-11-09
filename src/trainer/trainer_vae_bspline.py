@@ -91,6 +91,9 @@ class Trainer_vae_bspline(BaseTrainer):
         
         # Track abnormal values for logging
         self.abnormal_values_buffer = []
+        
+        # Get the raw model for DDP
+        self.raw_model = self.model.module if hasattr(self.model, 'module') else self.model
 
     def compute_accuracy(self, deg_logits_u, u_degree, deg_logits_v, v_degree, peri_logits_u, is_u_periodic, peri_logits_v, is_v_periodic, knots_num_logits_u, num_knots_u, knots_num_logits_v, num_knots_v, mults_logits_u, u_mults_list, mults_logits_v, v_mults_list):
         deg_pred_u = torch.argmax(deg_logits_u, dim=-1)
@@ -108,8 +111,12 @@ class Trainer_vae_bspline(BaseTrainer):
         acc_peri_v = (peri_pred_v == is_v_periodic).float().mean()
         acc_knots_num_u = (knots_num_pred_u == num_knots_u).float().mean()
         acc_knots_num_v = (knots_num_pred_v == num_knots_v).float().mean()
-        acc_mults_u = (mults_pred_u == u_mults_list).float().mean()
-        acc_mults_v = (mults_pred_v == v_mults_list).float().mean()
+
+        mults_u_mask = torch.arange(self.raw_model.max_num_u_knots, device=u_mults_list.device).unsqueeze(0) < num_knots_u.unsqueeze(1)
+        mults_v_mask = torch.arange(self.raw_model.max_num_v_knots, device=v_mults_list.device).unsqueeze(0) < num_knots_v.unsqueeze(1)
+
+        acc_mults_u = ((mults_pred_u == u_mults_list) * mults_u_mask.view(-1)).float().sum() / num_knots_u.sum()
+        acc_mults_v = ((mults_pred_v == v_mults_list) * mults_v_mask.view(-1)).float().sum() / num_knots_v.sum()
 
         return {
             "acc_deg_u": acc_deg_u,
@@ -131,7 +138,7 @@ class Trainer_vae_bspline(BaseTrainer):
             return 1.0
         return min(1.0, step / self.kl_annealing_steps)
 
-    def log_loss(self, total_loss, accuracy, loss_recon, loss_cls, loss_kl, lr, total_norm, step, kl_beta=1.0, active_dims=None, additional_log_losses={}):
+    def log_loss(self, total_loss, accuracy, loss_recon, loss_cls, loss_kl, lr, total_norm, step, time_per_step, kl_beta=1.0, active_dims=None, additional_log_losses={}):
         if not self.use_wandb_tracking or not self.is_main:
             return
         
@@ -153,18 +160,20 @@ class Trainer_vae_bspline(BaseTrainer):
         
         self.log(**log_dict)
         
-        self.print(get_current_time() + f' loss: {total_loss:.3f}  lr: {lr:.6f} norm: {total_norm:.3f} kl_beta: {kl_beta:.3f}')
+        self.print(get_current_time() + f' loss: {total_loss:.3f}  lr: {lr:.6f} norm: {total_norm:.3f} kl_beta: {kl_beta:.3f} step: {step} t: {time_per_step:.2f}s')
 
     def train(self):
         step = self.step.item()
 
         while step < self.num_train_steps:
+            t = time.time()
+
             total_loss = 0.
             total_accuracy = defaultdict(float)
 
             for i in range(self.grad_accum_every):
                 is_last = i == (self.grad_accum_every - 1)
-                maybe_no_sync = partial(self.accelerator.no_sync, self.model.module) if not is_last else nullcontext
+                maybe_no_sync = partial(self.accelerator.no_sync, self.raw_model) if not is_last else nullcontext
 
                 forward_args = self.next_data_to_forward_kwargs(self.train_dl_iter)
 
@@ -192,9 +201,9 @@ class Trainer_vae_bspline(BaseTrainer):
                     num_knots_v = num_knots_v.long()
                     num_poles_u = num_poles_u.long()
                     num_poles_v = num_poles_v.long()
-                    mu, logvar = self.model.module.encode(u_knots_list, u_mults_list, v_knots_list, v_mults_list, poles, u_degree, v_degree, is_u_periodic, is_v_periodic, num_knots_u, num_knots_v, num_poles_u, num_poles_v)
-                    z = self.model.module.reparameterize(mu, logvar)
-                    deg_logits_u, deg_logits_v, peri_logits_u, peri_logits_v, knots_num_logits_u, knots_num_logits_v, pred_knots_u, pred_knots_v, mults_logits_u, mults_logits_v, pred_poles = self.model.module.decode(z, num_knots_u, num_knots_v, num_poles_u, num_poles_v)
+                    mu, logvar = self.raw_model.encode(u_knots_list, u_mults_list, v_knots_list, v_mults_list, poles, u_degree, v_degree, is_u_periodic, is_v_periodic, num_knots_u, num_knots_v, num_poles_u, num_poles_v)
+                    z = self.raw_model.reparameterize(mu, logvar)
+                    deg_logits_u, deg_logits_v, peri_logits_u, peri_logits_v, knots_num_logits_u, knots_num_logits_v, pred_knots_u, pred_knots_v, mults_logits_u, mults_logits_v, pred_poles = self.raw_model.decode(z, num_knots_u, num_knots_v, num_poles_u, num_poles_v)
                             
                     # Forward pass
                     loss_deg_u = self.ce_loss(deg_logits_u, u_degree.squeeze(-1)).mean() # Cross Entropy Loss for degree, max_degree - 1
@@ -205,8 +214,8 @@ class Trainer_vae_bspline(BaseTrainer):
                     loss_knots_num_v = self.ce_loss(knots_num_logits_v, num_knots_v.squeeze(-1)).mean() # Mean Squared Error Loss for number of knots
 
                     # Need knots mask
-                    mask_u_knots = torch.arange(self.model.module.max_num_u_knots, device=num_knots_u.device).unsqueeze(0).repeat(num_knots_u.shape[0], 1) < num_knots_u # 1 for valid pos, 0 for invalid
-                    mask_v_knots = torch.arange(self.model.module.max_num_v_knots, device=num_knots_v.device).unsqueeze(0).repeat(num_knots_v.shape[0], 1) < num_knots_v # 1 for valid pos, 0 for invalid
+                    mask_u_knots = torch.arange(self.raw_model.max_num_u_knots, device=num_knots_u.device).unsqueeze(0).repeat(num_knots_u.shape[0], 1) < num_knots_u # 1 for valid pos, 0 for invalid
+                    mask_v_knots = torch.arange(self.raw_model.max_num_v_knots, device=num_knots_v.device).unsqueeze(0).repeat(num_knots_v.shape[0], 1) < num_knots_v # 1 for valid pos, 0 for invalid
                     
                     # Knots loss
                     loss_knots_u = self.mse_loss(pred_knots_u, u_knots_list) # Mean Squared Error Loss for knots
@@ -216,8 +225,8 @@ class Trainer_vae_bspline(BaseTrainer):
                     loss_knots_v = (loss_knots_v * mask_v_knots / num_knots_v).sum(dim=-1).mean()
 
                     # Mults loss
-                    mults_logits_u = mults_logits_u.view(-1, self.model.module.max_degree + 1)
-                    mults_logits_v = mults_logits_v.view(-1, self.model.module.max_degree + 1)
+                    mults_logits_u = mults_logits_u.view(-1, self.raw_model.max_degree + 1)
+                    mults_logits_v = mults_logits_v.view(-1, self.raw_model.max_degree + 1)
                     u_mults_list = u_mults_list.view(-1)
                     v_mults_list = v_mults_list.view(-1)
                     loss_mults_u = self.ce_loss(mults_logits_u, u_mults_list) # CE Loss for mults
@@ -232,8 +241,8 @@ class Trainer_vae_bspline(BaseTrainer):
 
                     # Need poles mask
                     loss_poles = self.mse_loss(pred_poles, poles) # Mean Squared Error Loss for poles
-                    mask_poles_u = torch.arange(self.model.module.max_num_u_poles, device=num_poles_u.device).unsqueeze(0).repeat(num_poles_u.shape[0], 1) < num_poles_u # 1 for valid pos, 0 for invalid
-                    mask_poles_v = torch.arange(self.model.module.max_num_v_poles, device=num_poles_v.device).unsqueeze(0).repeat(num_poles_v.shape[0], 1) < num_poles_v # 1 for valid pos, 0 for invalid
+                    mask_poles_u = torch.arange(self.raw_model.max_num_u_poles, device=num_poles_u.device).unsqueeze(0).repeat(num_poles_u.shape[0], 1) < num_poles_u # 1 for valid pos, 0 for invalid
+                    mask_poles_v = torch.arange(self.raw_model.max_num_v_poles, device=num_poles_v.device).unsqueeze(0).repeat(num_poles_v.shape[0], 1) < num_poles_v # 1 for valid pos, 0 for invalid
                     
                     mask_poles_2d = mask_poles_u.unsqueeze(-1) & mask_poles_v.unsqueeze(-2)  # (B, H, W)
                     mask_poles_4d = mask_poles_2d.unsqueeze(-1)  # (B, H, W, 1) → broadcast to 4 coords
@@ -270,7 +279,7 @@ class Trainer_vae_bspline(BaseTrainer):
                         total_accuracy[key] += value.item() / self.grad_accum_every
                 
                 self.accelerator.backward(loss)
-            
+                time_per_step = time.time() - t
             self.optimizer.step()
             self.optimizer.zero_grad()
 
@@ -297,7 +306,7 @@ class Trainer_vae_bspline(BaseTrainer):
                     "loss_mults_v": loss_mults_v.item(),
                     "loss_poles": loss_poles.item(),
                 }                                        
-                self.log_loss(total_loss, total_accuracy, loss_recon.item(), loss_cls.item(), loss_kl.item(), cur_lr, total_norm, step, kl_beta, active_dims, additional_log_losses=additional_log_losses)
+                self.log_loss(total_loss, total_accuracy, loss_recon.item(), loss_cls.item(), loss_kl.item(), cur_lr, total_norm, step, time_per_step, kl_beta, active_dims, additional_log_losses=additional_log_losses)
                 
             step += 1
             self.step.add_(1)
@@ -358,8 +367,8 @@ class Trainer_vae_bspline(BaseTrainer):
                         loss_knots_num_v = self.ce_loss(knots_num_logits_v, num_knots_v.squeeze(-1)).mean() # Mean Squared Error Loss for number of knots
 
                         # Need knots mask
-                        mask_u_knots = torch.arange(self.model.module.max_num_u_knots, device=num_knots_u.device).unsqueeze(0).repeat(num_knots_u.shape[0], 1) < num_knots_u # 1 for valid pos, 0 for invalid
-                        mask_v_knots = torch.arange(self.model.module.max_num_v_knots, device=num_knots_v.device).unsqueeze(0).repeat(num_knots_v.shape[0], 1) < num_knots_v # 1 for valid pos, 0 for invalid
+                        mask_u_knots = torch.arange(self.raw_model.max_num_u_knots, device=num_knots_u.device).unsqueeze(0).repeat(num_knots_u.shape[0], 1) < num_knots_u # 1 for valid pos, 0 for invalid
+                        mask_v_knots = torch.arange(self.raw_model.max_num_v_knots, device=num_knots_v.device).unsqueeze(0).repeat(num_knots_v.shape[0], 1) < num_knots_v # 1 for valid pos, 0 for invalid
                         
                         # Knots loss
                         loss_knots_u = self.mse_loss(pred_knots_u, u_knots_list) # Mean Squared Error Loss for knots
@@ -369,8 +378,8 @@ class Trainer_vae_bspline(BaseTrainer):
                         loss_knots_v = (loss_knots_v * mask_v_knots / num_knots_v).sum(dim=-1).mean()
 
                         # Mults loss
-                        mults_logits_u = mults_logits_u.view(-1, self.model.module.max_degree + 1)
-                        mults_logits_v = mults_logits_v.view(-1, self.model.module.max_degree + 1)
+                        mults_logits_u = mults_logits_u.view(-1, self.raw_model.max_degree + 1)
+                        mults_logits_v = mults_logits_v.view(-1, self.raw_model.max_degree + 1)
                         u_mults_list = u_mults_list.view(-1)
                         v_mults_list = v_mults_list.view(-1)
                         loss_mults_u = self.ce_loss(mults_logits_u, u_mults_list) # Mean Squared Error Loss for mults
@@ -385,8 +394,8 @@ class Trainer_vae_bspline(BaseTrainer):
 
                         # Need poles mask
                         loss_poles = self.mse_loss(pred_poles, poles) # Mean Squared Error Loss for poles
-                        mask_poles_u = torch.arange(self.model.module.max_num_u_poles, device=num_poles_u.device).unsqueeze(0).repeat(num_poles_u.shape[0], 1) < num_poles_u # 1 for valid pos, 0 for invalid
-                        mask_poles_v = torch.arange(self.model.module.max_num_v_poles, device=num_poles_v.device).unsqueeze(0).repeat(num_poles_v.shape[0], 1) < num_poles_v # 1 for valid pos, 0 for invalid
+                        mask_poles_u = torch.arange(self.raw_model.max_num_u_poles, device=num_poles_u.device).unsqueeze(0).repeat(num_poles_u.shape[0], 1) < num_poles_u # 1 for valid pos, 0 for invalid
+                        mask_poles_v = torch.arange(self.raw_model.max_num_v_poles, device=num_poles_v.device).unsqueeze(0).repeat(num_poles_v.shape[0], 1) < num_poles_v # 1 for valid pos, 0 for invalid
                         
                         mask_poles_2d = mask_poles_u.unsqueeze(-1) & mask_poles_v.unsqueeze(-2)  # (B, H, W)
                         mask_poles_4d = mask_poles_2d.unsqueeze(-1)  # (B, H, W, 1) → broadcast to 4 coords
