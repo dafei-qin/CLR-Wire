@@ -1,12 +1,11 @@
 import os
 from pathlib import Path
 import sys
-# Add project root to path
+from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
+import shutil
 
-sys.path.append('/home/qindafei/CAD/CLR-Wire')
-sys.path.append('/data7/qindafei/CAD/CLR-Wire')
 from argparse import ArgumentParser
 
 from src.vae.vae_bspline import BSplineVAE 
@@ -22,12 +21,21 @@ cli_args, unknown = program_parser.parse_known_args()
 cfg = load_config(cli_args.config)
 args = NestedDictToClass(cfg)
 
+
 isDebug = True if sys.gettrace() else False
 
 if isDebug:
     args.use_wandb_tracking = True
     args.batch_size = 2
     args.num_workers = 1
+
+else:
+    # Here we back-up the code to the ckpt folder.
+
+    os.makedirs(args.model.checkpoint_folder, exist_ok=True)
+    code_folder = project_root / 'src'
+    shutil.copytree(code_folder, Path(args.model.checkpoint_folder) / 'code', dirs_exist_ok=True)
+    shutil.copyfile(cli_args.config, Path(args.model.checkpoint_folder) / 'config.yaml')
 
 transform = getattr(args.data, 'transform', None)
 if transform is None:
