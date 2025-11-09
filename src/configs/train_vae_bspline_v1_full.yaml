@@ -4,8 +4,8 @@ from_start: false
 epochs: 100
 batch_size: 32
 lr: 0.0001
-num_workers: 2
-num_gpus: 2
+num_workers: 4
+num_gpus: 4
 
 grad_accum_every: 1
 ema_update_every: 10
@@ -21,19 +21,12 @@ wandb_run_name: train_1108_bspline_1_meta_after_fuser_wo_attn_mults_dim_64
 
 data:
     train_file: ./assets/all_bspline_paths.txt
-    train_num: 100000
+    train_num: -1
     val_file: ./assets/all_bspline_paths_test.txt
-    val_num: 10000
+    val_num: -1
 
 model:
-    # depth: 16
-    # dim: 512
-    # heads: 8
-    # surface_res: 32
-    # num_types: 6
-    # num_nearby: 20
-    # surface_dim: 256
-    # surface_enc_block_out_channels: [16, 32, 64, 128]
+    mults_dim: 64
     checkpoint_folder: checkpoints/train_1108_bspline_1_meta_after_fuser_wo_attn_mults_dim_64
     checkpoint_file_name: model-20.pt
 
