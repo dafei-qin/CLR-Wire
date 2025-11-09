@@ -34,7 +34,7 @@ class dataset_bspline(Dataset):
 
 
     def load_data(self, data_path):
-        data_vec = np.load(data_path, allow_pickle=False)
+        data_vec = np.load(data_path.strip(), allow_pickle=False)
         u_degree, v_degree, num_poles_u, num_poles_v, num_knots_u, num_knots_v, is_u_periodic, is_v_periodic = map(int, data_vec[:8])
         u_knots_list = np.array(data_vec[8 : 8 + num_knots_u])
         v_knots_list = np.array(data_vec[8 + num_knots_u : 8 + num_knots_u + num_knots_v])
