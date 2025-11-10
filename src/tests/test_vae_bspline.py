@@ -350,7 +350,7 @@ def callback():
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
+    if len(sys.argv) != 4:
         print("Usage: python src/tests/test_vae_bspline.py <path_file_list>  <ckpt_path> <num_surfaces>")
         sys.exit(1)
 
