@@ -105,11 +105,12 @@ _show_gt = True
 _show_rec = True
 
 
-def load_model_and_dataset(path_file: str, num_surfaces=1000):
+def load_model_and_dataset(path_file: str, model_path: str, num_surfaces=1000):
     global _dataset, _model, _max_idx
     _dataset = dataset_bspline(path_file=path_file, num_surfaces=num_surfaces)
     _max_idx = len(_dataset) - 1
     _model = BSplineVAE()
+    _model.load_state_dict(torch.load(model_path))
     _model.eval()
 
 
@@ -350,10 +351,10 @@ def callback():
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
-        print("Usage: python src/tests/test_vae_bspline.py <path_file_list> <num_surfaces>")
+        print("Usage: python src/tests/test_vae_bspline.py <path_file_list>  <ckpt_path> <num_surfaces>")
         sys.exit(1)
 
-    load_model_and_dataset(sys.argv[1], int(sys.argv[2]))
+    load_model_and_dataset(sys.argv[1], sys.argv[2], int(sys.argv[3]))
 
     ps.init()
     _gt_group = ps.create_group("GT Surfaces")
