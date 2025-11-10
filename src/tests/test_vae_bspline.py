@@ -110,7 +110,20 @@ def load_model_and_dataset(path_file: str, model_path: str, num_surfaces=1000):
     _dataset = dataset_bspline(path_file=path_file, num_surfaces=num_surfaces)
     _max_idx = len(_dataset) - 1
     _model = BSplineVAE()
-    _model.load_state_dict(torch.load(model_path))
+    checkpoint = torch.load(model_path, map_location="cpu")
+    if 'ema_model' in checkpoint:
+        ema_model = checkpoint['ema']
+        ema_model = {k.replace("ema_model.", ""): v for k, v in ema_model.items()}
+        _model.load_state_dict(ema_model, strict=False)
+        print("Loaded EMA model weights for classification.")
+    elif 'model' in checkpoint:
+        _model.load_state_dict(checkpoint['model'])
+        print("Loaded model weights for classification.")
+    else:
+        _model.load_state_dict(checkpoint)
+        print("Loaded raw model state_dict for classification.")
+    
+    # _model.load_state_dict(torch.load(model_path, map_location='cpu'))
     _model.eval()
 
 
