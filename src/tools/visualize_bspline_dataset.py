@@ -106,7 +106,7 @@ class BSplineDatasetViewer:
                 surface_data, 
                 tol=self.mesh_quality, 
                 normalize_knots=True, 
-                normalize_surface=True
+                normalize_surface=False
             )
             
             # Remove old surface
