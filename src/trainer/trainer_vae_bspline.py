@@ -44,7 +44,7 @@ class Trainer_vae_bspline(BaseTrainer):
         loss_cls_weight: float = 1.0,
         loss_kl_weight: float = 1.0,
         kl_annealing_steps: int = 0,
-        kl_free_bits: float = 0.0,
+        kl_free_bits: float = 32,
         **kwargs
     ):
         super().__init__(
@@ -250,16 +250,20 @@ class Trainer_vae_bspline(BaseTrainer):
                     
                     loss_recon = loss_knots_u + loss_knots_v + loss_poles
                     loss_cls = loss_deg_u + loss_deg_v + loss_peri_u + loss_peri_v + loss_knots_num_u + loss_knots_num_v + loss_mults_u + loss_mults_v
-                    # Compute KL loss with free bits strategy
-                    # Per-dimension KL: [batch, latent_dim]
-                    kl_per_dim = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp())
                     
-                    # Apply free bits: only penalize KL above the threshold
+                    # # Compute KL loss with free bits strategy
+                    # # Per-dimension KL: [batch, latent_dim]
+                    # kl_per_dim = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp())
+                    
+                    # # Apply free bits: only penalize KL above the threshold
+                    # if self.kl_free_bits > 0:
+                    #     kl_per_dim = torch.clamp(kl_per_dim - self.kl_free_bits, min=0.0)
+                    
+                    # Replace your current KL code with:
+                    kl_per_sample = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp()).sum(dim=1)  # (B,)
                     if self.kl_free_bits > 0:
-                        kl_per_dim = torch.clamp(kl_per_dim - self.kl_free_bits, min=0.0)
-                    
-                    # Mean across batch and dimensions
-                    loss_kl = torch.mean(kl_per_dim)
+                        kl_per_sample = torch.clamp(kl_per_sample - self.kl_free_bits, min=0.0)
+                    loss_kl = kl_per_sample.mean()  # scalar
                     
                     # Compute KL annealing beta
                     kl_beta = self.compute_kl_annealing_beta(step)
@@ -289,10 +293,10 @@ class Trainer_vae_bspline(BaseTrainer):
                 
                 # Compute active dimensions if free bits is enabled
                 active_dims = None
-                if self.kl_free_bits > 0:
-                    # Count dimensions with KL above threshold
-                    kl_per_dim_mean = kl_per_dim.mean(dim=0)  # Average over batch
-                    active_dims = (kl_per_dim_mean > 0).float().sum().item()
+                # if self.kl_free_bits > 0:
+                #     # Count dimensions with KL above threshold
+                #     kl_per_dim_mean = kl_per_dim.mean(dim=0)  # Average over batch
+                #     active_dims = (kl_per_dim_mean > 0).float().sum().item()
                 additional_log_losses = {
                     "loss_deg_u": loss_deg_u.item(),
                     "loss_deg_v": loss_deg_v.item(),
@@ -406,10 +410,14 @@ class Trainer_vae_bspline(BaseTrainer):
                      
                         
                         # Compute KL loss with free bits (same as training)
-                        kl_per_dim = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp())
+                        # kl_per_dim = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp())
+                        # if self.kl_free_bits > 0:
+                        #     kl_per_dim = torch.clamp(kl_per_dim - self.kl_free_bits, min=0.0)
+                        # loss_kl = torch.mean(kl_per_dim)
+                        kl_per_sample = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp()).sum(dim=1)  # (B,)
                         if self.kl_free_bits > 0:
-                            kl_per_dim = torch.clamp(kl_per_dim - self.kl_free_bits, min=0.0)
-                        loss_kl = torch.mean(kl_per_dim)
+                            kl_per_sample = torch.clamp(kl_per_sample - self.kl_free_bits, min=0.0)
+                        loss_kl = kl_per_sample.mean()  # scalar
                         
                         # Use current annealing beta for validation loss
                         val_kl_beta = self.compute_kl_annealing_beta(step)

@@ -400,8 +400,8 @@ class BSplineVAE(nn.Module):
 
  
         # Remove Attn
-        self.U_encoder = NonlinearMLP(input_dim=mults_dim + embd_dim, model_dim=embd_dim, output_dim=embd_dim, num_heads=4)
-        self.V_encoder = NonlinearMLP(input_dim=mults_dim + embd_dim, model_dim=embd_dim, output_dim=embd_dim, num_heads=4)
+        self.U_encoder = NonlinearMLPwithAttn(input_dim=mults_dim + embd_dim, model_dim=embd_dim, output_dim=embd_dim, num_heads=4)
+        self.V_encoder = NonlinearMLPwithAttn(input_dim=mults_dim + embd_dim, model_dim=embd_dim, output_dim=embd_dim, num_heads=4)
 
         self.u_knots_pe = LearnedRelativePE1D(embed_dim=embd_dim)
         self.v_knots_pe = LearnedRelativePE1D(embed_dim=embd_dim)
@@ -438,10 +438,10 @@ class BSplineVAE(nn.Module):
         self.token_proj_v = NonlinearMLP(embd_dim, embd_dim, max_num_v_knots * embd_dim)
 
         # Remove attn
-        self.knots_head_u = NonlinearMLP(embd_dim, embd_dim, 1)
-        self.knots_head_v = NonlinearMLP(embd_dim, embd_dim, 1)
-        self.mults_head_u = NonlinearMLP(embd_dim, embd_dim, max_degree + 1)
-        self.mults_head_v = NonlinearMLP(embd_dim, embd_dim, max_degree + 1)
+        self.knots_head_u = NonlinearMLPwithAttn(embd_dim, embd_dim, 1)
+        self.knots_head_v = NonlinearMLPwithAttn(embd_dim, embd_dim, 1)
+        self.mults_head_u = NonlinearMLPwithAttn(embd_dim, embd_dim, max_degree + 1)
+        self.mults_head_v = NonlinearMLPwithAttn(embd_dim, embd_dim, max_degree + 1)
         self.softplus = nn.Softplus()
 
         self.token_proj_poles = NonlinearMLP(embd_dim, embd_dim, embd_dim)
@@ -539,13 +539,14 @@ class BSplineVAE(nn.Module):
         meta_embd = torch.cat([u_deg_embd, v_deg_embd, u_periodic_embd, v_periodic_embd], dim=-1)
         meta_embd = self.meta_proj(meta_embd) # (B, 1, embd_dim)
 
-        meta_embd_empty = torch.zeros_like(meta_embd)
-        fuser_output = self.fuser(query_embd, u_encoder_output, v_encoder_output, poles_encoder_output, meta_embd_empty, U_padding_mask, V_padding_mask, P_padding_mask) # (B, num_query, embd_dim)
+        # meta_embd_empty = torch.zeros_like(meta_embd)
+        fuser_output = self.fuser(query_embd, u_encoder_output, v_encoder_output, poles_encoder_output, meta_embd, U_padding_mask, V_padding_mask, P_padding_mask) # (B, num_query, embd_dim)
         
         # Try move the injection after fuser.
         # fuser_output = self.fuser(query_embd, u_encoder_output, v_encoder_output, poles_encoder_output, meta_embd, U_padding_mask, V_padding_mask, P_padding_mask) # (B, num_query, embd_dim)
         
-        fuser_output = fuser_output + meta_embd
+        # fuser_output = fuser_output + meta_embd
+        fuser_output = fuser_output
         fuser_output = fuser_output.mean(dim=1) # (B, embd_dim)
 
         # Inject the information of degree and periodic

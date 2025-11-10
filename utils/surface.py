@@ -308,12 +308,12 @@ def build_bspline_surface(data: dict, tol=1e-1, normalize_knots=False, normalize
         
     # 3. Create and populate pythonOCC arrays for control points and weights
     # The constructor expects 1-based indexing for these arrays
-    print(f"u_knots_list: {u_knots_list}, v_knots_list: {v_knots_list}")
+    # print(f"u_knots_list: {u_knots_list}, v_knots_list: {v_knots_list}")
     occ_control_points = TColgp_Array2OfPnt(1, num_poles_u, 1, num_poles_v)
     occ_weights = TColStd_Array2OfReal(1, num_poles_u, 1, num_poles_v)
     
     poles_data = data["poles"]
-    print(np.array(poles_data).shape)
+    # print(np.array(poles_data).shape)
     if normalize_surface:
         # Scale the surface to have maximum bbox = 1, keep the xyz ratio
         poles_data = np.array(poles_data)
