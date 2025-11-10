@@ -24,8 +24,9 @@ def check_bspline_relations(dataset):
         try:
             if is_u_periodic:
                 # print('pu, ', np.sum(u_mults_list), u_degree, num_poles_u,  is_u_periodic)
-                # assert np.sum(u_mults_list) == u_degree + num_poles_u
-                assert len(np.unique(u_mults_list)) == 1
+                assert np.sum(u_mults_list) - u_mults_list[0] ==  num_poles_u
+                # assert u_mults_list[0] == u_mults_list[-1] == u_degree
+                # assert len(np.unique(u_mults_list)) == 1
                 pass
             else:
                 assert np.sum(u_mults_list) == u_degree + 1 + num_poles_u

@@ -148,22 +148,6 @@ class Trainer_vae_v1(BaseTrainer):
                     abnormal_value = params_padded.abs().max().item()
 
 
-                    # if abnormal_value > 10:
-                    #     pos = torch.argmax(params_padded.abs())
-                    #     row = (pos // params_padded.shape[1]).item()
-                    #     col = (pos % params_padded.shape[1]).item()
-                    #     surface_type_abl = surface_type[row]
-                    #     surface_type_str = get_surface_type(surface_type_abl.item())
-
-                    #     # Accumulate abnormal values for batch logging
-                    #     self.log(**{
-                    #         "abnormal_value": abnormal_value,
-                    #         "surface_type": surface_type_abl,
-                    #         "param_position": col
-                    #     })
-                        # self.abnormal_values_buffer.append([abnormal_value, surface_type_str, col])
-
-
                     # Forward pass
                     params_raw_recon, mask, class_logits, mu, logvar = self.model(params_padded, surface_type)
                     
@@ -212,18 +196,6 @@ class Trainer_vae_v1(BaseTrainer):
                                                         
                 self.log_loss(total_loss, total_accuracy, loss_recon.item(), loss_cls.item(), loss_kl.item(), cur_lr, total_norm, step, kl_beta, active_dims)
                 
-                # Log accumulated abnormal values table
-
-                # abnormal_table = wandb.Table(
-                #     columns=["abnormal_value", "surface_type", "param_position"],
-                #     data=self.abnormal_values_buffer
-                # )
-                # # print(self.abnormal_values_buffer)
-                # self.log(**{"Abnormal_params": abnormal_table})
-                # if len(self.abnormal_values_buffer) > 200000:
-                #     self.abnormal_values_buffer = self.abnormal_values_buffer[-200000:]
-                #     # self.abnormal_values_buffer = []  # Clear buffer after logging
-            
             step += 1
             self.step.add_(1)
             
@@ -274,16 +246,6 @@ class Trainer_vae_v1(BaseTrainer):
                         loss = loss_recon * self.loss_recon_weight + loss_cls * self.loss_cls_weight + loss_kl * self.loss_kl_weight * val_kl_beta
                         accuracy = self.compute_accuracy(class_logits, surface_type)
 
-                        
-                        # Use EMA model for validation
-                        # logits = self.ema(points)
-                        
-                        # if logits.dim() == 3:
-                        #     logits = logits.mean(dim=1)
-                        
-                        # loss = self.loss_fn(logits, labels)
-                        # accuracy = self.compute_accuracy(logits, labels)
-                        
                         total_val_loss += (loss / num_val_batches)
                         total_val_accuracy += (accuracy / num_val_batches)
 
