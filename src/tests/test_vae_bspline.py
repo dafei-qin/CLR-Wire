@@ -65,7 +65,6 @@ def build_bspline_json(
     """
     u_knots = gaps_to_knots(u_knots_gap, num_knots_u)
     v_knots = gaps_to_knots(v_knots_gap, num_knots_v)
-
     u_mults_crop = np.asarray(u_mults[:num_knots_u], dtype=np.int32)
     v_mults_crop = np.asarray(v_mults[:num_knots_v], dtype=np.int32)
     poles_crop = np.asarray(poles_padded[:num_poles_u, :num_poles_v, :], dtype=np.float64)
@@ -103,6 +102,8 @@ _gt_surfaces = {}
 _rec_surfaces = {}
 _show_gt = True
 _show_rec = True
+_gt_face = None
+_rec_face = None
 
 
 def load_model_and_dataset(path_file: str, model_path: str, num_surfaces=1000):
@@ -261,6 +262,8 @@ def process_index(idx: int):
             pred_poles,
         ) = _model.inference(z)
 
+    
+
     # Build GT JSON (batch size 1)
     gt_face = build_bspline_json(
         u_degree=to_python_int(u_degree_gt[0, 0]),
@@ -301,8 +304,8 @@ def process_index(idx: int):
         is_v_periodic=pred_v_per,
         u_knots_gap=pred_knots_u[0].cpu().numpy(),
         v_knots_gap=pred_knots_v[0].cpu().numpy(),
-        u_mults=np.argmax(pred_mults_u[0].cpu().numpy(), axis=-1) + 1,
-        v_mults=np.argmax(pred_mults_v[0].cpu().numpy(), axis=-1) + 1,
+        u_mults=pred_mults_u[0].cpu().numpy(),
+        v_mults=pred_mults_v[0].cpu().numpy(),
         poles_padded=pred_poles[0].cpu().numpy(),
         idx=idx,
     )
@@ -311,11 +314,16 @@ def process_index(idx: int):
 
 
 def update_visualization():
-    global _current_idx, _gt_group, _rec_group, _gt_surfaces, _rec_surfaces, _show_gt, _show_rec
+    global _current_idx, _gt_group, _rec_group, _gt_surfaces, _rec_surfaces, _show_gt, _show_rec, _gt_face, _rec_face
     ps.remove_all_structures()
     gt_list, rec_list = process_index(_current_idx)
     if not gt_list:
         return
+    
+    # Store the face data for UI display
+    _gt_face = gt_list[0] if gt_list else None
+    _rec_face = rec_list[0] if rec_list else None
+    
     try:
         _gt_surfaces = visualize_json_interset(gt_list, plot=True, plot_gui=False, tol=1e-5, ps_header="gt")
     except ValueError:
@@ -334,12 +342,30 @@ def update_visualization():
         if "surface" in s and s["surface"] is not None:
             s["ps_handler"].add_to_group(_rec_group)
 
+    # Visualize control poles as point clouds
+    if _gt_face is not None:
+        gt_poles = np.array(_gt_face["poles"])
+        print(gt_poles.shape)
+        # Reshape poles from (num_poles_u, num_poles_v, 3) to (num_poles_u * num_poles_v, 3)
+        gt_poles_flat = gt_poles.reshape(-1, 3)
+        gt_poles_cloud = ps.register_point_cloud("gt_poles", gt_poles_flat, radius=0.005)
+        gt_poles_cloud.add_to_group(_gt_group)
+        gt_poles_cloud.set_color((0.0, 1.0, 0.0))  # Green for GT poles
+    
+    if _rec_face is not None:
+        rec_poles = np.array(_rec_face["poles"])
+        # Reshape poles from (num_poles_u, num_poles_v, 3) to (num_poles_u * num_poles_v, 3)
+        rec_poles_flat = rec_poles.reshape(-1, 3)
+        rec_poles_cloud = ps.register_point_cloud("rec_poles", rec_poles_flat, radius=0.005)
+        rec_poles_cloud.add_to_group(_rec_group)
+        rec_poles_cloud.set_color((1.0, 0.0, 0.0))  # Red for reconstructed poles
+
     _gt_group.set_enabled(_show_gt)
     _rec_group.set_enabled(_show_rec)
 
 
 def callback():
-    global _current_idx, _max_idx, _show_gt, _show_rec
+    global _current_idx, _max_idx, _show_gt, _show_rec, _gt_face, _rec_face
     psim.Text("BSplineVAE Reconstruction Viewer")
     psim.Separator()
     changed, new_idx = psim.SliderInt("Index", _current_idx, 0, _max_idx)
@@ -360,6 +386,83 @@ def callback():
         changed, _show_rec = psim.Checkbox("Show Reconstructed", _show_rec)
         if changed:
             _rec_group.set_enabled(_show_rec)
+    
+    # Display surface details
+    if _gt_face is not None and _rec_face is not None:
+        psim.Separator()
+        psim.Text("=== Surface Details ===")
+        
+        # Extract scalar information from the face dict
+        # scalar format: [u_deg, v_deg, num_poles_u, num_poles_v, num_knots_u, num_knots_v, 
+        #                 u_knots..., v_knots..., u_mults..., v_mults...]
+        gt_scalar = _gt_face["scalar"]
+        rec_scalar = _rec_face["scalar"]
+        
+        gt_u_deg, gt_v_deg = gt_scalar[0], gt_scalar[1]
+        gt_num_poles_u, gt_num_poles_v = gt_scalar[2], gt_scalar[3]
+        gt_num_knots_u, gt_num_knots_v = gt_scalar[4], gt_scalar[5]
+        
+        rec_u_deg, rec_v_deg = rec_scalar[0], rec_scalar[1]
+        rec_num_poles_u, rec_num_poles_v = rec_scalar[2], rec_scalar[3]
+        rec_num_knots_u, rec_num_knots_v = rec_scalar[4], rec_scalar[5]
+        
+        # Extract knots and mults
+        gt_u_knots_start = 6
+        gt_v_knots_start = gt_u_knots_start + gt_num_knots_u
+        gt_u_mults_start = gt_v_knots_start + gt_num_knots_v
+        gt_v_mults_start = gt_u_mults_start + gt_num_knots_u
+        
+        rec_u_knots_start = 6
+        rec_v_knots_start = rec_u_knots_start + rec_num_knots_u
+        rec_u_mults_start = rec_v_knots_start + rec_num_knots_v
+        rec_v_mults_start = rec_u_mults_start + rec_num_knots_u
+        
+        gt_u_mults = gt_scalar[gt_u_mults_start:gt_u_mults_start + gt_num_knots_u]
+        gt_v_mults = gt_scalar[gt_v_mults_start:gt_v_mults_start + gt_num_knots_v]
+        rec_u_mults = rec_scalar[rec_u_mults_start:rec_u_mults_start + rec_num_knots_u]
+        rec_v_mults = rec_scalar[rec_v_mults_start:rec_v_mults_start + rec_num_knots_v]
+        
+        gt_sum_u_mults = sum(gt_u_mults)
+        gt_sum_v_mults = sum(gt_v_mults)
+        rec_sum_u_mults = sum(rec_u_mults)
+        rec_sum_v_mults = sum(rec_v_mults)
+        
+        # Display GT info
+        psim.Separator()
+        psim.Text("--- Ground Truth ---")
+        psim.Text(f"U Degree: {gt_u_deg}, V Degree: {gt_v_deg}")
+        psim.Text(f"U Periodic: {_gt_face['u_periodic']}, V Periodic: {_gt_face['v_periodic']}")
+        psim.Text(f"Num Knots U: {gt_num_knots_u}, Num Knots V: {gt_num_knots_v}")
+        psim.Text(f"Num Poles U: {gt_num_poles_u}, Num Poles V: {gt_num_poles_v}")
+        psim.Text(f"Sum U Mults: {gt_sum_u_mults}, Sum V Mults: {gt_sum_v_mults}")
+        psim.Text(f"U Mults: {gt_u_mults}")
+        psim.Text(f"V Mults: {gt_v_mults}")
+        
+        # Display Reconstructed info
+        psim.Separator()
+        psim.Text("--- Reconstructed ---")
+        psim.Text(f"U Degree: {rec_u_deg}, V Degree: {rec_v_deg}")
+        psim.Text(f"U Periodic: {_rec_face['u_periodic']}, V Periodic: {_rec_face['v_periodic']}")
+        psim.Text(f"Num Knots U: {rec_num_knots_u}, Num Knots V: {rec_num_knots_v}")
+        psim.Text(f"Num Poles U: {rec_num_poles_u}, Num Poles V: {rec_num_poles_v}")
+        psim.Text(f"Sum U Mults: {rec_sum_u_mults}, Sum V Mults: {rec_sum_v_mults}")
+        psim.Text(f"U Mults: {rec_u_mults}")
+        psim.Text(f"V Mults: {rec_v_mults}")
+        
+        # Compare poles
+        psim.Separator()
+        psim.Text("--- Poles Comparison ---")
+        gt_poles = np.array(_gt_face["poles"])
+        rec_poles = np.array(_rec_face["poles"])
+        
+        psim.Text(f"GT Poles Shape: {gt_poles.shape}")
+        psim.Text(f"Rec Poles Shape: {rec_poles.shape}")
+        
+        if gt_poles.shape == rec_poles.shape:
+            mse = np.mean((gt_poles - rec_poles) ** 2)
+            psim.Text(f"Poles MSE: {mse:.6e}")
+        else:
+            psim.Text("Poles shapes do not match - cannot compute MSE")
 
 
 if __name__ == "__main__":
