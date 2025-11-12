@@ -17,17 +17,20 @@ log_every_step: 50
 
 use_wandb_tracking: true
 wandb_project_name: BSPLINE_VAE_V1
-wandb_run_name: train_1111_bspline_2_attn_128_klw=.001_recw=10
+wandb_run_name: train_1112_bspline_3_attn_128_klw=.001_recw=10
 
 data:
     train_file: ./assets/all_bspline_paths.txt
+    train_data_dir_override: /mnt/ramdisk/logan_bspline/0/0000
     train_num: -1
     val_file: ./assets/all_bspline_paths_test.txt
+    val_data_dir_override: /mnt/ramdisk/logan_bspline_test/0009
     val_num: -1
 
 model:
+    name: vae_bspline_v3
     mults_dim: 128
-    checkpoint_folder: checkpoints/train_1111_bspline_2_attn_128_klw=.001_recw=10
+    checkpoint_folder: checkpoints/train_1112_bspline_3_attn_128_klw
     checkpoint_file_name: model-20.pt
 
 
