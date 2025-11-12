@@ -21,8 +21,10 @@ wandb_run_name: train_1112_bspline_3_attn_128_klw=.001_recw=10
 
 data:
     train_file: ./assets/all_bspline_paths.txt
+    train_data_dir_override: /mnt/ramdisk/logan_bspline/0/0000
     train_num: -1
     val_file: ./assets/all_bspline_paths_test.txt
+    val_data_dir_override: /mnt/ramdisk/logan_bspline_test/0009
     val_num: -1
 
 model:

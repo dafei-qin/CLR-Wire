@@ -52,9 +52,9 @@ if transform is None:
     transform = None
 
 
-train_dataset = dataset_bspline(path_file=args.data.train_file, num_surfaces=args.data.train_num)
+train_dataset = dataset_bspline(path_file=args.data.train_file, data_dir_override=args.data.train_data_dir_override, num_surfaces=args.data.train_num)
 
-val_dataset = dataset_bspline(path_file=args.data.val_file, num_surfaces=args.data.val_num)
+val_dataset = dataset_bspline(path_file=args.data.val_file, data_dir_override=args.data.val_data_dir_override, num_surfaces=args.data.val_num)
 
 model = BSplineVAE(
     
