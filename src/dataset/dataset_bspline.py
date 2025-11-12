@@ -12,12 +12,18 @@ from typing import Dict, List, Tuple
 
 
 class dataset_bspline(Dataset):
-    def __init__(self, path_file: str, num_surfaces: int=-1, replica=1, max_degree=3, max_num_u_knots=64, max_num_v_knots=32, max_num_u_poles=64, max_num_v_poles=32):
+    def __init__(self, path_file: str, data_dir_override: str="", num_surfaces: int=-1, replica=1, max_degree=3, max_num_u_knots=64, max_num_v_knots=32, max_num_u_poles=64, max_num_v_poles=32):
         """
         Args:
             data_path: Path to directory containing bspline files
         """
-        self.data_names = open(path_file, 'r').readlines()
+        if data_dir_override != "":
+            self.data_dir = data_dir_override
+            self.data_names = sorted([
+            str(p) for p in Path(self.data_dir).rglob("*.npy")
+        ])
+        else:
+            self.data_names = open(path_file, 'r').readlines()
         if num_surfaces != -1:
             self.data_names = self.data_names[:num_surfaces]
 
