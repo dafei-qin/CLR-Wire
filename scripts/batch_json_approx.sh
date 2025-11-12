@@ -10,7 +10,7 @@ INPUT_DIR=""
 OUTPUT_DIR=""
 NUM_PROCESSES=4
 TIMEOUT_SEC=300  # 5 minutes per JSON file
-SAVE_POINTS=false
+SAVE_POINTS=""
 VERBOSE=false
 
 # =============================
@@ -28,13 +28,14 @@ usage() {
     exit 1
 }
 
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --input) INPUT_DIR="$2"; shift 2 ;;
         --output) OUTPUT_DIR="$2"; shift 2 ;;
         --workers) NUM_PROCESSES="$2"; shift 2 ;;
         --timeout) TIMEOUT_SEC="$2"; shift 2 ;;
-        --save-points) SAVE_POINTS=true; shift ;;
+        --save-points) SAVE_POINTS="--save-points"; shift ;;
         --verbose) VERBOSE=true; shift ;;
         *) echo "Unknown option: $1"; usage ;;
     esac
@@ -120,12 +121,12 @@ worker() {
         echo python "$PYTHON_SCRIPT" \
             --input-file "$json_path" \
             --output-dir "$out_subdir" \
-            ${SAVE_POINTS:+--save-points};
+            $SAVE_POINTS;
 
         if timeout "$TIMEOUT_SEC" python "$PYTHON_SCRIPT" \
             --input-file "$json_path" \
             --output-dir "$out_subdir" \
-            ${SAVE_POINTS:+--save-points}; then
+            $SAVE_POINTS; then
 
             # Check if outputs exist
             if [[ -f "$out_json" && -f "$out_npz" ]]; then

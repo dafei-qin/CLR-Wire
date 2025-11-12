@@ -560,8 +560,12 @@ class BSplineVAE(nn.Module):
         self.mults_head_v = NonlinearMLPwithAttn(embd_dim, embd_dim, max_degree + 1)
         self.softplus = nn.Softplus()
 
-        self.token_proj_poles = NonlinearMLP(embd_dim, embd_dim, embd_dim)
-
+        # self.token_proj_poles = NonlinearMLP(embd_dim, embd_dim, embd_dim)
+        self.poles_query_generator = HybridGridQueryGenerator(
+            embed_dim=embd_dim,
+            canonical_size=8,
+            refine_hidden=64
+        )
         self.poles_head = NonlinearMLPwithAttn(embd_dim, embd_dim, 4)
 
 
@@ -757,10 +761,21 @@ class BSplineVAE(nn.Module):
         poles_padding_mask = einops.rearrange(poles_padding_mask, 'b h w -> b (h w)')
         
 
-        poles_tokens = self.token_proj_poles(z).unsqueeze(1) # (B, 1, embd_dim)
-        poles_tokens = poles_tokens.expand(-1, self.max_num_u_poles * self.max_num_v_poles, -1)
-        poles_tokens = einops.rearrange(poles_tokens, 'b (n m) d -> b n m d', n=self.max_num_u_poles, m=self.max_num_v_poles) # (B, max_num_u_poles, max_num_v_poles, embd_dim)
-        poles_tokens = poles_tokens + poles_pe_padded
+        # poles_tokens = self.token_proj_poles(z).unsqueeze(1) # (B, 1, embd_dim)
+
+        pole_queries, pole_mask = self.poles_query_generator(
+            batch_size=B,
+            target_h_list=num_poles_u,
+            target_w_list=num_poles_v,
+            max_h=self.max_num_u_poles,
+            max_w=self.max_num_v_poles,
+            device=device
+        )
+
+        # poles_tokens = poles_tokens.expand(-1, self.max_num_u_poles * self.max_num_v_poles, -1)
+        # poles_tokens = einops.rearrange(poles_tokens, 'b (n m) d -> b n m d', n=self.max_num_u_poles, m=self.max_num_v_poles) # (B, max_num_u_poles, max_num_v_poles, embd_dim)
+        
+        poles_tokens = pole_queries + poles_pe_padded
 
         poles_tokens = poles_tokens.view(B, -1, self.embd_dim) # (B, max_num_u_poles * max_num_v_poles, embd_dim)
 

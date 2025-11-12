@@ -8,7 +8,7 @@ import shutil
 
 from argparse import ArgumentParser
 
-from src.vae.vae_bspline import BSplineVAE 
+
 from src.dataset.dataset_bspline import dataset_bspline
 from src.trainer.trainer_vae_bspline import Trainer_vae_bspline 
 from src.utils.config import NestedDictToClass, load_config
@@ -21,6 +21,16 @@ cli_args, unknown = program_parser.parse_known_args()
 cfg = load_config(cli_args.config)
 args = NestedDictToClass(cfg)
 
+
+model_name = args.model.name
+
+if model_name == 'vae_bspline_v1':
+    from src.vae.vae_bspline import BSplineVAE as BSplineVAE
+elif model_name == 'vae_bspline_v3':
+    from src.vae.vae_bspline_v3 import BSplineVAE as BSplineVAE
+else:
+    print('Use the default model: vae_bspline_v1')
+    from src.vae.vae_bspline import BSplineVAE as BSplineVAE
 
 isDebug = True if sys.gettrace() else False
 
