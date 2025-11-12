@@ -102,7 +102,7 @@ paths = []
 for dirpath, _, files in os.walk(root):
     for f in files:
         # 根据你的数据格式调整后缀（例如 '.bin', '.jpg', '.pt'）
-        if f.endswith(('.bin', '.jpg', '.png', '.pt', '.npy')):
+        if f.endswith(('.bin', '.jpg', '.png', '.pt', '.npy', '.json', '.npz')):
             paths.append(os.path.join(dirpath, f))
 print(f'Found {len(paths):,} files')
 with open(sys.argv[2], 'wb') as f:
