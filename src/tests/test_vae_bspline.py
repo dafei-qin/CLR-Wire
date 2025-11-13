@@ -98,12 +98,16 @@ _current_idx = 0
 _max_idx = 0
 _gt_group = None
 _rec_group = None
+_resampled_group = None
 _gt_surfaces = {}
 _rec_surfaces = {}
+_resampled_surfaces = {}
 _show_gt = True
 _show_rec = True
+_show_resampled = False
 _gt_face = None
 _rec_face = None
+_resampled_face = None
 
 
 def load_model_and_dataset(path_file: str, model_path: str, num_surfaces=1000):
@@ -245,7 +249,8 @@ def process_index(idx: int):
             num_poles_u.squeeze(-1),
             num_poles_v.squeeze(-1),
         )
-        z = _model.reparameterize(mu, logvar)
+        # z = _model.reparameterize(mu, logvar)
+        z = mu
         (
             pred_degree_u,
             pred_degree_v,
@@ -309,8 +314,138 @@ def process_index(idx: int):
         poles_padded=pred_poles[0].cpu().numpy(),
         idx=idx,
     )
-
+    print(f"gt poles: {gt_face['poles']}")
+    print(f"rec poles: {rec_face['poles']}")
+    if np.array(gt_face['poles']).shape == np.array(rec_face['poles']).shape:
+        print(f"poles mse: {np.mean(np.square(np.array(gt_face['poles']) - np.array(rec_face['poles'])))}")
+    else:
+        print("poles shapes do not match")
     return [gt_face], [rec_face]
+
+
+def resample_model():
+    """Generate new samples from the VAE's latent space"""
+    global _model, _resampled_surfaces, _current_idx, _dataset, _resampled_face, _resampled_group, _show_resampled
+    
+    if _model is None:
+        print("Model not loaded yet!")
+        return [], {}
+    
+    sample = _dataset[_current_idx]
+    if not sample[-1]:  # 'valid' flag
+        print(f"Index {_current_idx} is invalid; skipping resample.")
+        return [], {}
+    
+    (
+        u_degree_in,
+        v_degree_in,
+        num_poles_u,
+        num_poles_v,
+        num_knots_u,
+        num_knots_v,
+        is_u_periodic,
+        is_v_periodic,
+        u_knots_list,
+        v_knots_list,
+        u_mults_in,
+        v_mults_in,
+        poles,
+        u_degree_gt,
+        v_degree_gt,
+        u_mults_gt,
+        v_mults_gt,
+    ) = sample_to_batch_tensors(sample)
+    
+    with torch.no_grad():
+        # Encode to get mu and logvar
+        mu, logvar = _model.encode(
+            u_knots_list,
+            u_mults_in,
+            v_knots_list,
+            v_mults_in,
+            poles,
+            u_degree_in,
+            v_degree_in,
+            is_u_periodic,
+            is_v_periodic,
+            num_knots_u.squeeze(-1),
+            num_knots_v.squeeze(-1),
+            num_poles_u.squeeze(-1),
+            num_poles_v.squeeze(-1),
+        )
+        # Reparameterize to sample from latent space
+        z_random = _model.reparameterize(mu, logvar)
+        
+        # Run inference to get predictions
+        (
+            pred_degree_u,
+            pred_degree_v,
+            pred_periodic_u,
+            pred_periodic_v,
+            pred_knots_num_u,
+            pred_knots_num_v,
+            pred_mults_u,
+            pred_mults_v,
+            pred_num_poles_u,
+            pred_num_poles_v,
+            pred_knots_u,
+            pred_knots_v,
+            pred_poles,
+        ) = _model.inference(z_random)
+    
+    # Build resampled JSON
+    pred_u_deg = to_python_int(pred_degree_u[0])
+    pred_v_deg = to_python_int(pred_degree_v[0])
+    pred_u_per = to_python_bool(pred_periodic_u[0])
+    pred_v_per = to_python_bool(pred_periodic_v[0])
+    pred_u_kn_n = to_python_int(pred_knots_num_u[0])
+    pred_v_kn_n = to_python_int(pred_knots_num_v[0])
+    pred_u_np_n = to_python_int(pred_num_poles_u[0])
+    pred_v_np_n = to_python_int(pred_num_poles_v[0])
+    
+    resampled_face = build_bspline_json(
+        u_degree=pred_u_deg,
+        v_degree=pred_v_deg,
+        num_poles_u=pred_u_np_n,
+        num_poles_v=pred_v_np_n,
+        num_knots_u=pred_u_kn_n,
+        num_knots_v=pred_v_kn_n,
+        is_u_periodic=pred_u_per,
+        is_v_periodic=pred_v_per,
+        u_knots_gap=pred_knots_u[0].cpu().numpy(),
+        v_knots_gap=pred_knots_v[0].cpu().numpy(),
+        u_mults=pred_mults_u[0].cpu().numpy(),
+        v_mults=pred_mults_v[0].cpu().numpy(),
+        poles_padded=pred_poles[0].cpu().numpy(),
+        idx=_current_idx,
+    )
+    
+    _resampled_face = resampled_face
+    resampled_json_data = [resampled_face]
+    
+    # Visualize resampled surfaces
+    try:
+        _resampled_surfaces = visualize_json_interset(resampled_json_data, plot=True, plot_gui=False, tol=1e-5, ps_header="resampled")
+    except ValueError:
+        print("Resampled visualization failed.")
+        return [], {}
+    
+    # Add to resampled group
+    for _, s in _resampled_surfaces.items():
+        if "surface" in s and s["surface"] is not None:
+            s["ps_handler"].add_to_group(_resampled_group)
+    
+    # Visualize resampled control poles as point cloud
+    if _resampled_face is not None:
+        resampled_poles = np.array(_resampled_face["poles"])[..., :3]
+        resampled_poles_flat = resampled_poles.reshape(-1, 3)
+        resampled_poles_cloud = ps.register_point_cloud("resampled_poles", resampled_poles_flat, radius=0.005)
+        resampled_poles_cloud.add_to_group(_resampled_group)
+        resampled_poles_cloud.set_color((0.0, 0.0, 1.0))  # Blue for resampled poles
+    
+    _resampled_group.set_enabled(_show_resampled)
+    
+    return resampled_json_data, _resampled_surfaces
 
 
 def update_visualization():
@@ -344,7 +479,7 @@ def update_visualization():
 
     # Visualize control poles as point clouds
     if _gt_face is not None:
-        gt_poles = np.array(_gt_face["poles"])
+        gt_poles = np.array(_gt_face["poles"])[..., :3]
         print(gt_poles.shape)
         # Reshape poles from (num_poles_u, num_poles_v, 3) to (num_poles_u * num_poles_v, 3)
         gt_poles_flat = gt_poles.reshape(-1, 3)
@@ -353,7 +488,7 @@ def update_visualization():
         gt_poles_cloud.set_color((0.0, 1.0, 0.0))  # Green for GT poles
     
     if _rec_face is not None:
-        rec_poles = np.array(_rec_face["poles"])
+        rec_poles = np.array(_rec_face["poles"])[..., :3]
         # Reshape poles from (num_poles_u, num_poles_v, 3) to (num_poles_u * num_poles_v, 3)
         rec_poles_flat = rec_poles.reshape(-1, 3)
         rec_poles_cloud = ps.register_point_cloud("rec_poles", rec_poles_flat, radius=0.005)
@@ -365,7 +500,7 @@ def update_visualization():
 
 
 def callback():
-    global _current_idx, _max_idx, _show_gt, _show_rec, _gt_face, _rec_face
+    global _current_idx, _max_idx, _show_gt, _show_rec, _show_resampled, _gt_face, _rec_face, _resampled_surfaces
     psim.Text("BSplineVAE Reconstruction Viewer")
     psim.Separator()
     changed, new_idx = psim.SliderInt("Index", _current_idx, 0, _max_idx)
@@ -377,6 +512,15 @@ def callback():
     psim.Text(f"Current Index: {_current_idx}")
     psim.Text(f"Max Index: {_max_idx}")
 
+    # Resample button
+    psim.Separator()
+    psim.Text("Model Controls:")
+    if psim.Button("Resample Model"):
+        # Remove all structures before resampling
+        ps.remove_all_structures()
+        _resampled_surfaces = {}
+        resampled_json_data, _resampled_surfaces = resample_model()
+
     if _gt_group is not None:
         psim.Separator()
         psim.Text("Visibility")
@@ -386,6 +530,10 @@ def callback():
         changed, _show_rec = psim.Checkbox("Show Reconstructed", _show_rec)
         if changed:
             _rec_group.set_enabled(_show_rec)
+        changed, _show_resampled = psim.Checkbox("Show Resampled", _show_resampled)
+        if changed:
+            if _resampled_group is not None:
+                _resampled_group.set_enabled(_show_resampled)
     
     # Display surface details
     if _gt_face is not None and _rec_face is not None:
@@ -475,6 +623,7 @@ if __name__ == "__main__":
     ps.init()
     _gt_group = ps.create_group("GT Surfaces")
     _rec_group = ps.create_group("Reconstructed Surfaces")
+    _resampled_group = ps.create_group("Resampled Surfaces")
     ps.set_user_callback(callback)
     update_visualization()
     ps.show()

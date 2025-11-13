@@ -91,7 +91,8 @@ def process_sample(idx):
     with torch.no_grad():
         mu, logvar = model.encode(valid_params, valid_types)
         
-        z = model.reparameterize(mu, logvar)
+        # z = model.reparameterize(mu, logvar)
+        z = mu
         type_logits_pred, types_pred = model.classify(z)
         params_pred, mask = model.decode(z, types_pred)
         
@@ -135,6 +136,7 @@ def resample_model():
 
         mu, logvar = model.encode(valid_params, valid_types)
         z_random = model.reparameterize(mu, logvar)
+        # z_random = mu
         # Classify the random latent vectors to get surface types
         type_logits_pred, types_pred = model.classify(z_random)
         
