@@ -87,6 +87,7 @@ class Trainer_vae_v1(BaseTrainer):
         
         # Track abnormal values for logging
         self.abnormal_values_buffer = []
+        self.raw_model = self.model.module if hasattr(self.model, 'module') else self.model
 
     def compute_accuracy(self, logits, labels):
         predictions = torch.argmax(logits, dim=-1)
@@ -139,17 +140,23 @@ class Trainer_vae_v1(BaseTrainer):
                 forward_kwargs = self.next_data_to_forward_kwargs(self.train_dl_iter)
 
                 with self.accelerator.autocast(), maybe_no_sync():
-                    params_padded, surface_type, masks = forward_kwargs
+                    params_padded, surface_type, masks, shifts_padded, rotations_padded, scales_padded = forward_kwargs
                     params_padded = params_padded[masks.bool()] 
                     surface_type = surface_type[masks.bool()]
                     if surface_type.shape[0] == 0:
                         continue
                     # print(params_padded.abs().max())
-                    abnormal_value = params_padded.abs().max().item()
+                    # abnormal_value = params_padded.abs().max().item()
 
 
                     # Forward pass
-                    params_raw_recon, mask, class_logits, mu, logvar = self.model(params_padded, surface_type)
+                    # params_raw_recon, mask, class_logits, mu, logvar = self.model(params_padded, surface_type)
+
+                    mu, logvar = self.raw_model.encode(params_padded, surface_type)
+                    z = mu
+                    # z = self.reparameterize(mu, logvar)
+                    class_logits, surface_type_pred = self.raw_model.classify(z)
+                    params_raw_recon, mask = self.raw_model.decode(z, surface_type)
                     
                     loss_recon = (self.loss_recon(params_raw_recon, params_padded) * mask.float()).mean() * self.loss_recon_weight
                     loss_cls = self.loss_cls(class_logits, surface_type).mean()
@@ -230,7 +237,12 @@ class Trainer_vae_v1(BaseTrainer):
                         # print(params_padded.abs().max())
                         abnormal_value = params_padded.abs().max().item()
 
-                        params_raw_recon, mask, class_logits, mu, logvar = self.ema(params_padded, surface_type)
+                        # params_raw_recon, mask, class_logits, mu, logvar = self.ema(params_padded, surface_type)
+                        mu, logvar = self.raw_model.encode(params_padded, surface_type)
+                        z = mu
+                        # z = self.reparameterize(mu, logvar)
+                        class_logits, surface_type_pred = self.raw_model.classify(z)
+                        params_raw_recon, mask = self.raw_model.decode(z, surface_type)
 
                         loss_recon = (self.loss_recon(params_raw_recon, params_padded) * mask.float()).mean()
                         loss_cls = self.loss_cls(class_logits, surface_type).mean()

@@ -18,6 +18,10 @@ from einops import rearrange
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from src.tools.surface_to_canonical_space import to_canonical, from_canonical
 
 
 
@@ -289,7 +293,7 @@ class dataset_compound(Dataset):
     # Surface type to index mapping
     
     
-    def __init__(self, json_dir: str, max_num_surfaces: int = 500):
+    def __init__(self, json_dir: str, max_num_surfaces: int = 500, canonical: bool = False):
         """
         Args:
             json_dir: Path to directory containing JSON files
@@ -298,7 +302,7 @@ class dataset_compound(Dataset):
         super().__init__()
         self.json_dir = Path(json_dir)
         self.max_num_surfaces = max_num_surfaces
-        
+        self.canonical = canonical        
         # Discover all JSON files in directory and subdirectories
         self.json_names = sorted([
             str(p) for p in self.json_dir.rglob("*.json")
@@ -717,7 +721,11 @@ class dataset_compound(Dataset):
         # Initialize arrays for all surfaces (padded)
         all_params = np.zeros((self.max_num_surfaces, self.max_param_dim), dtype=np.float32)
         all_types = np.zeros(self.max_num_surfaces, dtype=np.int64)
+        all_shifts = np.zeros((self.max_num_surfaces, 3), dtype=np.float32)
+        all_rotations = np.zeros((self.max_num_surfaces, 3, 3), dtype=np.float32)
+        all_scales = np.zeros(self.max_num_surfaces, dtype=np.float32)
         mask = np.zeros(self.max_num_surfaces, dtype=np.float32)
+
 
 
         try:
@@ -744,13 +752,26 @@ class dataset_compound(Dataset):
                 with warnings.catch_warnings():
                     warnings.filterwarnings('error', category=RuntimeWarning)
                     params, surface_type_idx = self._parse_surface(surface_dict)
+
+                    # Transform to canonical space.
+                    if self.canonical:
+                        surface_str = self._recover_surface(params, surface_type_idx)
+                        surface_canonical, shift, rotation, scale = to_canonical(surface_str)
+                        params, surface_type_idx = self._parse_surface(surface_canonical)
+ 
+                    else:
+                        pass
+
                     if surface_type_idx == -1:
+                        # Bad surface, skip
                         with open('./assets/abnormal_surfaces.csv', 'a') as f:
                             f.write(json_path + ',' + str(i) + ',' + str(surface_type_idx) + '\n')
                     else:
-                        # Bad surface, skip
                         all_params[i, :len(params)] = params
                         all_types[i] = surface_type_idx
+                        all_shifts[i, :] = shift
+                        all_rotations[i, :, :] = rotation
+                        all_scales[i] = scale
                         mask[i] = 1.0
             except (KeyError, IndexError, NotImplementedError, RuntimeWarning) as e:
                 # Skip invalid surfaces (leave as zeros with mask=0)
@@ -774,7 +795,7 @@ class dataset_compound(Dataset):
                 f.write(','.join(to_save) + '\n')
         
             mask_tensor[torch.where(params_tensor.abs() > 10)[0].unique()] = 0
-        return params_tensor, types_tensor, mask_tensor
+        return params_tensor, types_tensor, mask_tensor, all_shifts, all_rotations, all_scales
     
     def get_file_info(self, idx: int) -> Dict:
         """

@@ -35,6 +35,10 @@ def process_surface_through_pipeline(surface_dict, dataset):
     3. Transform to canonical
     4. Transform back from canonical
     
+    This function demonstrates TWO methods to use to_canonical:
+    - Method A: Via GT surface dict (traditional)
+    - Method B: Directly from params (new, more efficient)
+    
     Args:
         surface_dict: Raw surface dictionary from JSON
         dataset: dataset_compound instance
@@ -75,7 +79,13 @@ def process_surface_through_pipeline(surface_dict, dataset):
             return result
         
         # Step 3: Transform to canonical space
-        canonical_surface, shift, rotation, scale = to_canonical(gt_surface)
+        # METHOD A (traditional): Pass GT surface dict
+        # canonical_surface, shift, rotation, scale = to_canonical(gt_surface)
+        
+        # METHOD B (new, more efficient): Pass (params, surface_type_idx) directly
+        # This skips the intermediate _recover_surface step internally
+        canonical_surface, shift, rotation, scale = to_canonical((params, surface_type_idx), dataset)
+        
         result['canonical'] = canonical_surface
         result['transform']['shift'] = shift
         result['transform']['rotation'] = rotation

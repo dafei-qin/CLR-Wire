@@ -29,9 +29,9 @@ if transform is None:
     transform = None
 
 
-train_dataset = dataset_compound(json_dir=args.data.train_json_dir, max_num_surfaces=args.data.max_num_surfaces)
+train_dataset = dataset_compound(json_dir=args.data.train_json_dir, max_num_surfaces=args.data.max_num_surfaces, canonical=args.data.canonical)
 
-val_dataset = dataset_compound(json_dir=args.data.val_json_dir, max_num_surfaces=args.data.max_num_surfaces)
+val_dataset = dataset_compound(json_dir=args.data.val_json_dir, max_num_surfaces=args.data.max_num_surfaces, canonical=args.data.canonical)
 
 model = SurfaceVAE(
     param_raw_dim=args.model.param_raw_dim,
