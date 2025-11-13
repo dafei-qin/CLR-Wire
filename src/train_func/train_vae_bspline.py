@@ -10,7 +10,6 @@ from argparse import ArgumentParser
 
 
 from src.dataset.dataset_bspline import dataset_bspline
-from src.trainer.trainer_vae_bspline import Trainer_vae_bspline 
 from src.utils.config import NestedDictToClass, load_config
 
 program_parser = ArgumentParser(description='Train bspline model.')
@@ -24,13 +23,23 @@ args = NestedDictToClass(cfg)
 
 model_name = args.model.name
 
-if model_name == 'vae_bspline_v1':
+if args.model.name == 'vae_bspline_v1':
     from src.vae.vae_bspline import BSplineVAE as BSplineVAE
-elif model_name == 'vae_bspline_v3':
+    print('Use the model: vae_bspline_v1')
+elif args.model.name == 'vae_bspline_v3':
     from src.vae.vae_bspline_v3 import BSplineVAE as BSplineVAE
+    print('Use the model: vae_bspline_v3')
 else:
     print('Use the default model: vae_bspline_v1')
     from src.vae.vae_bspline import BSplineVAE as BSplineVAE
+
+
+if args.model.trainer_name == 'vae_bspline_v2':
+    print('Use the trainer: vae_bspline_v2')
+    from src.trainer.trainer_vae_bspline_v2 import Trainer_vae_bspline as Trainer_vae_bspline
+else:
+    print('Use the trainer: vae_bspline')
+    from src.trainer.trainer_vae_bspline import Trainer_vae_bspline as Trainer_vae_bspline
 
 isDebug = True if sys.gettrace() else False
 

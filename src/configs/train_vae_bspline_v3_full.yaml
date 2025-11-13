@@ -1,11 +1,11 @@
-resume_training: false
+resume_training: true
 from_start: false
 
 epochs: 100
-batch_size: 16
+batch_size: 32
 lr: 0.0001
-num_workers: 6
-num_gpus: 6
+num_workers: 4
+num_gpus: 4
 
 grad_accum_every: 1
 ema_update_every: 10
@@ -20,18 +20,19 @@ wandb_project_name: BSPLINE_VAE_V1
 wandb_run_name: train_1112_bspline_3_attn_128_klw=.001_recw=10
 
 data:
-    train_file: ./assets/all_bspline_paths.txt
-    train_data_dir_override: /mnt/ramdisk/logan_bspline/0/0000
+    train_file: ./assets/ram_all_bspline_surfaces.txt
+    train_data_dir_override: ""
     train_num: -1
-    val_file: ./assets/all_bspline_paths_test.txt
-    val_data_dir_override: /mnt/ramdisk/logan_bspline_test/0009
+    val_file: ./assets/ram_all_bspline_test_surfaces.txt
+    val_data_dir_override: ""
     val_num: -1
 
 model:
-    name: vae_bspline_v3
+    name: vae_bspline
+    trainer_name: vae_bspline_v2
     mults_dim: 128
-    checkpoint_folder: checkpoints/train_1112_bspline_3_attn_128_klw
-    checkpoint_file_name: model-20.pt
+    checkpoint_folder: checkpoints/train_1112_bspline_vae_no_var
+    checkpoint_file_name: model-06.pt
 
 
 loss:
