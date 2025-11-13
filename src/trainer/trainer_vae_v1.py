@@ -103,7 +103,7 @@ class Trainer_vae_v1(BaseTrainer):
             return 1.0
         return min(1.0, step / self.kl_annealing_steps)
 
-    def log_loss(self, total_loss, accuracy, loss_recon, loss_cls, loss_kl, lr, total_norm, step, kl_beta=1.0, active_dims=None):
+    def log_loss(self, total_loss, accuracy, loss_recon, loss_cls, loss_kl, lr, total_norm, step, time_per_step, kl_beta=1.0, active_dims=None):
         if not self.use_wandb_tracking or not self.is_main:
             return
         
@@ -117,6 +117,7 @@ class Trainer_vae_v1(BaseTrainer):
             'grad_norm': total_norm,
             'step': step,
             'kl_beta': kl_beta,
+            'time_per_step': time_per_step,
         }
         
         if active_dims is not None:
@@ -124,7 +125,7 @@ class Trainer_vae_v1(BaseTrainer):
         
         self.log(**log_dict)
         
-        self.print(get_current_time() + f' loss: {total_loss:.3f} acc: {accuracy:.3f} lr: {lr:.6f} norm: {total_norm:.3f} kl_beta: {kl_beta:.3f}')
+        self.print(get_current_time() + f' loss: {total_loss:.3f} acc: {accuracy:.3f} lr: {lr:.6f} norm: {total_norm:.3f} kl_beta: {kl_beta:.3f} time_per_step: {time_per_step:.3f}')
 
     def train(self):
         step = self.step.item()
@@ -132,17 +133,20 @@ class Trainer_vae_v1(BaseTrainer):
         while step < self.num_train_steps:
             total_loss = 0.
             total_accuracy = 0.
+            t = time.time()
 
             for i in range(self.grad_accum_every):
                 is_last = i == (self.grad_accum_every - 1)
                 maybe_no_sync = partial(self.accelerator.no_sync, self.model) if not is_last else nullcontext
 
                 forward_kwargs = self.next_data_to_forward_kwargs(self.train_dl_iter)
-
                 with self.accelerator.autocast(), maybe_no_sync():
                     params_padded, surface_type, masks, shifts_padded, rotations_padded, scales_padded = forward_kwargs
                     params_padded = params_padded[masks.bool()] 
                     surface_type = surface_type[masks.bool()]
+                    shifts_padded = shifts_padded[masks.bool()]
+                    rotations_padded = rotations_padded[masks.bool()]
+                    scales_padded = scales_padded[masks.bool()]
                     if surface_type.shape[0] == 0:
                         continue
                     # print(params_padded.abs().max())
@@ -186,7 +190,7 @@ class Trainer_vae_v1(BaseTrainer):
                     total_accuracy += accuracy.item() / self.grad_accum_every
                 
                 self.accelerator.backward(loss)
-            
+            time_per_step = (time.time() - t) / self.grad_accum_every
             self.optimizer.step()
             self.optimizer.zero_grad()
 

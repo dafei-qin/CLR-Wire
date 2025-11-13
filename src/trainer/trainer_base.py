@@ -118,7 +118,7 @@ class BaseTrainer(Module):
             shuffle=True,
             # sampler=self.train_sampler,
             pin_memory = False,  # Disable pin_memory to reduce RAM usage
-            num_workers=min(num_workers, 8),  # Limit workers to prevent memory explosion
+            num_workers=min(num_workers, 16),  # Limit workers to prevent memory explosion
             collate_fn=collate_fn,
             prefetch_factor=1,  # Reduce prefetch to save memory
             persistent_workers=False,  # Disable persistent workers to allow cleanup

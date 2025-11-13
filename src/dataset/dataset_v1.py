@@ -754,7 +754,8 @@ class dataset_compound(Dataset):
                     params, surface_type_idx = self._parse_surface(surface_dict)
 
                     # Transform to canonical space.
-                    if self.canonical:
+
+                    if self.canonical and surface_type_idx != -1:
                         surface_str = self._recover_surface(params, surface_type_idx)
                         surface_canonical, shift, rotation, scale = to_canonical(surface_str)
                         params, surface_type_idx = self._parse_surface(surface_canonical)
