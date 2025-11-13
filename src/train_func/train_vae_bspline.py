@@ -28,6 +28,8 @@ if model_name == 'vae_bspline_v1':
     from src.vae.vae_bspline import BSplineVAE as BSplineVAE
 elif model_name == 'vae_bspline_v3':
     from src.vae.vae_bspline_v3 import BSplineVAE as BSplineVAE
+elif model_name == "vae_bspline_v4":
+    from src.vae.vae_bspline_v4 import BSplineVAE as BSplineVAE
 else:
     print('Use the default model: vae_bspline_v1')
     from src.vae.vae_bspline import BSplineVAE as BSplineVAE
