@@ -184,7 +184,7 @@ def normalize_cylinder_with_center(P, D, X_dir, Y_dir, u_min, u_max, v_min, v_ma
     u_half = 0.5 * (u_max_new - u_min_new) / np.pi - 0.5  # (-0.5, 0.5)
     sin_u_center, cos_u_center = np.sin(0), np.cos(0)  # 因为中心已归零
 
-    UV = np.array([sin_u_center, cos_u_center, u_half, v_max, 0, 0, 0, 0], dtype=np.float32)
+    UV = np.array([sin_u_center, cos_u_center, u_half, v_max, 0, 0, 0, 0], dtype=np.float64)
 
     return {
         "P": P,
@@ -265,7 +265,7 @@ def normalize_cone_with_center(P, D, X, u_min, u_max, v_min, v_max, semi_angle, 
     sin_u_center, cos_u_center = 0.0, 1.0
 
     # --- 6. Pack results ---
-    UV = np.array([sin_u_center, cos_u_center, u_half, v_center, v_half, 0, 0, 0], dtype=np.float32)
+    UV = np.array([sin_u_center, cos_u_center, u_half, v_center, v_half, 0, 0, 0], dtype=np.float64)
     scalar_params = [semi_angle / (np.pi / 2), radius]
 
     return P, D, X, Y, UV, scalar_params
@@ -350,14 +350,14 @@ class dataset_compound(Dataset):
         surface_type_idx = SURFACE_TYPE_MAP.get(surface_type, -1)
         
         # Extract P: location (first element of location array)
-        P = np.array(surface_dict['location'][0], dtype=np.float32)  # (3,)
+        P = np.array(surface_dict['location'][0], dtype=np.float64)  # (3,)
         
         # Extract D: direction[0] (first direction vector), X: U direction
-        D = np.array(surface_dict['direction'][0], dtype=np.float32)  # (3,)
-        X = np.array(surface_dict['direction'][1], dtype=np.float32)  # (3,)
+        D = np.array(surface_dict['direction'][0], dtype=np.float64)  # (3,)
+        X = np.array(surface_dict['direction'][1], dtype=np.float64)  # (3,)
         Y = np.cross(D, X)
         # Extract UV: parameter bounds
-        UV = np.array(surface_dict['uv'], dtype=np.float32)  # (4,)
+        UV = np.array(surface_dict['uv'], dtype=np.float64)  # (4,)
         
         # Extract scalar parameters based on surface type
         scalar_params = []
@@ -375,7 +375,7 @@ class dataset_compound(Dataset):
             v_min = v_new[0]
             v_max = v_new[1]
             P = centered
-            UV = np.array([u_min, u_max, v_min, v_max, 0, 0, 0, 0], dtype=np.float32) # (8, )
+            UV = np.array([u_min, u_max, v_min, v_max, 0, 0, 0, 0], dtype=np.float64) # (8, )
 
         elif surface_type == 'cylinder':
             # scalar[0] = radius
@@ -402,7 +402,7 @@ class dataset_compound(Dataset):
             u_half = 0.5 * (u_diff) / np.pi - 0.5 # (0 - pi) --> (-0.5, 0.5)
 
             sin_u_center, cos_u_center = np.sin(u_center), np.cos(u_center)
-            UV = np.array([sin_u_center, cos_u_center, u_half, v_max, 0, 0, 0, 0], dtype=np.float32) # (8, )
+            UV = np.array([sin_u_center, cos_u_center, u_half, v_max, 0, 0, 0, 0], dtype=np.float64) # (8, )
 
         elif surface_type == 'cone':
 
@@ -504,7 +504,7 @@ class dataset_compound(Dataset):
                 np.cos(v_center) * np.cos(u_center),
                 np.cos(v_center) * np.sin(u_center),
                 np.sin(v_center)
-            ], dtype=np.float32)
+            ], dtype=np.float64)
             
             u_h_norm = np.clip(u_half / np.pi, 0, 1 - 1e-5)        # 在 [-1, 1]
             v_h_norm = np.clip(v_half / (PI/2), 0.0, 1.0 - 1e-5)   # 在 [-1, 1]
@@ -551,24 +551,24 @@ class dataset_compound(Dataset):
 
             # Rz = np.array([[c, -s, 0],
             #             [s,  c, 0],
-            #             [0,  0, 1]], dtype=np.float32)
+            #             [0,  0, 1]], dtype=np.float64)
 
             # X_new = Rz @ (X / np.linalg.norm(X))
             # X = X_new
 
 
-            UV = np.array([sin_u_center, cos_u_center, u_half / np.pi, sin_v_center, cos_v_center, v_half / np.pi, 0, 0], dtype=np.float32)
+            UV = np.array([sin_u_center, cos_u_center, u_half / np.pi, sin_v_center, cos_v_center, v_half / np.pi, 0, 0], dtype=np.float64)
 
 
         elif surface_type == 'bspline_surface':
             # Skip bspline surfaces for now (variable dimension)
             raise NotImplementedError("B-spline surfaces are not supported yet")
         
-        scalar_params = np.array(scalar_params, dtype=np.float32)
+        scalar_params = np.array(scalar_params, dtype=np.float64)
         
         # Pad scalar parameters to max_scalar_dim
         # if len(scalar_params) < self.max_scalar_dim:
-        #     padding = np.zeros(self.max_scalar_dim - len(scalar_params), dtype=np.float32)
+        #     padding = np.zeros(self.max_scalar_dim - len(scalar_params), dtype=np.float64)
         #     scalar_params = np.concatenate([scalar_params, padding])
         
         # Concatenate all parameters: P + D + UV + scalar
@@ -580,7 +580,7 @@ class dataset_compound(Dataset):
         # Do the log processing of radius
         params = self.preprocess_funcs[surface_type](params)
         assert len(params) == self.base_dim + SCALAR_DIM_MAP[surface_type], f"surface {surface_type} params length {len(params)} != base_dim {self.base_dim}"
-        return params, surface_type_idx
+        return params.astype(np.float32), surface_type_idx
     
 
     def _recover_surface(self, params, surface_type_idx):
@@ -719,12 +719,12 @@ class dataset_compound(Dataset):
         
         
         # Initialize arrays for all surfaces (padded)
-        all_params = np.zeros((self.max_num_surfaces, self.max_param_dim), dtype=np.float32)
+        all_params = np.zeros((self.max_num_surfaces, self.max_param_dim), dtype=np.float64)
         all_types = np.zeros(self.max_num_surfaces, dtype=np.int64)
-        all_shifts = np.zeros((self.max_num_surfaces, 3), dtype=np.float32)
-        all_rotations = np.zeros((self.max_num_surfaces, 3, 3), dtype=np.float32)
-        all_scales = np.zeros(self.max_num_surfaces, dtype=np.float32)
-        mask = np.zeros(self.max_num_surfaces, dtype=np.float32)
+        all_shifts = np.zeros((self.max_num_surfaces, 3), dtype=np.float64)
+        all_rotations = np.zeros((self.max_num_surfaces, 3, 3), dtype=np.float64)
+        all_scales = np.zeros(self.max_num_surfaces, dtype=np.float64)
+        mask = np.zeros(self.max_num_surfaces, dtype=np.float64)
 
 
 
@@ -751,16 +751,23 @@ class dataset_compound(Dataset):
                 # Catch RuntimeWarnings (overflow, invalid value) and convert to exceptions
                 with warnings.catch_warnings():
                     warnings.filterwarnings('error', category=RuntimeWarning)
+                    print(surface_dict)
+                    if i == 6:
+                        print()
                     params, surface_type_idx = self._parse_surface(surface_dict)
 
                     # Transform to canonical space.
 
                     if self.canonical and surface_type_idx != -1:
                         surface_str = self._recover_surface(params, surface_type_idx)
+                        print(i, params[9:])
                         surface_canonical, shift, rotation, scale = to_canonical(surface_str)
                         params, surface_type_idx = self._parse_surface(surface_canonical)
  
                     else:
+                        shift = np.zeros(3, dtype=np.float64)
+                        rotation = np.eye(3, dtype=np.float64)
+                        scale = 1.0
                         pass
 
                     if surface_type_idx == -1:
@@ -826,3 +833,21 @@ class dataset_compound(Dataset):
 
 def get_surface_type(surf_type):
     return SURFACE_TYPE_MAP_INV[surf_type]        
+
+
+
+if __name__ == '__main__':
+    from tqdm import tqdm
+    import time
+    dataset = dataset_compound(sys.argv[1], canonical=True)
+    for i in tqdm(range(len(dataset))):
+        _ = dataset[i]
+        # t = time.time()
+        # try:
+        #     params_tensor, types_tensor, mask_tensor, all_shifts, all_rotations, all_scales = dataset[i]
+        # except Exception as e:
+        #     print(f"Error: {e}")
+        #     print(i)
+        #     print(dataset.json_names[i])
+        #     continue
+        # print(f"Time taken: {time.time() - t} seconds")

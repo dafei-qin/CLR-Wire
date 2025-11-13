@@ -96,7 +96,7 @@ def load_dataset():
         print("Usage: python test_dataset_v1.py <dataset_path>")
         sys.exit(1)
     
-    dataset = dataset_compound(sys.argv[1])
+    dataset = dataset_compound(sys.argv[1], canonical=True)
     max_idx = len(dataset) - 1
     print(f"Loaded dataset with {len(dataset)} samples")
 
