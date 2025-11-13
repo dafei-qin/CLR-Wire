@@ -751,16 +751,16 @@ class dataset_compound(Dataset):
                 # Catch RuntimeWarnings (overflow, invalid value) and convert to exceptions
                 with warnings.catch_warnings():
                     warnings.filterwarnings('error', category=RuntimeWarning)
-                    print(surface_dict)
-                    if i == 6:
-                        print()
+                    # print(surface_dict)
+                    # if i == 6:
+                    #     print()
                     params, surface_type_idx = self._parse_surface(surface_dict)
 
                     # Transform to canonical space.
 
                     if self.canonical and surface_type_idx != -1:
                         surface_str = self._recover_surface(params, surface_type_idx)
-                        print(i, params[9:])
+                        # print(i, params[9:])
                         surface_canonical, shift, rotation, scale = to_canonical(surface_str)
                         params, surface_type_idx = self._parse_surface(surface_canonical)
  
