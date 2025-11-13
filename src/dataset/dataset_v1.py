@@ -414,24 +414,30 @@ class dataset_compound(Dataset):
             r_min_thresh = 1e-2
             P_min = P + v_min * np.cos(semi_angle) * D
             r_min = radius + v_min * np.sin(semi_angle)
+            v_max = v_max - v_min
+            v_min = 0
 
             if r_min < r_min_thresh:
                 # Compute how much delta_v we need to increase to make r_min_thresh
                 delta_v = (r_min_thresh - r_min) / np.sin(semi_angle)
                 v_min_new = v_min + delta_v
+                v_max = v_max + delta_v
                 P_min = P + v_min_new * np.cos(semi_angle) * D
                 r_min = radius + v_min_new * np.sin(semi_angle)
             else:
-                v_min_new = v_min
+                # v_min_new = v_min
+                # v_min_new = 0
+                pass
 
-            v_min = v_min_new    
-            v_max = v_max - v_min
+            # v_min = v_min_new    
+            # v_max = v_max - v_min
 
             P = P_min
             radius = max(r_min, r_min_thresh)
 
             # 1. guarantee u_min is positive
             if u_min < 0:
+                
                 k = (u_min // (2 * np.pi) - 1)
                 u_min -= k * 2 * np.pi
                 u_max -= k * 2 * np.pi
@@ -509,7 +515,7 @@ class dataset_compound(Dataset):
                 return None, -1
 
             # 1. guarantee u_min is positive
-            if u_min < 0:
+            if u_min < 0 - 1e-6:
                 k = (u_min // (2 * np.pi) - 1)
                 u_min -= k * 2 * np.pi
                 u_max -= k * 2 * np.pi
@@ -518,13 +524,13 @@ class dataset_compound(Dataset):
                 u_max -= (u_max - u_min) // (2 * np.pi) * 2 * np.pi
 
             # 3. guarantee v_min is positive
-            if v_min < 0:
+            if v_min < 0 - 1e-6:
                 k = (v_min // (np.pi) - 1)
                 v_min -= k * np.pi
                 v_max -= k * np.pi
             # 4. guarantee v_diff < np.pi
-            if v_max - v_min > np.pi:
-                v_max -= (v_max - v_min) // np.pi * np.pi
+            if v_max - v_min > np.pi + 1e-6:
+                v_max -= ((v_max - v_min) // np.pi - 1) * np.pi
 
             u_center = 0.5 * (u_min + u_max)
             u_diff = u_max - u_min
@@ -538,11 +544,13 @@ class dataset_compound(Dataset):
             sin_v_center, cos_v_center = np.sin(v_center), np.cos(v_center)
 
             c, s = np.cos(-u_center), np.sin(-u_center)
-            Rz = np.array([[c, -s, 0],
-                        [s,  c, 0],
-                        [0,  0, 1]], dtype=np.float32)
-            X_new = Rz @ (X / np.linalg.norm(X))
-            X = X_new
+
+            # Rz = np.array([[c, -s, 0],
+            #             [s,  c, 0],
+            #             [0,  0, 1]], dtype=np.float32)
+
+            # X_new = Rz @ (X / np.linalg.norm(X))
+            # X = X_new
 
 
             UV = np.array([sin_u_center, cos_u_center, u_half / np.pi, sin_v_center, cos_v_center, v_half / np.pi, 0, 0], dtype=np.float32)

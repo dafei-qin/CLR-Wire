@@ -249,7 +249,8 @@ def process_index(idx: int):
             num_poles_u.squeeze(-1),
             num_poles_v.squeeze(-1),
         )
-        z = _model.reparameterize(mu, logvar)
+        # z = _model.reparameterize(mu, logvar)
+        z = mu
         (
             pred_degree_u,
             pred_degree_v,
