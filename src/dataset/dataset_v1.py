@@ -735,7 +735,7 @@ class dataset_compound(Dataset):
             print(f"JSONDecodeError: {json_path}")
             with open('./assets/abnormal_json.csv', 'w') as f:
                 f.write(json_path + '\n')
-            return torch.from_numpy(all_params).float(), torch.from_numpy(all_types).long(), torch.from_numpy(mask).float()
+            return torch.from_numpy(all_params).float(), torch.from_numpy(all_types).long(), torch.from_numpy(mask).float(), torch.from_numpy(all_shifts).float(), torch.from_numpy(all_rotations).float(), torch.from_numpy(all_scales).float()
         
         # Here we load the .npz which stores the bspline approximation and the points data. 
         # npz_data = np.load(json_path.replace('.json', '.npz'))
