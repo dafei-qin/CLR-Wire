@@ -1,0 +1,47 @@
+resume_training: false
+from_start: false
+
+epochs: 100
+batch_size: 256
+lr: 0.0001
+num_workers: 4
+num_gpus: 1
+
+grad_accum_every: 1
+ema_update_every: 10
+max_grad_norm: 1.0
+
+val_every_epoch: 1
+save_every_epoch: 20
+log_every_step: 50
+
+use_wandb_tracking: true
+wandb_project_name: VAE_V1
+wandb_run_name: train_1113_vae_1_canonical_novar
+
+data:
+    train_json_dir: /mnt/ramdisk/logan_json/logan_jsons/abc
+    val_json_dir: /mnt/ramdisk/logan_json/logan_jsons/abc_test
+    max_num_surfaces: 500
+    canonical: true
+
+model:
+    # depth: 16
+    # dim: 512
+    # heads: 8
+    # surface_res: 32
+    # num_types: 6
+    # num_nearby: 20
+    # surface_dim: 256
+    # surface_enc_block_out_channels: [16, 32, 64, 128]
+    param_raw_dim: [17, 18, 19, 18, 19]
+    checkpoint_folder: checkpoints/train_1113_vae_1_canonical_novar
+    checkpoint_file_name: model.pt 0
+
+
+loss:
+    recon_weight: 1.0
+    cls_weight: 1.0
+    kl_weight: 0
+    kl_annealing_steps: 20000  # Number of steps to anneal KL weight from 0 to kl_weight
+    kl_free_bits: 0.25  # Free bits per latent dimension (in nats)
