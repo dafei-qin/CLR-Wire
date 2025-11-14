@@ -1,5 +1,6 @@
 import sys
 import json
+import os
 from pathlib import Path
 from typing import Dict, Any
 
@@ -112,7 +113,11 @@ _resampled_face = None
 
 def load_model_and_dataset(path_file: str, model_path: str, num_surfaces=1000):
     global _dataset, _model, _max_idx
-    _dataset = dataset_bspline(path_file=path_file, num_surfaces=num_surfaces)
+    # If path_file is a directory, use it as a data_dir_override; otherwise treat it as a file list.
+    if os.path.isdir(path_file):
+        _dataset = dataset_bspline(path_file="", data_dir_override=path_file, num_surfaces=num_surfaces)
+    else:
+        _dataset = dataset_bspline(path_file=path_file, num_surfaces=num_surfaces)
     _max_idx = len(_dataset) - 1
     _model = BSplineVAE()
     checkpoint = torch.load(model_path, map_location="cpu")
@@ -615,7 +620,7 @@ def callback():
 
 if __name__ == "__main__":
     if len(sys.argv) != 4:
-        print("Usage: python src/tests/test_vae_bspline.py <path_file_list>  <ckpt_path> <num_surfaces>")
+        print("Usage: python src/tests/test_vae_bspline.py <path_file_or_dir> <ckpt_path> <num_surfaces>")
         sys.exit(1)
 
     load_model_and_dataset(sys.argv[1], sys.argv[2], int(sys.argv[3]))
