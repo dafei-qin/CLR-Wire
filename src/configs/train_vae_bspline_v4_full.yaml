@@ -30,6 +30,10 @@ data:
 model:
     name: vae_bspline_v4
     mults_dim: 128
+    max_num_u_knots: 64
+    max_num_v_knots: 32
+    max_num_u_poles: 64
+    max_num_v_poles: 32
     checkpoint_folder: checkpoints/train_1113_bspline_4_transdec_full
     checkpoint_file_name: model-20.pt
 

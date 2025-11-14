@@ -31,6 +31,10 @@ model:
     name: vae_bspline
     trainer_name: vae_bspline_v2
     mults_dim: 128
+    max_num_u_knots: 64
+    max_num_v_knots: 32
+    max_num_u_poles: 64
+    max_num_v_poles: 32
     checkpoint_folder: checkpoints/train_1112_bspline_vae_no_var
     checkpoint_file_name: model-06.pt
 
