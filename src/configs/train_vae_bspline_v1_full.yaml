@@ -27,6 +27,10 @@ data:
 
 model:
     mults_dim: 64
+    max_num_u_knots: 64
+    max_num_v_knots: 32
+    max_num_u_poles: 64
+    max_num_v_poles: 32
     checkpoint_folder: checkpoints/train_1108_bspline_1_meta_after_fuser_wo_attn_mults_dim_64
     checkpoint_file_name: model-20.pt
 

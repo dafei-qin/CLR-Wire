@@ -63,12 +63,21 @@ if transform is None:
     transform = None
 
 
-train_dataset = dataset_bspline(path_file=args.data.train_file, data_dir_override=args.data.train_data_dir_override, num_surfaces=args.data.train_num)
+train_dataset = dataset_bspline(
+    path_file=args.data.train_file, data_dir_override=args.data.train_data_dir_override, num_surfaces=args.data.train_num,
+    max_num_u_knots=args.model.max_num_u_knots, max_num_v_knots=args.model.max_num_v_knots, max_num_u_poles=args.model.max_num_u_poles, max_num_v_poles=args.model.max_num_v_poles
+    )
 
-val_dataset = dataset_bspline(path_file=args.data.val_file, data_dir_override=args.data.val_data_dir_override, num_surfaces=args.data.val_num)
+val_dataset = dataset_bspline(
+    path_file=args.data.val_file, data_dir_override=args.data.val_data_dir_override, num_surfaces=args.data.val_num,
+    max_num_u_knots=args.model.max_num_u_knots, max_num_v_knots=args.model.max_num_v_knots, max_num_u_poles=args.model.max_num_u_poles, max_num_v_poles=args.model.max_num_v_poles
+    )
 
 model = BSplineVAE(
-    
+    max_num_u_knots=args.model.max_num_u_knots,
+    max_num_v_knots=args.model.max_num_v_knots,
+    max_num_u_poles=args.model.max_num_u_poles,
+    max_num_v_poles=args.model.max_num_v_poles,
 )
 
 epochs = args.epochs
