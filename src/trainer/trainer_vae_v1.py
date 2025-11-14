@@ -229,10 +229,12 @@ class Trainer_vae_v1(BaseTrainer):
 
                 for _ in range(num_val_batches):
                     with self.accelerator.autocast(), torch.no_grad():
-                        forward_kwargs = self.next_data_to_forward_kwargs(self.val_dl_iter)
-                        params_padded, surface_type, masks = forward_kwargs
+                        params_padded, surface_type, masks, shifts_padded, rotations_padded, scales_padded = forward_kwargs
                         params_padded = params_padded[masks.bool()] 
                         surface_type = surface_type[masks.bool()]
+                        shifts_padded = shifts_padded[masks.bool()]
+                        rotations_padded = rotations_padded[masks.bool()]
+                        scales_padded = scales_padded[masks.bool()]
 
                         params_padded = params_padded.to(device)
                         surface_type = surface_type.to(device)
