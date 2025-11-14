@@ -123,15 +123,24 @@ class dataset_bspline(Dataset):
 
 
 if __name__ == '__main__':
-    dataset = dataset_bspline(data_path='/home/qindafei/CAD/data/logan_bspline/0/')
+    from tqdm import tqdm
+    dataset = dataset_bspline(path_file = "assets/all_bspline_paths.txt")
 
-    def print_knots_mults(index):
-        u_knots_list, v_knots_list, u_mults_list, v_mults_list, poles, valid = dataset[index]
-        u_knots_list = np.insert(u_knots_list, 0, 0)
-        v_knots_list = np.insert(v_knots_list, 0, 0)
-        U_info = np.stack([u_knots_list, u_mults_list])
-        V_info = np.stack([v_knots_list, v_mults_list])
-        print(f"U_info: {U_info}")
-        print(f"V_info: {V_info}")
+    # def print_knots_mults(index):
+    #     u_knots_list, v_knots_list, u_mults_list, v_mults_list, poles, valid = dataset[index]
+    #     u_knots_list = np.insert(u_knots_list, 0, 0)
+    #     v_knots_list = np.insert(v_knots_list, 0, 0)
+    #     U_info = np.stack([u_knots_list, u_mults_list])
+    #     V_info = np.stack([v_knots_list, v_mults_list])
+    #     print(f"U_info: {U_info}")
+    #     print(f"V_info: {V_info}")
     print(len(dataset))
+    counter = 0
+    
+    for i in tqdm(range(len(dataset))):
+        u_degree, v_degree, num_poles_u, num_poles_v, num_knots_u, num_knots_v, is_u_periodic, is_v_periodic, u_knots_list, v_knots_list, u_mults_list, v_mults_list, poles, valid = dataset[i]
+        # print(poles[..., 3].max())
+        if poles[..., 3].max() > 1 + 1e-3:
+            counter += 1
 
+    print(counter, '/', len(dataset))
