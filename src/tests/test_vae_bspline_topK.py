@@ -267,6 +267,16 @@ def evaluate_dataset(
         se_w = se[..., 3] * mask_4d.squeeze(-1)  # [B, H, W]
         loss_w = se_w.view(B, -1).sum(dim=1) / valid_count  # [B]
 
+        # Relative losses: mean of (se / |gt|) over valid items
+        eps = 1e-12
+        gt_abs_xyz = poles[..., :3].abs()  # [B, H, W, 3]
+        gt_abs_w = poles[..., 3].abs()     # [B, H, W]
+        valid_count_xyz = (valid_count * 3).clamp(min=1)  # [B]
+        se_xyz_rel = (se[..., :3] / (gt_abs_xyz + eps)) * mask_4d[..., :3]  # [B, H, W, 3]
+        se_w_rel = (se[..., 3] / (gt_abs_w + eps)) * mask_2d               # [B, H, W]
+        loss_rel_xyz = se_xyz_rel.view(B, -1).sum(dim=1) / valid_count_xyz  # [B]
+        loss_rel_w = se_w_rel.view(B, -1).sum(dim=1) / valid_count          # [B]
+
         # Store rows per valid sample
         for b, ds_idx in enumerate(valid_indices):
             surface_path = ds.data_names[ds_idx].strip() if hasattr(ds, "data_names") else str(ds_idx)
@@ -281,6 +291,8 @@ def evaluate_dataset(
                 "num_poles_v": to_python_int(num_poles_v[b, 0]),
                 "loss_poles_mean_xyz": float(loss_xyz[b].item()),
                 "loss_poles_w": float(loss_w[b].item()),
+                "loss_poles_rel_xyz": float(loss_rel_xyz[b].item()),
+                "loss_poles_rel_w": float(loss_rel_w[b].item()),
                 "surface_path": surface_path,
             }
             rows.append(row)
@@ -291,6 +303,7 @@ def evaluate_dataset(
         "num_knots_u", "num_knots_v",
         "num_poles_u", "num_poles_v",
         "loss_poles_mean_xyz", "loss_poles_w",
+        "loss_poles_rel_xyz", "loss_poles_rel_w",
         "surface_path",
     ])
 
@@ -586,6 +599,32 @@ def plot_summaries(df: pd.DataFrame, out_dir: Path):
     plot_class_mean_p90_counts_by_periodic("num_poles_u", "peri_u", "num_poles_u", "loss_poles_mean_xyz", "class_mean_p90_counts_xyz_vs_num_poles_u_by_peri_u")
     plot_class_mean_p90_counts_by_periodic("num_knots_v", "peri_v", "num_knots_v", "loss_poles_mean_xyz", "class_mean_p90_counts_xyz_vs_num_knots_v_by_peri_v")
     plot_class_mean_p90_counts_by_periodic("num_poles_v", "peri_v", "num_poles_v", "loss_poles_mean_xyz", "class_mean_p90_counts_xyz_vs_num_poles_v_by_peri_v")
+
+    # 6) Relative losses vs num_poles_u / num_poles_v (plot xyz_relative and w_relative in same figure)
+    def plot_rel_vs_num_poles(count_col: str, label: str, filename_suffix: str):
+        if count_col not in df.columns:
+            return
+        agg_xyz = df.groupby(count_col)["loss_poles_rel_xyz"].mean().reset_index().sort_values(count_col)
+        agg_w = df.groupby(count_col)["loss_poles_rel_w"].mean().reset_index().sort_values(count_col)
+        if agg_xyz.empty or agg_w.empty:
+            return
+        x = agg_xyz[count_col].values
+        y_xyz = agg_xyz["loss_poles_rel_xyz"].values
+        y_w = agg_w["loss_poles_rel_w"].values
+        plt.figure(figsize=(7, 4))
+        plt.plot(x, y_xyz, "-o", label="rel_xyz (mean)")
+        plt.plot(x, y_w, "-s", label="rel_w (mean)")
+        plt.xlabel(label)
+        plt.ylabel("Relative Loss (mean of se/|gt|)")
+        plt.title(f"Relative Loss vs {label}")
+        plt.grid(True, ls="--", alpha=0.4)
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(out_dir / f"{filename_suffix}.png", dpi=200)
+        plt.close()
+
+    plot_rel_vs_num_poles("num_poles_u", "num_poles_u", "rel_xyz_w_vs_num_poles_u")
+    plot_rel_vs_num_poles("num_poles_v", "num_poles_v", "rel_xyz_w_vs_num_poles_v")
 
 
 def main():
