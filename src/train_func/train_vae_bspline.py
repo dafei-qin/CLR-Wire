@@ -36,7 +36,7 @@ elif model_name == "vae_bspline_v5":
 else:
     print('Use the default model: vae_bspline_v1')
     from src.vae.vae_bspline import BSplineVAE as BSplineVAE
-
+     
 
 if args.model.trainer_name == 'vae_bspline_v2':
     print('Use the trainer: vae_bspline_v2')
