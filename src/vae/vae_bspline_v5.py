@@ -833,7 +833,7 @@ class BSplineVAE(nn.Module):
         pred_knots_num_u = torch.argmax(knots_num_logits_u, dim=-1)  # (B, 1)
         pred_knots_num_v = torch.argmax(knots_num_logits_v, dim=-1)  # (B, 1)
 
-        knots_u, knots_v, mults_logits_u, mults_logits_v = self.decode_knots_mults(z, pred_knots_num_u, pred_knots_num_v)
+        knots_u, knots_v, knots_tokens_u, knots_tokens_v, knots_padding_mask_u, knots_padding_mask_v, mults_logits_u, mults_logits_v = self.decode_knots_mults(z, pred_knots_num_u, pred_knots_num_v)
 
         pred_mults_u = torch.argmax(mults_logits_u, dim=-1) + 1 # (B, max_num_u_knots)
         pred_mults_v = torch.argmax(mults_logits_v, dim=-1) + 1 # (B, max_num_v_knots)
