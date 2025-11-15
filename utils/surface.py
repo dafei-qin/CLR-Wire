@@ -315,7 +315,7 @@ def build_bspline_surface(data: dict, tol=1e-1, normalize_knots=False, normalize
     poles_data = data["poles"]
     # print(np.array(poles_data).shape)
     if normalize_surface:
-        # Scale the surface to have maximum bbox = 1, keep the xyz ratio
+        # Scale the surface to have maximum bbox = 1, keep the xyz ratio, 
         poles_data = np.array(poles_data)
         poles_list = poles_data.reshape(-1, 4)
         poles_data_min = poles_list.min(axis=0)

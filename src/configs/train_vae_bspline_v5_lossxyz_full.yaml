@@ -31,7 +31,7 @@ data:
 model:
     name: vae_bspline_v5
     trainer_name: vae_bspline_v2
-    mults_dim: 128
+    mults_dim: 16
     max_num_u_knots: 32
     max_num_v_knots: 16
     max_num_u_poles: 32
