@@ -101,6 +101,7 @@ trainer = Trainer_vae_bspline(
     loss_recon_weight=args.loss.recon_weight,
     loss_cls_weight=args.loss.cls_weight,
     loss_kl_weight=args.loss.kl_weight,
+    loss_poles_xyz_weight=args.loss.poles_xyz_weight,
     kl_annealing_steps=getattr(args.loss, 'kl_annealing_steps', 0),
     kl_free_bits=getattr(args.loss, 'kl_free_bits', 0.0),
     grad_accum_every=args.grad_accum_every,
