@@ -41,6 +41,7 @@ class Trainer_vae_bspline(BaseTrainer):
         val_num_batches: int = 10,
         accelerator_kwargs: dict = dict(),
         loss_recon_weight: float = 1.0,
+        loss_poles_xyz_weight: float = 10.0,
         loss_cls_weight: float = 1.0,
         loss_kl_weight: float = 1.0,
         kl_annealing_steps: int = 0,
@@ -82,6 +83,7 @@ class Trainer_vae_bspline(BaseTrainer):
 
 
         self.loss_recon_weight = loss_recon_weight
+        self.loss_poles_xyz_weight = loss_poles_xyz_weight
         self.loss_cls_weight = loss_cls_weight
         self.loss_kl_weight = loss_kl_weight
         
@@ -247,8 +249,9 @@ class Trainer_vae_bspline(BaseTrainer):
                     
                     mask_poles_2d = mask_poles_u.unsqueeze(-1) & mask_poles_v.unsqueeze(-2)  # (B, H, W)
                     mask_poles_4d = mask_poles_2d.unsqueeze(-1)  # (B, H, W, 1) → broadcast to 4 coords
-                    loss_poles = (loss_poles * mask_poles_4d).sum() / (mask_poles_4d.sum().clamp(min=1))
-                    
+                    loss_poles_xyz = (loss_poles[..., :3] * mask_poles_4d).sum() / (mask_poles_4d.sum().clamp(min=1))
+                    loss_poles_w = (loss_poles[..., 3:] * mask_poles_4d).sum() / (mask_poles_4d.sum().clamp(min=1))
+                    loss_poles = loss_poles_xyz * self.loss_poles_xyz_weight + loss_poles_w
                     loss_recon = loss_knots_u + loss_knots_v + loss_poles
                     loss_cls = loss_deg_u + loss_deg_v + loss_peri_u + loss_peri_v + loss_knots_num_u + loss_knots_num_v + loss_mults_u + loss_mults_v
                     

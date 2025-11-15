@@ -2,7 +2,8 @@ import sys
 import json
 import os
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
+from types import SimpleNamespace
 
 import torch
 import numpy as np
@@ -14,8 +15,28 @@ project_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(project_root))
 
 from src.dataset.dataset_bspline import dataset_bspline
-from src.vae.vae_bspline import BSplineVAE
+from src.utils.config import NestedDictToClass, load_config
+
+
+
+
 from utils.surface import visualize_json_interset
+
+
+def normalize_path(path_value: Optional[str]) -> str:
+    """
+    Convert a potentially relative path to an absolute string path.
+    Returns empty string if the input is None or empty.
+    """
+    if path_value is None:
+        return ""
+    path_str = str(path_value).strip()
+    if not path_str:
+        return ""
+    path = Path(path_str)
+    if not path.is_absolute():
+        path = project_root / path
+    return str(path)
 
 
 def to_python_int(x: torch.Tensor) -> int:
@@ -111,15 +132,34 @@ _rec_face = None
 _resampled_face = None
 
 
-def load_model_and_dataset(path_file: str, model_path: str, num_surfaces=1000):
+def load_model_and_dataset(
+    path_file: str,
+    model_path: str,
+    num_surfaces: int = 1000,
+    dataset_kwargs: Optional[Dict[str, Any]] = None,
+    model_kwargs: Optional[Dict[str, Any]] = None,
+):
+    """
+    Load dataset and corresponding model weights. When dataset_kwargs/model_kwargs are provided,
+    they fully control initialization; otherwise fall back to legacy path-based loading.
+    """
     global _dataset, _model, _max_idx
-    # If path_file is a directory, use it as a data_dir_override; otherwise treat it as a file list.
-    if os.path.isdir(path_file):
-        _dataset = dataset_bspline(path_file="", data_dir_override=path_file, num_surfaces=num_surfaces)
+
+    if dataset_kwargs is not None:
+        _dataset = dataset_bspline(**dataset_kwargs)
     else:
-        _dataset = dataset_bspline(path_file=path_file, num_surfaces=num_surfaces)
+        # Legacy behavior using direct path arguments.
+        if os.path.isdir(path_file):
+            _dataset = dataset_bspline(path_file="", data_dir_override=path_file, num_surfaces=num_surfaces)
+        else:
+            _dataset = dataset_bspline(path_file=path_file, num_surfaces=num_surfaces)
+
     _max_idx = len(_dataset) - 1
-    _model = BSplineVAE()
+
+    model_kwargs = model_kwargs or {}
+    print(model_kwargs)
+
+    _model = BSplineVAE(**model_kwargs)
     checkpoint = torch.load(model_path, map_location="cpu")
     if 'ema_model' in checkpoint:
         ema_model = checkpoint['ema']
@@ -619,11 +659,129 @@ def callback():
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 4:
-        print("Usage: python src/tests/test_vae_bspline.py <path_file_or_dir> <ckpt_path> <num_surfaces>")
-        sys.exit(1)
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '--config',
+        type=str,
+        default='src/configs/train_vae_bspline_v1_full.yaml',
+        help='Path to the YAML config file (defaults to train_vae_bspline_v1_full).',
+    )
+    parser.add_argument('--model_name', type=str, default=None, help='Override model name from config.')
+    parser.add_argument('--ckpt_path', type=str, default=None, help='Override checkpoint file path.')
+    parser.add_argument('--num_surfaces', type=int, default=None, help='Override number of surfaces to visualize.')
+    parser.add_argument(
+        '--path_file_or_dir',
+        type=str,
+        default=None,
+        help='Override dataset source (text file of paths or directory containing .npy files).',
+    )
+    args = parser.parse_args()
+    # if len(sys.argv) != 4:
+    #     print("Usage: python src/tests/test_vae_bspline.py <path_file_or_dir> <ckpt_path> <num_surfaces>")
+    #     sys.exit(1)
 
-    load_model_and_dataset(sys.argv[1], sys.argv[2], int(sys.argv[3]))
+    cfg = load_config(args.config) if args.config else {}
+    cfg_args = NestedDictToClass(cfg) if cfg else SimpleNamespace()
+
+    data_cfg = getattr(cfg_args, "data", SimpleNamespace())
+    model_cfg = getattr(cfg_args, "model", SimpleNamespace())
+
+    model_name =  getattr(model_cfg, "name", "vae_bspline_v1")
+    if model_name == 'vae_bspline_v1':
+        from src.vae.vae_bspline import BSplineVAE as BSplineVAE
+        print('Use the model: vae_bspline_v1')
+    elif model_name == 'vae_bspline_v3':
+        from src.vae.vae_bspline_v3 import BSplineVAE as BSplineVAE
+        print('Use the model: vae_bspline_v3')
+    elif model_name == "vae_bspline_v4":
+        print('Use the model: vae_bspline_v4')
+
+        from src.vae.vae_bspline_v4 import BSplineVAE as BSplineVAE
+    elif model_name == "vae_bspline_v5":
+        print('Use the model: vae_bspline_v5')
+
+        from src.vae.vae_bspline_v5 import BSplineVAE as BSplineVAE
+    else:
+        print('Use the default model: vae_bspline_v1')
+        from src.vae.vae_bspline import BSplineVAE as BSplineVAE
+
+    def _getattr(obj, attr, default=None):
+        return getattr(obj, attr, default) if obj is not None else default
+
+    num_surfaces_cfg = _getattr(data_cfg, "val_num", _getattr(data_cfg, "train_num", -1))
+    num_surfaces = args.num_surfaces if args.num_surfaces is not None else (num_surfaces_cfg if num_surfaces_cfg is not None else -1)
+
+    default_path_file = _getattr(data_cfg, "val_file", _getattr(data_cfg, "train_file", ""))
+    default_data_dir = _getattr(data_cfg, "val_data_dir_override", _getattr(data_cfg, "train_data_dir_override", ""))
+
+    dataset_path_override = args.path_file_or_dir
+    dataset_path_file = ""
+    dataset_data_dir = ""
+
+    if dataset_path_override:
+        resolved_override = normalize_path(dataset_path_override)
+        if os.path.isdir(resolved_override):
+            dataset_data_dir = resolved_override
+        else:
+            dataset_path_file = resolved_override
+    else:
+        default_dir_resolved = normalize_path(default_data_dir)
+        default_path_resolved = normalize_path(default_path_file)
+        if default_dir_resolved:
+            dataset_data_dir = default_dir_resolved
+        elif default_path_resolved:
+            dataset_path_file = default_path_resolved
+
+    if not dataset_path_file and not dataset_data_dir:
+        raise ValueError("Unable to determine dataset source. Provide it via the config file or --path_file_or_dir.")
+
+    dataset_kwargs = {
+        "path_file": dataset_path_file,
+        "data_dir_override": dataset_data_dir,
+        "num_surfaces": num_surfaces,
+        "max_num_u_knots": _getattr(model_cfg, "max_num_u_knots", 64),
+        "max_num_v_knots": _getattr(model_cfg, "max_num_v_knots", 32),
+        "max_num_u_poles": _getattr(model_cfg, "max_num_u_poles", 64),
+        "max_num_v_poles": _getattr(model_cfg, "max_num_v_poles", 32),
+        "max_degree": _getattr(model_cfg, "max_degree", 3),
+    }
+
+    model_kwarg_keys = [
+        "max_degree",
+        "embd_dim",
+        "num_query",
+        "mults_dim",
+        "max_num_u_knots",
+        "max_num_v_knots",
+        "max_num_u_poles",
+        "max_num_v_poles",
+    ]
+    model_kwargs = {key: getattr(model_cfg, key) for key in model_kwarg_keys if hasattr(model_cfg, key)}
+
+    # Ensure the geometric limits align with the dataset padding assumptions.
+    for dim_key in ["max_degree", "max_num_u_knots", "max_num_v_knots", "max_num_u_poles", "max_num_v_poles"]:
+        if dim_key not in model_kwargs and dim_key in dataset_kwargs:
+            model_kwargs[dim_key] = dataset_kwargs[dim_key]
+
+    ckpt_path = normalize_path(args.ckpt_path) if args.ckpt_path else ""
+    if not ckpt_path:
+        ckpt_folder = _getattr(model_cfg, "checkpoint_folder", "")
+        ckpt_file_name = _getattr(model_cfg, "checkpoint_file_name", "")
+        if ckpt_folder or ckpt_file_name:
+            combined_ckpt = os.path.join(str(ckpt_folder), ckpt_file_name) if ckpt_folder and ckpt_file_name else (ckpt_folder or ckpt_file_name)
+            ckpt_path = normalize_path(combined_ckpt)
+
+    if not ckpt_path:
+        raise ValueError("Checkpoint path must be provided via the config file or --ckpt_path.")
+
+    load_model_and_dataset(
+        dataset_kwargs["path_file"],
+        ckpt_path,
+        num_surfaces=num_surfaces,
+        dataset_kwargs=dataset_kwargs,
+        model_kwargs=model_kwargs,
+    )
 
     ps.init()
     _gt_group = ps.create_group("GT Surfaces")

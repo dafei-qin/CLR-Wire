@@ -56,13 +56,13 @@ class dataset_bspline(Dataset):
             valid = False
         if v_degree > self.max_degree:
             valid = False
-        if num_poles_u > self.max_num_u_poles:
+        if num_poles_u >= self.max_num_u_poles:
             valid = False
-        if num_poles_v > self.max_num_v_poles:
+        if num_poles_v >= self.max_num_v_poles:
             valid = False
-        if num_knots_u > self.max_num_u_knots:
+        if num_knots_u >= self.max_num_u_knots:
             valid = False
-        if num_knots_v > self.max_num_v_knots:
+        if num_knots_v >= self.max_num_v_knots:
             valid = False
 
         return u_degree, v_degree, num_poles_u, num_poles_v, num_knots_u, num_knots_v, is_u_periodic, is_v_periodic, u_knots_list, v_knots_list, u_mults_list, v_mults_list, poles, valid
@@ -101,7 +101,7 @@ class dataset_bspline(Dataset):
         data_path = self.data_names[idx]
 
         u_degree, v_degree, num_poles_u, num_poles_v, num_knots_u, num_knots_v, is_u_periodic, is_v_periodic, u_knots_list, v_knots_list, u_mults_list, v_mults_list, poles, valid = self.load_data(data_path)
-
+        poles[..., 3:] = poles[..., 3:] / min(poles[..., 3:].max(), 1)
         u_knots_list = self.normalize_knots(u_knots_list) 
         v_knots_list = self.normalize_knots(v_knots_list)
         poles, length = self.normalize_poles(poles)

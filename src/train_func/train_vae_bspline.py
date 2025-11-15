@@ -23,10 +23,10 @@ args = NestedDictToClass(cfg)
 
 model_name = args.model.name
 
-if args.model.name == 'vae_bspline_v1':
+if model_name == 'vae_bspline_v1':
     from src.vae.vae_bspline import BSplineVAE as BSplineVAE
     print('Use the model: vae_bspline_v1')
-elif args.model.name == 'vae_bspline_v3':
+elif model_name == 'vae_bspline_v3':
     from src.vae.vae_bspline_v3 import BSplineVAE as BSplineVAE
     print('Use the model: vae_bspline_v3')
 elif model_name == "vae_bspline_v4":
@@ -80,6 +80,7 @@ model = BSplineVAE(
     max_num_v_knots=args.model.max_num_v_knots,
     max_num_u_poles=args.model.max_num_u_poles,
     max_num_v_poles=args.model.max_num_v_poles,
+    mults_dim=args.model.mults_dim,
 )
 
 epochs = args.epochs
@@ -101,6 +102,7 @@ trainer = Trainer_vae_bspline(
     loss_recon_weight=args.loss.recon_weight,
     loss_cls_weight=args.loss.cls_weight,
     loss_kl_weight=args.loss.kl_weight,
+    loss_poles_xyz_weight=args.loss.poles_xyz_weight,
     kl_annealing_steps=getattr(args.loss, 'kl_annealing_steps', 0),
     kl_free_bits=getattr(args.loss, 'kl_free_bits', 0.0),
     grad_accum_every=args.grad_accum_every,
