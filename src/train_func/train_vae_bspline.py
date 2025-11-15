@@ -23,10 +23,10 @@ args = NestedDictToClass(cfg)
 
 model_name = args.model.name
 
-if args.model.name == 'vae_bspline_v1':
+if model_name == 'vae_bspline_v1':
     from src.vae.vae_bspline import BSplineVAE as BSplineVAE
     print('Use the model: vae_bspline_v1')
-elif args.model.name == 'vae_bspline_v3':
+elif model_name == 'vae_bspline_v3':
     from src.vae.vae_bspline_v3 import BSplineVAE as BSplineVAE
     print('Use the model: vae_bspline_v3')
 elif model_name == "vae_bspline_v4":
@@ -80,6 +80,7 @@ model = BSplineVAE(
     max_num_v_knots=args.model.max_num_v_knots,
     max_num_u_poles=args.model.max_num_u_poles,
     max_num_v_poles=args.model.max_num_v_poles,
+    mults_dim=args.model.mults_dim,
 )
 
 epochs = args.epochs
