@@ -1,7 +1,9 @@
 import sys
+import os
 import argparse
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional, Type
+from types import SimpleNamespace
 
 import torch
 import numpy as np
@@ -14,16 +16,32 @@ project_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(project_root))
 
 from src.dataset.dataset_bspline import dataset_bspline
-from src.vae.vae_bspline import BSplineVAE
 from torch.utils.data import DataLoader
+from src.utils.config import NestedDictToClass, load_config
 
 
 def to_python_int(x: torch.Tensor) -> int:
     return int(x.item()) if isinstance(x, torch.Tensor) else int(x)
 
 
-def load_model(ckpt_path: str, device: torch.device) -> BSplineVAE:
-    model = BSplineVAE().to(device)
+def normalize_path(path_value: Optional[str]) -> str:
+    """
+    Convert a potentially relative path to an absolute string path.
+    Returns empty string if the input is None or empty.
+    """
+    if path_value is None:
+        return ""
+    path_str = str(path_value).strip()
+    if not path_str:
+        return ""
+    path = Path(path_str)
+    if not path.is_absolute():
+        path = project_root / path
+    return str(path)
+
+
+def load_model(ckpt_path: str, device: torch.device, model_class: Type, model_kwargs: Optional[Dict[str, Any]] = None):
+    model = model_class(**(model_kwargs or {})).to(device)
     checkpoint = torch.load(ckpt_path, map_location=device)
     state = None
     # Robustly handle a few common checkpoint layouts
@@ -120,16 +138,17 @@ def sample_to_batch_tensors(sample) -> Any:
 
 @torch.no_grad()
 def evaluate_dataset(
-    path_file_list: str,
+    dataset_kwargs: Dict[str, Any],
     ckpt_path: str,
-    num_surfaces: int,
     device: torch.device,
+    model_class: Type,
+    model_kwargs: Optional[Dict[str, Any]] = None,
     topk: int = 0,
     batch_size: int = 16,
     num_workers: int = 0,
 ) -> pd.DataFrame:
-    ds = dataset_bspline(path_file=path_file_list, num_surfaces=num_surfaces)
-    model = load_model(ckpt_path, device)
+    ds = dataset_bspline(**dataset_kwargs)
+    model = load_model(ckpt_path, device, model_class=model_class, model_kwargs=model_kwargs or {})
     rows: List[Dict[str, Any]] = []
 
     dl = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=False)
@@ -268,7 +287,7 @@ def evaluate_dataset(
         loss_w = se_w.view(B, -1).sum(dim=1) / valid_count  # [B]
 
         # Relative losses: mean of (se / |gt|) over valid items
-        eps = 1e-12
+        eps = 1e-6
         gt_abs_xyz = poles[..., :3].abs()  # [B, H, W, 3]
         gt_abs_w = poles[..., 3].abs()     # [B, H, W]
         valid_count_xyz = (valid_count * 3).clamp(min=1)  # [B]
@@ -612,8 +631,12 @@ def plot_summaries(df: pd.DataFrame, out_dir: Path):
         y_xyz = agg_xyz["loss_poles_rel_xyz"].values
         y_w = agg_w["loss_poles_rel_w"].values
         plt.figure(figsize=(7, 4))
-        plt.plot(x, y_xyz, "-o", label="rel_xyz (mean)")
-        plt.plot(x, y_w, "-s", label="rel_w (mean)")
+        # Replace non-positive values with NaN to safely use log scale
+        y_xyz_plot = np.where(y_xyz > 0, y_xyz, np.nan)
+        y_w_plot = np.where(y_w > 0, y_w, np.nan)
+        plt.plot(x, y_xyz_plot, "-o", label="rel_xyz (mean)")
+        plt.plot(x, y_w_plot, "-s", label="rel_w (mean)")
+        plt.yscale("log")
         plt.xlabel(label)
         plt.ylabel("Relative Loss (mean of se/|gt|)")
         plt.title(f"Relative Loss vs {label}")
@@ -628,10 +651,22 @@ def plot_summaries(df: pd.DataFrame, out_dir: Path):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Evaluate BSplineVAE across a dataset and build distribution dataframe.")
-    parser.add_argument("path_file_list", type=str, help="Path to a text file listing .npy surfaces (one per line)")
-    parser.add_argument("ckpt_path", type=str, help="Path to model checkpoint")
-    parser.add_argument("num_surfaces", type=int, help="Number of surfaces to load (-1 for all)")
+    parser = argparse.ArgumentParser(description="Evaluate BSplineVAE across a dataset and build distribution dataframe (config-driven).")
+    parser.add_argument(
+        "--config",
+        type=str,
+        default="src/configs/train_vae_bspline_v1_full.yaml",
+        help="Path to the YAML config file (defaults to train_vae_bspline_v1_full).",
+    )
+    parser.add_argument("--model_name", type=str, default=None, help="Override model name from config.")
+    parser.add_argument("--ckpt_path", type=str, default=None, help="Override checkpoint file path.")
+    parser.add_argument("--num_surfaces", type=int, default=None, help="Override number of surfaces to evaluate.")
+    parser.add_argument(
+        "--path_file_or_dir",
+        type=str,
+        default=None,
+        help="Override dataset source (text file of paths or directory containing .npy files).",
+    )
     parser.add_argument("--device", type=str,  default="cpu",  help="Device to run on")
     parser.add_argument("--output_csv", type=str, default="", help="Path to save CSV (default: alongside checkpoint)")
     parser.add_argument("--topk", type=int, default=0, help="Optionally print top-K by loss_poles_mean_xyz")
@@ -639,13 +674,109 @@ def main():
     parser.add_argument("--num_workers", type=int, default=0, help="Number of DataLoader workers")
     args = parser.parse_args()
 
-    # device = torch.device("cuda" if args.device == "cuda" and torch.cuda.is_available() else "cpu")
+    # Load config
+    cfg = load_config(args.config) if args.config else {}
+    cfg_args = NestedDictToClass(cfg) if cfg else SimpleNamespace()
+
+    data_cfg = getattr(cfg_args, "data", SimpleNamespace())
+    model_cfg = getattr(cfg_args, "model", SimpleNamespace())
+
+    def _getattr(obj, attr, default=None):
+        return getattr(obj, attr, default) if obj is not None else default
+
+    # Resolve model class by name
+    model_name = args.model_name if args.model_name is not None else _getattr(model_cfg, "name", "vae_bspline_v1")
+    if model_name == 'vae_bspline_v1':
+        from src.vae.vae_bspline import BSplineVAE as ModelClass
+        print('Use the model: vae_bspline_v1')
+    elif model_name == 'vae_bspline_v3':
+        from src.vae.vae_bspline_v3 import BSplineVAE as ModelClass
+        print('Use the model: vae_bspline_v3')
+    elif model_name == "vae_bspline_v4":
+        from src.vae.vae_bspline_v4 import BSplineVAE as ModelClass
+        print('Use the model: vae_bspline_v4')
+    elif model_name == "vae_bspline_v5":
+        from src.vae.vae_bspline_v5 import BSplineVAE as ModelClass
+        print('Use the model: vae_bspline_v5')
+    else:
+        from src.vae.vae_bspline import BSplineVAE as ModelClass
+        print('Use the default model: vae_bspline_v1')
+
+    # Determine number of surfaces
+    num_surfaces_cfg = _getattr(data_cfg, "val_num", _getattr(data_cfg, "train_num", -1))
+    num_surfaces = args.num_surfaces if args.num_surfaces is not None else (num_surfaces_cfg if num_surfaces_cfg is not None else -1)
+
+    # Resolve dataset source (file list or directory)
+    default_path_file = _getattr(data_cfg, "val_file", _getattr(data_cfg, "train_file", ""))
+    default_data_dir = _getattr(data_cfg, "val_data_dir_override", _getattr(data_cfg, "train_data_dir_override", ""))
+
+    dataset_path_override = args.path_file_or_dir
+    dataset_path_file = ""
+    dataset_data_dir = ""
+
+    if dataset_path_override:
+        resolved_override = normalize_path(dataset_path_override)
+        if os.path.isdir(resolved_override):
+            dataset_data_dir = resolved_override
+        else:
+            dataset_path_file = resolved_override
+    else:
+        default_dir_resolved = normalize_path(default_data_dir)
+        default_path_resolved = normalize_path(default_path_file)
+        if default_dir_resolved:
+            dataset_data_dir = default_dir_resolved
+        elif default_path_resolved:
+            dataset_path_file = default_path_resolved
+
+    if not dataset_path_file and not dataset_data_dir:
+        raise ValueError("Unable to determine dataset source. Provide it via the config file or --path_file_or_dir.")
+
+    # Build dataset kwargs (align geometry limits with model config)
+    dataset_kwargs: Dict[str, Any] = {
+        "path_file": dataset_path_file,
+        "data_dir_override": dataset_data_dir,
+        "num_surfaces": num_surfaces,
+        "max_num_u_knots": _getattr(model_cfg, "max_num_u_knots", 64),
+        "max_num_v_knots": _getattr(model_cfg, "max_num_v_knots", 32),
+        "max_num_u_poles": _getattr(model_cfg, "max_num_u_poles", 64),
+        "max_num_v_poles": _getattr(model_cfg, "max_num_v_poles", 32),
+        "max_degree": _getattr(model_cfg, "max_degree", 3),
+    }
+
+    # Prepare model kwargs
+    model_kwarg_keys = [
+        "max_degree",
+        "embd_dim",
+        "num_query",
+        "mults_dim",
+        "max_num_u_knots",
+        "max_num_v_knots",
+        "max_num_u_poles",
+        "max_num_v_poles",
+    ]
+    model_kwargs: Dict[str, Any] = {key: getattr(model_cfg, key) for key in model_kwarg_keys if hasattr(model_cfg, key)}
+    for dim_key in ["max_degree", "max_num_u_knots", "max_num_v_knots", "max_num_u_poles", "max_num_v_poles"]:
+        if dim_key not in model_kwargs and dim_key in dataset_kwargs:
+            model_kwargs[dim_key] = dataset_kwargs[dim_key]
+
+    # Resolve checkpoint path
+    ckpt_path = normalize_path(args.ckpt_path) if args.ckpt_path else ""
+    if not ckpt_path:
+        ckpt_folder = _getattr(model_cfg, "checkpoint_folder", "")
+        ckpt_file_name = _getattr(model_cfg, "checkpoint_file_name", "")
+        if ckpt_folder or ckpt_file_name:
+            combined_ckpt = os.path.join(str(ckpt_folder), ckpt_file_name) if ckpt_folder and ckpt_file_name else (ckpt_folder or ckpt_file_name)
+            ckpt_path = normalize_path(combined_ckpt)
+    if not ckpt_path:
+        raise ValueError("Checkpoint path must be provided via the config file or --ckpt_path.")
+
     device = args.device
     df = evaluate_dataset(
-        path_file_list=args.path_file_list,
-        ckpt_path=args.ckpt_path,
-        num_surfaces=args.num_surfaces,
+        dataset_kwargs=dataset_kwargs,
+        ckpt_path=ckpt_path,
         device=device,
+        model_class=ModelClass,
+        model_kwargs=model_kwargs,
         topk=args.topk,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
@@ -654,7 +785,7 @@ def main():
     if args.output_csv:
         out_csv = Path(args.output_csv)
     else:
-        ckpt_p = Path(args.ckpt_path)
+        ckpt_p = Path(ckpt_path)
         out_csv = ckpt_p.with_suffix("").with_name(ckpt_p.stem + "_bspline_eval.csv")
 
     out_csv.parent.mkdir(parents=True, exist_ok=True)
