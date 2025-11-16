@@ -29,7 +29,7 @@ data:
     val_num: -1
     weighted_sampling:
         enabled: true
-        warmup_epochs: 0
+        warmup_epochs: 10
         alpha: 1.0
         beta: 0.9
         eps: 1e-6
