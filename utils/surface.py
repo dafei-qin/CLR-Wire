@@ -45,6 +45,7 @@ import polyscope.imgui as psim
 # from freecad_visualize_json_pythonocc import _build_and_mesh_face_robustly_from_topods, extract_mesh_from_face
 from itertools import combinations
 from icecream import ic
+import traceback
 
 ic.enable()
 
@@ -466,7 +467,24 @@ def visualize_json_interset(cad_data, plot=True, plot_gui=True,tol=1e-2, ps_head
             occ_face, vertices, faces, attr_str = build_second_order_surface(face, tol=tol)
         elif surface_type == 'bspline_surface':
             # continue
-            occ_face, vertices, faces, attr_str = build_bspline_surface(face, tol=tol * 10, normalize_surface=False, normalize_knots=True)
+            try:
+                occ_face, vertices, faces, attr_str = build_bspline_surface(face, tol=tol * 10, normalize_surface=False, normalize_knots=True)
+            except Exception as exc:
+                header = (ps_header or "").lower()
+                if header.startswith("gt"):
+                    origin = "Ground Truth"
+                elif header.startswith("rec"):
+                    origin = "Reconstruction"
+                elif header.startswith("resampled"):
+                    origin = "Resampled"
+                else:
+                    origin = "Unknown Origin"
+                print(
+                    f"[{origin}] Failed to build bspline surface idx {surface_index}: "
+                    f"{exc.__class__.__name__}: {exc}"
+                )
+                traceback.print_exc()
+                continue
         else:
             continue
         if plot:    

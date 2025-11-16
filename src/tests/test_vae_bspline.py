@@ -117,6 +117,7 @@ def build_bspline_json(
 _dataset = None
 _model = None
 _current_idx = 0
+_current_filtered_idx = 0
 _max_idx = 0
 _gt_group = None
 _rec_group = None
@@ -130,6 +131,157 @@ _show_resampled = False
 _gt_face = None
 _rec_face = None
 _resampled_face = None
+_filtered_indices = []
+_index_metadata = []
+_filters = {}
+_filter_limits = {
+    "num_poles_u": {"min": 0, "max": 0},
+    "num_poles_v": {"min": 0, "max": 0},
+}
+
+
+def build_index_metadata():
+    """
+    Precompute metadata (periodicity & pole counts) for each dataset sample
+    to enable fast filtering inside the visualization UI.
+    """
+    global _index_metadata, _filter_limits
+
+    if _dataset is None:
+        _index_metadata = []
+        _filter_limits = {
+            "num_poles_u": {"min": 0, "max": 0},
+            "num_poles_v": {"min": 0, "max": 0},
+        }
+        return
+
+    _index_metadata = []
+    u_poles_values = []
+    v_poles_values = []
+
+    for idx in range(len(_dataset)):
+        sample = _dataset[idx]
+        valid = bool(sample[-1])
+        meta = {"valid": valid}
+
+        if valid:
+            num_poles_u = to_python_int(sample[2])
+            num_poles_v = to_python_int(sample[3])
+            is_u_periodic = to_python_bool(sample[6])
+            is_v_periodic = to_python_bool(sample[7])
+
+            meta.update(
+                {
+                    "num_poles_u": num_poles_u,
+                    "num_poles_v": num_poles_v,
+                    "is_u_periodic": is_u_periodic,
+                    "is_v_periodic": is_v_periodic,
+                }
+            )
+
+            u_poles_values.append(num_poles_u)
+            v_poles_values.append(num_poles_v)
+
+        _index_metadata.append(meta)
+
+    def _limits(values):
+        if not values:
+            return {"min": 0, "max": 0}
+        return {"min": int(min(values)), "max": int(max(values))}
+
+    _filter_limits = {
+        "num_poles_u": _limits(u_poles_values),
+        "num_poles_v": _limits(v_poles_values),
+    }
+
+
+def initialize_filters():
+    """Initialize filter defaults using the current dataset statistics."""
+    global _filters
+
+    u_limits = _filter_limits.get("num_poles_u", {"min": 0, "max": 0})
+    v_limits = _filter_limits.get("num_poles_v", {"min": 0, "max": 0})
+    u_min_limit = min(u_limits["min"], u_limits["max"])
+    u_max_limit = max(u_limits["min"], u_limits["max"])
+    v_min_limit = min(v_limits["min"], v_limits["max"])
+    v_max_limit = max(v_limits["min"], v_limits["max"])
+
+    _filters = {
+        "include_u_periodic": True,
+        "include_u_non_periodic": True,
+        "include_v_periodic": True,
+        "include_v_non_periodic": True,
+        "min_poles_u": u_limits["min"],
+        "max_poles_u": u_limits["max"],
+        "min_poles_v": v_limits["min"],
+        "max_poles_v": v_limits["max"],
+    }
+
+
+def sample_matches_filters(meta: Dict[str, Any]) -> bool:
+    """Check whether a metadata entry satisfies the active filters."""
+    if not meta.get("valid", False):
+        return False
+
+    if meta["is_u_periodic"]:
+        if not _filters.get("include_u_periodic", True):
+            return False
+    else:
+        if not _filters.get("include_u_non_periodic", True):
+            return False
+
+    if meta["is_v_periodic"]:
+        if not _filters.get("include_v_periodic", True):
+            return False
+    else:
+        if not _filters.get("include_v_non_periodic", True):
+            return False
+
+    num_poles_u = meta["num_poles_u"]
+    num_poles_v = meta["num_poles_v"]
+
+    if num_poles_u < _filters.get("min_poles_u", num_poles_u):
+        return False
+    if num_poles_u > _filters.get("max_poles_u", num_poles_u):
+        return False
+    if num_poles_v < _filters.get("min_poles_v", num_poles_v):
+        return False
+    if num_poles_v > _filters.get("max_poles_v", num_poles_v):
+        return False
+
+    return True
+
+
+def refresh_filtered_indices(preserve_current: bool = True):
+    """
+    Rebuild the list of dataset indices that satisfy the active filters and
+    update the current slider bounds.
+    """
+    global _filtered_indices, _max_idx, _current_idx, _current_filtered_idx
+
+    if not _index_metadata:
+        _filtered_indices = []
+        _max_idx = -1
+        _current_idx = -1
+        _current_filtered_idx = -1
+        return
+
+    _filtered_indices = [
+        idx for idx, meta in enumerate(_index_metadata) if sample_matches_filters(meta)
+    ]
+    _max_idx = len(_filtered_indices) - 1
+
+    if not _filtered_indices:
+        _current_filtered_idx = -1
+        _current_idx = -1
+        return
+
+    if preserve_current and _current_idx in _filtered_indices:
+        _current_filtered_idx = _filtered_indices.index(_current_idx)
+    else:
+        _current_filtered_idx = 0
+
+    _current_idx = _filtered_indices[_current_filtered_idx]
 
 
 def load_model_and_dataset(
@@ -154,7 +306,9 @@ def load_model_and_dataset(
         else:
             _dataset = dataset_bspline(path_file=path_file, num_surfaces=num_surfaces)
 
-    _max_idx = len(_dataset) - 1
+    build_index_metadata()
+    initialize_filters()
+    refresh_filtered_indices(preserve_current=False)
 
     model_kwargs = model_kwargs or {}
     print(model_kwargs)
@@ -375,6 +529,10 @@ def resample_model():
     if _model is None:
         print("Model not loaded yet!")
         return [], {}
+
+    if _dataset is None or _current_idx < 0 or _current_idx >= len(_dataset):
+        print("No valid sample selected for resampling.")
+        return [], {}
     
     sample = _dataset[_current_idx]
     if not sample[-1]:  # 'valid' flag
@@ -495,6 +653,11 @@ def resample_model():
 
 def update_visualization():
     global _current_idx, _gt_group, _rec_group, _gt_surfaces, _rec_surfaces, _show_gt, _show_rec, _gt_face, _rec_face
+
+    if _dataset is None or _current_idx < 0 or _current_idx >= len(_dataset):
+        print("No valid index selected; skipping visualization.")
+        return
+
     ps.remove_all_structures()
     gt_list, rec_list = process_index(_current_idx)
     if not gt_list:
@@ -544,27 +707,142 @@ def update_visualization():
     _rec_group.set_enabled(_show_rec)
 
 
-def callback():
-    global _current_idx, _max_idx, _show_gt, _show_rec, _show_resampled, _gt_face, _rec_face, _resampled_surfaces
-    psim.Text("BSplineVAE Reconstruction Viewer")
-    psim.Separator()
-    changed, new_idx = psim.SliderInt("Index", _current_idx, 0, _max_idx)
-    if changed:
-        _current_idx = new_idx
-        update_visualization()
+def render_filter_controls() -> bool:
+    """Render filter UI elements and return True when filters changed."""
+    global _filters
+
+    if not _filters:
+        return False
+
+    filters_changed = False
 
     psim.Separator()
-    psim.Text(f"Current Index: {_current_idx}")
-    psim.Text(f"Max Index: {_max_idx}")
+    psim.Text("Filters")
+    total_valid = sum(1 for meta in _index_metadata if meta.get("valid", False))
+    psim.Text(f"Matching Surfaces: {len(_filtered_indices)} / {total_valid}")
+
+    changed, val = psim.Checkbox("Include U Periodic", _filters["include_u_periodic"])
+    if changed:
+        _filters["include_u_periodic"] = val
+        filters_changed = True
+
+    changed, val = psim.Checkbox(
+        "Include U Non-Periodic", _filters["include_u_non_periodic"]
+    )
+    if changed:
+        _filters["include_u_non_periodic"] = val
+        filters_changed = True
+
+    changed, val = psim.Checkbox("Include V Periodic", _filters["include_v_periodic"])
+    if changed:
+        _filters["include_v_periodic"] = val
+        filters_changed = True
+
+    changed, val = psim.Checkbox(
+        "Include V Non-Periodic", _filters["include_v_non_periodic"]
+    )
+    if changed:
+        _filters["include_v_non_periodic"] = val
+        filters_changed = True
+
+    u_limits = _filter_limits.get("num_poles_u", {"min": 0, "max": 0})
+    v_limits = _filter_limits.get("num_poles_v", {"min": 0, "max": 0})
+    u_min_limit = min(u_limits["min"], u_limits["max"])
+    u_max_limit = max(u_limits["min"], u_limits["max"])
+    v_min_limit = min(v_limits["min"], v_limits["max"])
+    v_max_limit = max(v_limits["min"], v_limits["max"])
+
+    min_u_prev = _filters["min_poles_u"]
+    max_u_prev = _filters["max_poles_u"]
+    min_v_prev = _filters["min_poles_v"]
+    max_v_prev = _filters["max_poles_v"]
+
+    changed_min_u, min_u = psim.SliderInt(
+        "Min # Poles U", min_u_prev, u_min_limit, u_max_limit
+    )
+    changed_max_u, max_u = psim.SliderInt(
+        "Max # Poles U", max_u_prev, u_min_limit, u_max_limit
+    )
+
+    if min_u > max_u:
+        if changed_min_u and not changed_max_u:
+            max_u = min_u
+        else:
+            min_u = max_u
+
+    if changed_min_u or changed_max_u:
+        if min_u != min_u_prev or max_u != max_u_prev:
+            _filters["min_poles_u"] = min_u
+            _filters["max_poles_u"] = max_u
+            filters_changed = True
+
+    changed_min_v, min_v = psim.SliderInt(
+        "Min # Poles V", min_v_prev, v_min_limit, v_max_limit
+    )
+    changed_max_v, max_v = psim.SliderInt(
+        "Max # Poles V", max_v_prev, v_min_limit, v_max_limit
+    )
+
+    if min_v > max_v:
+        if changed_min_v and not changed_max_v:
+            max_v = min_v
+        else:
+            min_v = max_v
+
+    if changed_min_v or changed_max_v:
+        if min_v != min_v_prev or max_v != max_v_prev:
+            _filters["min_poles_v"] = min_v
+            _filters["max_poles_v"] = max_v
+            filters_changed = True
+
+    return filters_changed
+
+
+def callback():
+    global _current_idx, _current_filtered_idx, _filtered_indices, _max_idx
+    global _show_gt, _show_rec, _show_resampled
+    global _gt_face, _rec_face, _resampled_surfaces
+    psim.Text("BSplineVAE Reconstruction Viewer")
+    psim.Separator()
+
+    filters_changed = render_filter_controls()
+    if filters_changed:
+        previous_idx = _current_idx
+        refresh_filtered_indices(preserve_current=True)
+        ps.remove_all_structures()
+        if _current_idx >= 0:
+            update_visualization()
+        elif previous_idx != -1:
+            print("No samples match current filters.")
+
+    psim.Separator()
+    if _max_idx >= 0:
+        psim.Text(f"Current Dataset Index: {_current_idx}")
+        psim.Text(
+            f"Filtered Position: {_current_filtered_idx + 1} / {len(_filtered_indices)}"
+        )
+        changed, new_idx = psim.SliderInt(
+            "Filtered Index", _current_filtered_idx, 0, _max_idx
+        )
+        if changed:
+            _current_filtered_idx = new_idx
+            _current_idx = _filtered_indices[_current_filtered_idx]
+            update_visualization()
+    else:
+        psim.Text("No samples match the current filters.")
+        return
 
     # Resample button
     psim.Separator()
     psim.Text("Model Controls:")
     if psim.Button("Resample Model"):
-        # Remove all structures before resampling
-        ps.remove_all_structures()
-        _resampled_surfaces = {}
-        resampled_json_data, _resampled_surfaces = resample_model()
+        if _current_idx < 0:
+            print("No valid sample selected for resampling.")
+        else:
+            # Remove all structures before resampling
+            ps.remove_all_structures()
+            _resampled_surfaces = {}
+            resampled_json_data, _resampled_surfaces = resample_model()
 
     if _gt_group is not None:
         psim.Separator()
