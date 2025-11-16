@@ -11,6 +11,8 @@ from argparse import ArgumentParser
 
 from src.dataset.dataset_bspline import dataset_bspline
 from src.utils.config import NestedDictToClass, load_config
+from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
+import torch
 
 program_parser = ArgumentParser(description='Train bspline model.')
 program_parser.add_argument('--config', type=str, default='', help='Path to config file.')
@@ -65,7 +67,24 @@ if transform is None:
     transform = None
 
 
-train_dataset = dataset_bspline(
+class IndexedDataset(torch.utils.data.Dataset):
+    def __init__(self, base: Dataset):
+        self.base = base
+        # forward important attributes transparently
+        self.replica = getattr(base, 'replica', 1)
+        # dataset_bspline exposes data_names
+        self._base_len = len(getattr(base, 'data_names', [])) if hasattr(base, 'data_names') else max(1, len(base) // self.replica)
+    def __len__(self):
+        return len(self.base)
+    def __getitem__(self, i):
+        sample = self.base[i]
+        # original sample: (..., valid)
+        # use base index so replicas share the same id
+        base_idx = i % self._base_len
+        return (*sample[:-1], torch.tensor(base_idx, dtype=torch.long), sample[-1])
+
+
+train_dataset_raw = dataset_bspline(
     path_file=args.data.train_file, data_dir_override=args.data.train_data_dir_override, num_surfaces=args.data.train_num,
     max_num_u_knots=args.model.max_num_u_knots, max_num_v_knots=args.model.max_num_v_knots, max_num_u_poles=args.model.max_num_u_poles, max_num_v_poles=args.model.max_num_v_poles
     )
@@ -74,6 +93,14 @@ val_dataset = dataset_bspline(
     path_file=args.data.val_file, data_dir_override=args.data.val_data_dir_override, num_surfaces=args.data.val_num,
     max_num_u_knots=args.model.max_num_u_knots, max_num_v_knots=args.model.max_num_v_knots, max_num_u_poles=args.model.max_num_u_poles, max_num_v_poles=args.model.max_num_v_poles
     )
+
+# weighted sampling config (optional)
+ws_cfg = getattr(args.data, 'weighted_sampling', None)
+ws_enabled = False
+if ws_cfg is not None:
+    ws_enabled = getattr(ws_cfg, 'enabled', False)
+
+train_dataset = IndexedDataset(train_dataset_raw) if ws_enabled else train_dataset_raw
 
 model = BSplineVAE(
     max_num_u_knots=args.model.max_num_u_knots,
@@ -121,6 +148,13 @@ trainer = Trainer_vae_bspline(
     from_start=args.from_start,
     checkpoint_file_name=args.model.checkpoint_file_name,
     val_every_step=int(args.val_every_epoch * num_step_per_epoch),
+    # weighted sampling options
+    weighted_sampling_enabled=ws_enabled,
+    ws_warmup_epochs=getattr(ws_cfg, 'warmup_epochs', 5) if ws_cfg is not None else 5,
+    ws_alpha=getattr(ws_cfg, 'alpha', 1.0) if ws_cfg is not None else 1.0,
+    ws_beta=getattr(ws_cfg, 'beta', 0.9) if ws_cfg is not None else 0.9,
+    ws_eps=getattr(ws_cfg, 'eps', 1e-6) if ws_cfg is not None else 1e-6,
+    ws_refresh_every=getattr(ws_cfg, 'refresh_every', 1) if ws_cfg is not None else 1,
 )
 
 if args.resume_training and cli_args.resume_lr is not None:

@@ -1,6 +1,8 @@
 # This version on Nov. 2025 is a bspline surface VAE, dedicated to support Bspline Surfaces with variable knots, mults and poles
 # The input is the uv knots list, mults list, pole lists, and u_degree, v_degree, u_periodic and v_periodic.
 # The output recovers all the above and should reconstruct the exact surface.
+# This V3 version use hybrid grid query generator to generate the poles queries.
+# However it's not useful for the first test... May try other runs later.
 
 import torch
 import torch.nn as nn

@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, WeightedRandomSampler, DataLoader
 from typing import Optional, Union, Callable
 import time
 import wandb
@@ -9,7 +9,7 @@ from contextlib import nullcontext
 from functools import partial
 from collections import defaultdict
 from src.trainer.trainer_base import BaseTrainer
-from src.utils.helpers import divisible_by, get_current_time, get_lr
+from src.utils.helpers import divisible_by, get_current_time, get_lr, cycle
 from src.dataset.dataset_bspline import dataset_bspline
 
 class Trainer_vae_bspline(BaseTrainer):
@@ -46,6 +46,13 @@ class Trainer_vae_bspline(BaseTrainer):
         loss_kl_weight: float = 1.0,
         kl_annealing_steps: int = 0,
         kl_free_bits: float = 32,
+        # weighted sampling options
+        weighted_sampling_enabled: bool = False,
+        ws_warmup_epochs: int = 5,
+        ws_alpha: float = 1.0,
+        ws_beta: float = 0.9,
+        ws_eps: float = 1e-6,
+        ws_refresh_every: int = 1,
         **kwargs
     ):
         super().__init__(
@@ -93,6 +100,23 @@ class Trainer_vae_bspline(BaseTrainer):
         
         # Track abnormal values for logging
         self.abnormal_values_buffer = []
+        
+        # Preserve original dataloader hyperparams for later rebuilds
+        self._train_batch_size = batch_size
+        self._train_num_workers = num_workers
+        
+        # weighted sampling state
+        self.ws_enabled = bool(weighted_sampling_enabled)
+        self.ws_warmup_epochs = int(ws_warmup_epochs)
+        self.ws_alpha = float(ws_alpha)
+        self.ws_beta = float(ws_beta)
+        self.ws_eps = float(ws_eps)
+        self.ws_refresh_every = int(ws_refresh_every)
+        if self.ws_enabled:
+            ds = self.train_dl.dataset
+            self.ws_base_len = int(getattr(ds, '_base_len', len(ds)))
+            self.ws_replica = int(getattr(ds, 'replica', 1))
+            self.ws_ema = torch.ones(self.ws_base_len, dtype=torch.float32)
         
         # Get the raw model for DDP
         self.raw_model = self.model.module if hasattr(self.model, 'module') else self.model
@@ -181,6 +205,9 @@ class Trainer_vae_bspline(BaseTrainer):
 
                 valid = forward_args[-1].bool()
                 forward_args = [_[valid] for _ in forward_args[:-1]]
+                if self.ws_enabled:
+                    idx = forward_args[-1].long()
+                    forward_args = forward_args[:-1]
                 forward_args = [_.unsqueeze(-1) if len(_.shape) == 1 else _ for _ in forward_args]
                 forward_args = [_.float() if _.dtype == torch.float64 else _ for _ in forward_args]
                 u_degree, v_degree, num_poles_u, num_poles_v, num_knots_u, num_knots_v, is_u_periodic, is_v_periodic, u_knots_list, v_knots_list, u_mults_list, v_mults_list, poles = forward_args
@@ -252,6 +279,21 @@ class Trainer_vae_bspline(BaseTrainer):
                     loss_poles_xyz = (loss_poles[..., :3] * mask_poles_4d).sum() / (mask_poles_4d.sum().clamp(min=1))
                     loss_poles_w = (loss_poles[..., 3:] * mask_poles_4d).sum() / (mask_poles_4d.sum().clamp(min=1))
                     loss_poles = loss_poles_xyz * self.loss_poles_xyz_weight + loss_poles_w
+                    
+                    # per-sample EMA update for weighted sampling
+                    if self.ws_enabled:
+                        Bv = mask_poles_4d.shape[0]
+                        mask_flat = mask_poles_4d.view(Bv, -1, 1)
+                        mse_all = self.mse_loss(pred_poles, poles)
+                        xyz_flat = mse_all[..., :3].view(Bv, -1, 3)
+                        w_flat = mse_all[..., 3:].view(Bv, -1, 1)
+                        sum_xyz = (xyz_flat * mask_flat).sum(dim=(1, 2))
+                        sum_w = (w_flat * mask_flat).sum(dim=(1, 2))
+                        den = mask_poles_4d.view(Bv, -1).sum(dim=1).clamp(min=1)
+                        per_sample_poles = (sum_xyz / den) * self.loss_poles_xyz_weight + (sum_w / den)
+                        idx_cpu = idx.squeeze(-1).detach().to('cpu')
+                        per_cpu = per_sample_poles.detach().to('cpu')
+                        self.ws_ema[idx_cpu] = self.ws_beta * self.ws_ema[idx_cpu] + (1.0 - self.ws_beta) * per_cpu
                     loss_recon = loss_knots_u + loss_knots_v + loss_poles
                     loss_cls = loss_deg_u + loss_deg_v + loss_peri_u + loss_peri_v + loss_knots_num_u + loss_knots_num_v + loss_mults_u + loss_mults_v
                     
@@ -454,6 +496,54 @@ class Trainer_vae_bspline(BaseTrainer):
                 self.log(**val_log_dict)
 
             self.wait()
+            
+            # end-of-epoch hooks and optional weighted sampler refresh
+            if divisible_by(step, self.num_step_per_epoch):
+                if self.is_main:
+                    print(get_current_time() + f' {step // self.num_step_per_epoch} epoch at ', step)
+                    if (step // self.num_step_per_epoch) % 5 == 0:
+                        import gc
+                        gc.collect()
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                if self.ws_enabled:
+                    current_epoch = step // self.num_step_per_epoch
+                    if current_epoch >= self.ws_warmup_epochs and divisible_by(current_epoch + 1, self.ws_refresh_every):
+                        with torch.no_grad():
+                            # aggregate EMA across ranks to keep identical weights
+                            ema_all = self.ws_ema.clone()
+                            try:
+                                import torch.distributed as dist
+                                if dist.is_available() and dist.is_initialized():
+                                    device = self.device
+                                    ema_all = ema_all.to(device)
+                                    dist.all_reduce(ema_all, op=dist.ReduceOp.SUM)
+                                    ema_all = (ema_all / dist.get_world_size()).to('cpu')
+                            except Exception:
+                                # fallback: use local EMA
+                                ema_all = self.ws_ema.clone()
+                            base_w = (ema_all + self.ws_eps).pow(self.ws_alpha)
+                            base_w = base_w / base_w.sum().clamp(min=1e-12)
+                            full_len = len(self.train_dl.dataset)
+                            if full_len == self.ws_base_len * self.ws_replica:
+                                weights_full = base_w.repeat(self.ws_replica)
+                            else:
+                                idxs = torch.arange(full_len) % self.ws_base_len
+                                weights_full = base_w[idxs]
+                        sampler = WeightedRandomSampler(weights=weights_full.double(), num_samples=len(self.train_dl.dataset), replacement=True)
+                        dl = DataLoader(
+                            self.train_dl.dataset,
+                            batch_size=self._train_batch_size,
+                            shuffle=False,
+                            sampler=sampler,
+                            pin_memory=False,
+                            num_workers=self._train_num_workers,
+                            prefetch_factor=1,
+                            persistent_workers=False,
+                        )
+                        dl = self.accelerator.prepare(dl)
+                        self.train_dl = dl
+                        self.train_dl_iter = cycle(self.train_dl)
 
             if self.is_main and (divisible_by(step, self.checkpoint_every_step) or step == self.num_train_steps - 1):
                 checkpoint_num = step // self.checkpoint_every_step 
