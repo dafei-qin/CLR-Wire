@@ -110,6 +110,7 @@ model = BSplineVAE(
     max_num_u_poles=args.model.max_num_u_poles,
     max_num_v_poles=args.model.max_num_v_poles,
     mults_dim=args.model.mults_dim,
+    embd_dim=getattr(args.model, 'embd_dim', 64),
 )
 
 epochs = args.epochs
