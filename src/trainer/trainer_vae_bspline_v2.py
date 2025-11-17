@@ -46,6 +46,7 @@ class Trainer_vae_bspline(BaseTrainer):
         loss_kl_weight: float = 1.0,
         kl_annealing_steps: int = 0,
         kl_free_bits: float = 32,
+        use_logvar: bool = False,
         # weighted sampling options
         weighted_sampling_enabled: bool = False,
         ws_warmup_epochs: int = 5,
@@ -97,6 +98,7 @@ class Trainer_vae_bspline(BaseTrainer):
         # KL annealing and free bits parameters
         self.kl_annealing_steps = kl_annealing_steps
         self.kl_free_bits = kl_free_bits
+        self.use_logvar = bool(use_logvar)
         
         # Track abnormal values for logging
         self.abnormal_values_buffer = []
@@ -231,8 +233,7 @@ class Trainer_vae_bspline(BaseTrainer):
                     num_poles_u = num_poles_u.long()
                     num_poles_v = num_poles_v.long()
                     mu, logvar = self.raw_model.encode(u_knots_list, u_mults_list, v_knots_list, v_mults_list, poles, u_degree, v_degree, is_u_periodic, is_v_periodic, num_knots_u, num_knots_v, num_poles_u, num_poles_v)
-                    # z = self.raw_model.reparameterize(mu, logvar)
-                    z = mu
+                    z = self.raw_model.reparameterize(mu, logvar) if self.use_logvar else mu
                     deg_logits_u, deg_logits_v, peri_logits_u, peri_logits_v, knots_num_logits_u, knots_num_logits_v, pred_knots_u, pred_knots_v, mults_logits_u, mults_logits_v, pred_poles = self.raw_model.decode(z, num_knots_u, num_knots_v, num_poles_u, num_poles_v)
                             
                     # Forward pass
@@ -403,8 +404,7 @@ class Trainer_vae_bspline(BaseTrainer):
                         num_poles_u = num_poles_u.long()
                         num_poles_v = num_poles_v.long()
                         mu, logvar = self.ema.model.encode(u_knots_list, u_mults_list, v_knots_list, v_mults_list, poles, u_degree, v_degree, is_u_periodic, is_v_periodic, num_knots_u, num_knots_v, num_poles_u, num_poles_v)
-                        # z = self.ema.model.reparameterize(mu, logvar)
-                        z = mu
+                        z = self.ema.model.reparameterize(mu, logvar) if self.use_logvar else mu
                         # TODO: use predicted shapes
                         deg_logits_u, deg_logits_v, peri_logits_u, peri_logits_v, knots_num_logits_u, knots_num_logits_v, pred_knots_u, pred_knots_v, mults_logits_u, mults_logits_v, pred_poles = self.ema.model.decode(z, num_knots_u, num_knots_v, num_poles_u, num_poles_v)
 

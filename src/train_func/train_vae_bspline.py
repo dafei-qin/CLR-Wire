@@ -22,6 +22,8 @@ cli_args, unknown = program_parser.parse_known_args()
 cfg = load_config(cli_args.config)
 args = NestedDictToClass(cfg)
 
+use_logvar = (getattr(getattr(args, 'trainer', None), 'use_logvar', False) if hasattr(args, 'trainer') else False)
+print(f"Use logvar: {use_logvar}")
 
 model_name = args.model.name
 
@@ -132,6 +134,7 @@ trainer = Trainer_vae_bspline(
     loss_poles_xyz_weight=args.loss.poles_xyz_weight,
     kl_annealing_steps=getattr(args.loss, 'kl_annealing_steps', 0),
     kl_free_bits=getattr(args.loss, 'kl_free_bits', 0.0),
+    use_logvar=(getattr(getattr(args, 'trainer', None), 'use_logvar', False) if hasattr(args, 'trainer') else False),
     grad_accum_every=args.grad_accum_every,
     ema_update_every=args.ema_update_every,
     learning_rate=initial_lr,
