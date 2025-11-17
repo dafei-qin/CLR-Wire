@@ -178,6 +178,7 @@ class Trainer_vae_bspline(BaseTrainer):
             'lr': lr,
             'grad_norm': total_norm,
             'step': step,
+            'time_per_step': time_per_step,
             'kl_beta': kl_beta,
             **additional_log_losses,
             **accuracy
@@ -358,7 +359,11 @@ class Trainer_vae_bspline(BaseTrainer):
                     "loss_poles": loss_poles.item(),
                 }                                        
                 self.log_loss(total_loss, total_accuracy, loss_recon.item(), loss_cls.item(), loss_kl.item(), cur_lr, total_norm, step, time_per_step, kl_beta, active_dims, additional_log_losses=additional_log_losses)
-                
+                steps_remaining = self.num_train_steps - step
+                time_per_step = (time.time() - self.start_time) / (step + 1)
+                estimated_time_remaining = steps_remaining * time_per_step
+                estimated_finish_time = time.time() + estimated_time_remaining
+                self.print(get_current_time() + f' estimated finish time: {time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(estimated_finish_time))}')
             step += 1
             self.step.add_(1)
             
@@ -491,7 +496,7 @@ class Trainer_vae_bspline(BaseTrainer):
                     "val_loss_recon": loss_recon.item(),
                     "val_loss_cls": loss_cls.item(),
                     "val_loss_kl": loss_kl.item(),
-                    "val_kl_beta": val_kl_beta
+                    "val_kl_beta": val_kl_beta,
                 }
                 self.log(**val_log_dict)
 
