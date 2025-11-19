@@ -332,6 +332,22 @@ def evaluate_dataset(
         print("\nTop-K worst by loss_poles_mean_xyz:")
         print(worst.to_string(index=False))
 
+    # Print average poles MSE by periodicity categories
+    if len(df) > 0:
+        def _print_avg_mse(label: str, subset: pd.DataFrame):
+            if subset is None or subset.empty:
+                print(f"{label}: no samples")
+                return
+            mse_xyz = float(subset["loss_poles_mean_xyz"].mean())
+            mse_w = float(subset["loss_poles_w"].mean())
+            print(f"{label}: mse_xyz={mse_xyz:.6e}, mse_w={mse_w:.6e}")
+
+        print("\nAverage poles MSE by periodicity:")
+        _print_avg_mse("u_non_periodic", df[df["peri_u"] == 0])
+        _print_avg_mse("u_periodic", df[df["peri_u"] == 1])
+        _print_avg_mse("v_non_periodic", df[df["peri_v"] == 0])
+        _print_avg_mse("v_periodic", df[df["peri_v"] == 1])
+
     return df
 
 
