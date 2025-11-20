@@ -15,7 +15,7 @@ if str(project_root) not in sys.path:
 
 
 from src.dataset.dataset_bspline import dataset_bspline  # noqa: E402
-from src.tests.test_vae_bspline import register_unit_cube
+
 from utils.surface import build_bspline_surface  # noqa: E402
 
 _dataset_raw = None
@@ -158,6 +158,56 @@ def _register_faces(idx: int, faces: List[Tuple[str, Dict[str, Any]]]):
         mesh.set_color(_FACE_COLORS.get(label, (0.7, 0.7, 0.7)))
 
 
+
+def register_unit_cube():
+    """Register a semi-transparent unit cube for spatial reference."""
+
+    half = 0.5
+    cube_vertices = np.array(
+        [
+            [-half, -half, -half],
+            [half, -half, -half],
+            [half, half, -half],
+            [-half, half, -half],
+            [-half, -half, half],
+            [half, -half, half],
+            [half, half, half],
+            [-half, half, half],
+        ],
+        dtype=np.float32,
+    )
+    cube_faces = np.array(
+        [
+            [0, 1, 2],
+            [0, 2, 3],
+            [4, 5, 6],
+            [4, 6, 7],
+            [0, 1, 5],
+            [0, 5, 4],
+            [1, 2, 6],
+            [1, 6, 5],
+            [2, 3, 7],
+            [2, 7, 6],
+            [3, 0, 4],
+            [3, 4, 7],
+        ],
+        dtype=np.int32,
+    )
+    try:
+        cube = ps.register_surface_mesh(
+            'unit_cube',
+            cube_vertices,
+            cube_faces,
+            color=(0.9, 0.9, 0.9),
+            smooth_shade=False,
+            transparency=0.7,
+        )
+        if hasattr(cube, "set_edge_color"):
+            cube.set_edge_color((0.2, 0.2, 0.2))
+    except Exception as exc:
+        print(f"Failed to register unit cube reference: {exc}")
+
+
 def _update_visualization(idx: int):
     global _current_idx
     if idx < 0 or idx >= _dataset_size:
@@ -200,6 +250,9 @@ def _update_visualization(idx: int):
     # print(np.linalg.norm(raw_data['poles'] - restored_poles))
     try:
         _register_faces(idx, faces)
+
+        register_unit_cube()
+
         _set_status(f"Index {idx}: valid · Reconstruction MSE {recon_error:.6e}")
     except ValueError as exc:
         ps.remove_all_structures()
@@ -275,7 +328,6 @@ def main():
 
     ps.init()
     ps.set_ground_plane_mode("tile")
-    register_unit_cube()
     initial_idx = args.index % _dataset_size
     _update_visualization(initial_idx)
     _current_idx = initial_idx
