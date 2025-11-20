@@ -408,7 +408,7 @@ class dataset_bspline(Dataset):
                 shift_vec = np.zeros(3, dtype=np.float64)
         rotation_matrix = rotation_matrix.astype(np.float32)
         shift_vec = shift_vec.astype(np.float32)
-        self._transform_cache[idx] = (rotation_matrix, shift_vec)
+        self._transform_cache[idx] = (rotation_matrix, shift_vec, length)
 
         u_knots_list_padded = np.zeros(self.max_num_u_knots)
         v_knots_list_padded = np.zeros(self.max_num_v_knots)
@@ -429,9 +429,9 @@ class dataset_bspline(Dataset):
         base_idx = idx % len(self.data_names)
         transform = self._transform_cache.get(base_idx)
         if transform is None:
-            return np.eye(3, dtype=np.float32), np.zeros(3, dtype=np.float32)
-        rotation, shift = transform
-        return rotation.copy(), shift.copy()
+            return np.eye(3, dtype=np.float32), np.zeros(3, dtype=np.float32), 1
+        rotation, shift, length = transform
+        return rotation.copy(), shift.copy(), length
 
 
 if __name__ == '__main__':

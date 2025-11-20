@@ -13,7 +13,9 @@ project_root = Path(__file__).resolve().parents[2]
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
+
 from src.dataset.dataset_bspline import dataset_bspline  # noqa: E402
+from src.tests.test_vae_bspline import register_unit_cube
 from utils.surface import build_bspline_surface  # noqa: E402
 
 _dataset_raw = None
@@ -127,9 +129,11 @@ def invert_canonical_poles(
     canonical_poles: np.ndarray,
     rotation: np.ndarray,
     shift: np.ndarray,
+    length: float,
 ) -> np.ndarray:
     coords = canonical_poles[..., :3].reshape(-1, 3)
     restored = coords @ rotation + shift
+    restored = restored * length
     result = canonical_poles.copy()
     result[..., :3] = restored.reshape(canonical_poles.shape[0], canonical_poles.shape[1], 3)
     return result
@@ -176,12 +180,12 @@ def _update_visualization(idx: int):
         _current_idx = idx
         return
 
-    rotation, shift = _dataset_canonical.get_transform(idx)
+    rotation, shift, length = _dataset_canonical.get_transform(idx)
     rotation = rotation.astype(np.float64)
     shift = shift.astype(np.float64)
-
+    length = length.astype(np.float64)
     canonical_poles = canonical_data["poles"][: canonical_data["num_poles_u"], : canonical_data["num_poles_v"], :]
-    restored_poles = invert_canonical_poles(canonical_poles, rotation, shift)
+    restored_poles = invert_canonical_poles(canonical_poles, rotation, shift, length)
 
     recon_error = np.mean(
         (restored_poles[..., :3] - raw_data["poles"][: raw_data["num_poles_u"], : raw_data["num_poles_v"], :3]) ** 2
@@ -271,7 +275,7 @@ def main():
 
     ps.init()
     ps.set_ground_plane_mode("tile")
-
+    register_unit_cube()
     initial_idx = args.index % _dataset_size
     _update_visualization(initial_idx)
     _current_idx = initial_idx
