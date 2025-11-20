@@ -328,6 +328,7 @@ def from_canonical(surface_canonical: Dict, shift: np.ndarray, rotation: np.ndar
     Returns:
         surface: Surface in original coordinates
     """
+    # print(surface_canonical, shift, rotation, scale)
     surface_type = surface_canonical['type']
     
     # Skip bspline surfaces

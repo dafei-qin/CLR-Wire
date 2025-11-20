@@ -10,6 +10,7 @@ sys.path.append(r'F:\WORK\CAD\CLR-Wire')
 
 
 from src.dataset.dataset_v1 import dataset_compound, SURFACE_TYPE_MAP, SCALAR_DIM_MAP
+from src.tools.surface_to_canonical_space import to_canonical, from_canonical
 from src.vae.vae_v1 import SurfaceVAE
 from src.utils.numpy_tools import orthonormal_basis_from_normal
 
@@ -38,21 +39,23 @@ current_idx = 21
 max_idx = 0
 gt_group = None
 recovered_group = None
+pipeline_group = None
 gt_surfaces = {}
 recovered_surfaces = {}
+pipeline_surfaces = {}
 show_gt = True
 show_recovered = True
+show_pipeline = True
 resampled_surfaces = {}
 show_resampled = False
 
 def load_model_and_dataset():
     global dataset, model, max_idx
     
-    dataset = dataset_compound(sys.argv[1])
+    dataset = dataset_compound(dataset_path, canonical=canonical)
     max_idx = len(dataset) - 1
     
     model = SurfaceVAE(param_raw_dim=[17, 18, 19, 18, 19]) # Should be changed to [17, 18, 19, 18, 19]
-    checkpoint_path = sys.argv[2]
     checkpoint = torch.load(checkpoint_path, map_location="cpu")
     if 'ema_model' in checkpoint:
         ema_model = checkpoint['ema']
@@ -72,14 +75,18 @@ def process_sample(idx):
     """Process a single sample and return both GT and recovered data"""
     global dataset, model
     
-    params_tensor, types_tensor, mask_tensor = dataset[idx]
+    params_tensor, types_tensor, mask_tensor, shift, rotation, scale = dataset[idx]
     print('processing file: ', dataset.json_names[idx])
     json_path = dataset.json_names[idx]
     
+    mask_bool = mask_tensor.bool()
+    mask_np = mask_bool.cpu().numpy().astype(bool)
     # Apply mask to get valid surfaces
-    valid_params = params_tensor[mask_tensor.bool()]
-    valid_types = types_tensor[mask_tensor.bool()]
-    
+    valid_params = params_tensor[mask_bool]
+    valid_types = types_tensor[mask_bool]
+    shift = shift[mask_np]
+    rotation = rotation[mask_np]
+    scale = scale[mask_np]
     # Load ground truth JSON data
     with open(json_path, 'r') as f:
         gt_json_data = json.load(f)
@@ -105,21 +112,31 @@ def process_sample(idx):
             print('input: ', valid_params[i])
             print('output: ', params_pred[i])
             print('diff: ', (params_pred[i] - valid_params[i]))
+            print('diff mean: ', (params_pred[i] - valid_params[i]).mean())
             print('-' * 10)
         print(f'Index {idx}: recon_loss: {recon_loss.item():.6f}, accuracy: {accuracy.item():.4f}')
         # print(f'Predicted types: {types_pred.cpu().numpy()}')
         # print(f'Ground truth types: {valid_types.cpu().numpy()}')
     
     # Convert predictions to JSON format
-
     recovered_json_data = to_json(params_pred.cpu().numpy(), types_pred.cpu().numpy(), mask.cpu().numpy())
-    with open('./assets/temp/test_vae_v1_runtime_gt.json', 'w') as f:
-        json.dump(gt_json_data, f)
-    with open('./assets/temp/test_vae_v1_runtime_rec.json', 'w') as f:
-        json.dump(recovered_json_data, f)
-    return gt_json_data, recovered_json_data, recon_loss.item(), accuracy.item()
 
-def resample_model():
+    if canonical:
+        recovered_json_data = [from_canonical(recovered_json_data[i], shift[i], rotation[i], scale[i]) for i in range(len(recovered_json_data))]
+
+    # Convert dataset pipeline surfaces to JSON (parse -> recover -> optional from canonical)
+    pipeline_json_data = []
+    for i in range(len(valid_params)):
+        recovered_surface = dataset._recover_surface(valid_params[i].cpu().numpy(), valid_types[i].item())
+        recovered_surface['idx'] = [i, i]
+        recovered_surface['orientation'] = 'Forward'
+        if canonical:
+            recovered_surface = from_canonical(recovered_surface, shift[i], rotation[i], scale[i])
+        pipeline_json_data.append(recovered_surface)
+
+    return gt_json_data, recovered_json_data, pipeline_json_data, recon_loss.item(), accuracy.item()
+
+def resample_model(canonical):
     """Generate new samples from the VAE's latent space"""
     global model, resampled_surfaces, current_idx
     
@@ -127,7 +144,7 @@ def resample_model():
         print("Model not loaded yet!")
         return
     
-    params_tensor, types_tensor, mask_tensor = dataset[current_idx]
+    params_tensor, types_tensor, mask_tensor, shift, rotation, scale = dataset[current_idx]
     valid_params = params_tensor[mask_tensor.bool()]
     valid_types = types_tensor[mask_tensor.bool()]
     
@@ -148,6 +165,8 @@ def resample_model():
         
         # Convert to JSON format
         resampled_json_data = to_json(params_pred.cpu().numpy(), types_pred.cpu().numpy(), mask.cpu().numpy())
+        if canonical:
+            resampled_json_data = [from_canonical(resampled_json_data[i], shift[i], rotation[i], scale[i]) for i in range(len(resampled_json_data))]
         with open('./assets/temp/test_vae_v1_runtime_resampled.json', 'w') as f:
             json.dump(resampled_json_data, f)
         # Visualize resampled surfaces
@@ -162,13 +181,14 @@ def resample_model():
 
 def update_visualization():
     """Update the visualization with current index"""
-    global current_idx, gt_group, recovered_group, gt_surfaces, recovered_surfaces
+    global current_idx, gt_group, recovered_group, pipeline_group
+    global gt_surfaces, recovered_surfaces, pipeline_surfaces
     
     # Clear existing structures
     ps.remove_all_structures()
     
     # Process current sample
-    gt_data, recovered_data, recon_loss, accuracy = process_sample(current_idx)
+    gt_data, recovered_data, pipeline_data, recon_loss, accuracy = process_sample(current_idx)
 
     
     # Create groups
@@ -186,6 +206,16 @@ def update_visualization():
             # Add to ground truth group
             surface_data['ps_handler'].add_to_group(gt_group)
     
+    # Visualize dataset pipeline ground truth surfaces
+    try:
+        pipeline_surfaces = visualize_json_interset(pipeline_data, plot=True, plot_gui=False, tol=1e-5, ps_header='dataset_gt')
+    except ValueError:
+        print('Pipeline GT has wrong visualization data!')
+        return
+    for i, (surface_key, surface_data) in enumerate(pipeline_surfaces.items()):
+        if 'surface' in surface_data and surface_data['surface'] is not None:
+            surface_data['ps_handler'].add_to_group(pipeline_group)
+    
     # Visualize recovered surfaces  
     try:
         recovered_surfaces = visualize_json_interset(recovered_data, plot=True, plot_gui=False, tol=1e-5, ps_header='z_rec')
@@ -199,22 +229,30 @@ def update_visualization():
     
     # Configure groups with current visibility settings
     gt_group.set_enabled(show_gt)
+    pipeline_group.set_enabled(show_pipeline)
     recovered_group.set_enabled(show_recovered)
-    
-    print(f"Visualized {len(gt_surfaces)} GT surfaces and {len(recovered_surfaces)} recovered surfaces")
+
+    print(f"Visualized {len(gt_surfaces)} GT surfaces, {len(pipeline_surfaces)} dataset GT surfaces and {len(recovered_surfaces)} recovered surfaces")
 
 def callback():
     """Polyscope callback function for UI controls"""
-    global current_idx, max_idx, show_gt, show_recovered, show_resampled, resampled_surfaces
+    global current_idx, max_idx, show_gt, show_pipeline, show_recovered, show_resampled, resampled_surfaces
     
     psim.Text("VAE Surface Reconstruction Test")
     psim.Separator()
     
-    # Index slider
-    changed, new_idx = psim.SliderInt("Test Index", current_idx, 0, max_idx)
-    if changed:
-        current_idx = new_idx
+    # Index controls
+    slider_changed, slider_idx = psim.SliderInt("Test Index", current_idx, 0, max_idx)
+    if slider_changed and slider_idx != current_idx:
+        current_idx = slider_idx
         update_visualization()
+    
+    input_changed, input_idx = psim.InputInt("Go To Index", current_idx)
+    if input_changed:
+        input_idx = max(0, min(max_idx, input_idx))
+        if input_idx != current_idx:
+            current_idx = input_idx
+            update_visualization()
     
     psim.Separator()
     psim.Text(f"Current Index: {current_idx}")
@@ -229,7 +267,7 @@ def callback():
         #     surface['ps_handler'].remove()
         ps.remove_all_structures()
         resampled_surfaces = {}
-        resampled_json_data, resampled_surfaces = resample_model()
+        resampled_json_data, resampled_surfaces = resample_model(canonical)
     
     # Group controls
     if gt_group is not None:
@@ -239,6 +277,10 @@ def callback():
         if changed:
             gt_group.set_enabled(show_gt)
         
+        changed, show_pipeline = psim.Checkbox("Show Dataset GT", show_pipeline)
+        if changed:
+            pipeline_group.set_enabled(show_pipeline)
+
         changed, show_recovered = psim.Checkbox("Show Recovered", show_recovered)
         if changed:
             recovered_group.set_enabled(show_recovered)
@@ -249,9 +291,15 @@ def callback():
             resampled_group.set_enabled(show_resampled)
 
 if __name__ == '__main__':
-    if len(sys.argv) != 3:
-        print("Usage: python test_vae_v1.py <dataset_path> <checkpoint_path>")
-        sys.exit(1)
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--dataset_path', type=str, default='', help='Path to the dataset')
+    parser.add_argument('--checkpoint_path', type=str, default='', help='Path to the checkpoint')
+    parser.add_argument('--canonical', type=bool, default=False, help='Whether to use canonical dataset')
+    args = parser.parse_args()
+    dataset_path = args.dataset_path
+    checkpoint_path = args.checkpoint_path
+    canonical = args.canonical
     
     # Initialize
     load_model_and_dataset()
@@ -261,6 +309,7 @@ if __name__ == '__main__':
     resampled_surfaces = {}
 
     gt_group = ps.create_group("Ground Truth Surfaces")
+    pipeline_group = ps.create_group("Dataset GT Surfaces")
     recovered_group = ps.create_group("Recovered Surfaces")
     resampled_group = ps.create_group("Resampled Surfaces")
     ps.set_user_callback(callback)

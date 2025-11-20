@@ -528,6 +528,7 @@ class BSplineVAE(nn.Module):
         self.max_num_u_poles = max_num_u_poles
         self.max_num_v_poles = max_num_v_poles
         self.embd_dim = embd_dim
+        self.mean_latent=True
 
         self.u_mults_embed = nn.Embedding(num_embeddings=max_degree+1, embedding_dim=mults_dim)
         self.v_mults_embed = nn.Embedding(num_embeddings=max_degree+1, embedding_dim=mults_dim)

@@ -113,6 +113,107 @@ def build_bspline_json(
     return face
 
 
+def build_face_from_prediction(
+    idx: int,
+    pred_degree_u: torch.Tensor,
+    pred_degree_v: torch.Tensor,
+    pred_periodic_u: torch.Tensor,
+    pred_periodic_v: torch.Tensor,
+    pred_knots_num_u: torch.Tensor,
+    pred_knots_num_v: torch.Tensor,
+    pred_mults_u: torch.Tensor,
+    pred_mults_v: torch.Tensor,
+    pred_num_poles_u: torch.Tensor,
+    pred_num_poles_v: torch.Tensor,
+    pred_knots_u: torch.Tensor,
+    pred_knots_v: torch.Tensor,
+    pred_poles: torch.Tensor,
+):
+    """Convert decoder predictions (batch size = 1) to a bspline face dict."""
+    return build_bspline_json(
+        u_degree=to_python_int(pred_degree_u[0]),
+        v_degree=to_python_int(pred_degree_v[0]),
+        num_poles_u=to_python_int(pred_num_poles_u[0]),
+        num_poles_v=to_python_int(pred_num_poles_v[0]),
+        num_knots_u=to_python_int(pred_knots_num_u[0]),
+        num_knots_v=to_python_int(pred_knots_num_v[0]),
+        is_u_periodic=to_python_bool(pred_periodic_u[0]),
+        is_v_periodic=to_python_bool(pred_periodic_v[0]),
+        u_knots_gap=pred_knots_u[0].detach().cpu().numpy(),
+        v_knots_gap=pred_knots_v[0].detach().cpu().numpy(),
+        u_mults=pred_mults_u[0].detach().cpu().numpy(),
+        v_mults=pred_mults_v[0].detach().cpu().numpy(),
+        poles_padded=pred_poles[0].detach().cpu().numpy(),
+        idx=idx,
+    )
+
+
+def register_unit_cube():
+    """Register a semi-transparent unit cube for spatial reference."""
+    if not _ps_initialized:
+        return
+
+    try:
+        if hasattr(ps, "has_surface_mesh") and ps.has_surface_mesh(_UNIT_CUBE_NAME):
+            return
+    except AttributeError:
+        # Older Polyscope versions may not expose has_surface_mesh; rely on exception handling below.
+        pass
+
+    half = 0.5
+    cube_vertices = np.array(
+        [
+            [-half, -half, -half],
+            [half, -half, -half],
+            [half, half, -half],
+            [-half, half, -half],
+            [-half, -half, half],
+            [half, -half, half],
+            [half, half, half],
+            [-half, half, half],
+        ],
+        dtype=np.float32,
+    )
+    cube_faces = np.array(
+        [
+            [0, 1, 2],
+            [0, 2, 3],
+            [4, 5, 6],
+            [4, 6, 7],
+            [0, 1, 5],
+            [0, 5, 4],
+            [1, 2, 6],
+            [1, 6, 5],
+            [2, 3, 7],
+            [2, 7, 6],
+            [3, 0, 4],
+            [3, 4, 7],
+        ],
+        dtype=np.int32,
+    )
+    try:
+        cube = ps.register_surface_mesh(
+            _UNIT_CUBE_NAME,
+            cube_vertices,
+            cube_faces,
+            color=(0.9, 0.9, 0.9),
+            smooth_shade=False,
+            transparency=0.7,
+        )
+        if hasattr(cube, "set_edge_color"):
+            cube.set_edge_color((0.2, 0.2, 0.2))
+    except Exception as exc:
+        print(f"Failed to register unit cube reference: {exc}")
+
+
+def reset_scene():
+    """Clear Polyscope structures while preserving the reference cube."""
+    if not _ps_initialized:
+        return
+    ps.remove_all_structures()
+    register_unit_cube()
+
+
 # Globals for UI
 _dataset = None
 _model = None
@@ -138,6 +239,8 @@ _filter_limits = {
     "num_poles_u": {"min": 0, "max": 0},
     "num_poles_v": {"min": 0, "max": 0},
 }
+_ps_initialized = False
+_UNIT_CUBE_NAME = "unit_cube_reference"
 
 
 def build_index_metadata():
@@ -497,21 +600,21 @@ def process_index(idx: int):
     pred_u_np_n = to_python_int(pred_num_poles_u[0])
     pred_v_np_n = to_python_int(pred_num_poles_v[0])
 
-    rec_face = build_bspline_json(
-        u_degree=pred_u_deg,
-        v_degree=pred_v_deg,
-        num_poles_u=pred_u_np_n,
-        num_poles_v=pred_v_np_n,
-        num_knots_u=pred_u_kn_n,
-        num_knots_v=pred_v_kn_n,
-        is_u_periodic=pred_u_per,
-        is_v_periodic=pred_v_per,
-        u_knots_gap=pred_knots_u[0].cpu().numpy(),
-        v_knots_gap=pred_knots_v[0].cpu().numpy(),
-        u_mults=pred_mults_u[0].cpu().numpy(),
-        v_mults=pred_mults_v[0].cpu().numpy(),
-        poles_padded=pred_poles[0].cpu().numpy(),
-        idx=idx,
+    rec_face = build_face_from_prediction(
+        idx,
+        pred_degree_u,
+        pred_degree_v,
+        pred_periodic_u,
+        pred_periodic_v,
+        pred_knots_num_u,
+        pred_knots_num_v,
+        pred_mults_u,
+        pred_mults_v,
+        pred_num_poles_u,
+        pred_num_poles_v,
+        pred_knots_u,
+        pred_knots_v,
+        pred_poles,
     )
     print(f"gt poles: {gt_face['poles']}")
     print(f"rec poles: {rec_face['poles']}")
@@ -520,6 +623,46 @@ def process_index(idx: int):
     else:
         print("poles shapes do not match")
     return [gt_face], [rec_face]
+
+
+def visualize_generated_face(face_data, header: str = "resampled"):
+    """
+    Helper to visualize generated faces (either resampled-from-data or random latent).
+    """
+    global _resampled_face, _resampled_surfaces, _resampled_group, _show_resampled
+
+    if face_data is None:
+        return [], {}
+
+    _resampled_face = face_data
+    resampled_json_data = [face_data]
+
+    try:
+        _resampled_surfaces = visualize_json_interset(
+            resampled_json_data, plot=True, plot_gui=False, tol=1e-5, ps_header=header
+        )
+    except ValueError:
+        print(f"{header.capitalize()} visualization failed.")
+        return [], {}
+
+    if _resampled_group is not None:
+        for _, surface in _resampled_surfaces.items():
+            if "surface" in surface and surface["surface"] is not None and surface["ps_handler"] is not None:
+                surface["ps_handler"].add_to_group(_resampled_group)
+
+    # Visualize poles
+    if _resampled_face is not None:
+        poles = np.array(_resampled_face["poles"])[..., :3]
+        poles_flat = poles.reshape(-1, 3)
+        poles_cloud = ps.register_point_cloud(f"{header}_poles", poles_flat, radius=0.005)
+        if _resampled_group is not None:
+            poles_cloud.add_to_group(_resampled_group)
+        poles_cloud.set_color((0.0, 0.0, 1.0))
+
+    if _resampled_group is not None:
+        _resampled_group.set_enabled(_show_resampled)
+
+    return resampled_json_data, _resampled_surfaces
 
 
 def resample_model():
@@ -606,49 +749,82 @@ def resample_model():
     pred_u_np_n = to_python_int(pred_num_poles_u[0])
     pred_v_np_n = to_python_int(pred_num_poles_v[0])
     
-    resampled_face = build_bspline_json(
-        u_degree=pred_u_deg,
-        v_degree=pred_v_deg,
-        num_poles_u=pred_u_np_n,
-        num_poles_v=pred_v_np_n,
-        num_knots_u=pred_u_kn_n,
-        num_knots_v=pred_v_kn_n,
-        is_u_periodic=pred_u_per,
-        is_v_periodic=pred_v_per,
-        u_knots_gap=pred_knots_u[0].cpu().numpy(),
-        v_knots_gap=pred_knots_v[0].cpu().numpy(),
-        u_mults=pred_mults_u[0].cpu().numpy(),
-        v_mults=pred_mults_v[0].cpu().numpy(),
-        poles_padded=pred_poles[0].cpu().numpy(),
-        idx=_current_idx,
+    resampled_face = build_face_from_prediction(
+        _current_idx,
+        pred_degree_u,
+        pred_degree_v,
+        pred_periodic_u,
+        pred_periodic_v,
+        pred_knots_num_u,
+        pred_knots_num_v,
+        pred_mults_u,
+        pred_mults_v,
+        pred_num_poles_u,
+        pred_num_poles_v,
+        pred_knots_u,
+        pred_knots_v,
+        pred_poles,
     )
-    
-    _resampled_face = resampled_face
-    resampled_json_data = [resampled_face]
-    
-    # Visualize resampled surfaces
-    try:
-        _resampled_surfaces = visualize_json_interset(resampled_json_data, plot=True, plot_gui=False, tol=1e-5, ps_header="resampled")
-    except ValueError:
-        print("Resampled visualization failed.")
+
+    return visualize_generated_face(resampled_face, header="resampled")
+
+
+def random_sample_model():
+    """Sample a fresh latent vector z ~ N(0, 1) and decode without conditioning on data."""
+    global _model
+
+    if _model is None:
+        print("Model not loaded yet!")
         return [], {}
-    
-    # Add to resampled group
-    for _, s in _resampled_surfaces.items():
-        if "surface" in s and s["surface"] is not None:
-            s["ps_handler"].add_to_group(_resampled_group)
-    
-    # Visualize resampled control poles as point cloud
-    if _resampled_face is not None:
-        resampled_poles = np.array(_resampled_face["poles"])[..., :3]
-        resampled_poles_flat = resampled_poles.reshape(-1, 3)
-        resampled_poles_cloud = ps.register_point_cloud("resampled_poles", resampled_poles_flat, radius=0.005)
-        resampled_poles_cloud.add_to_group(_resampled_group)
-        resampled_poles_cloud.set_color((0.0, 0.0, 1.0))  # Blue for resampled poles
-    
-    _resampled_group.set_enabled(_show_resampled)
-    
-    return resampled_json_data, _resampled_surfaces
+
+    device = next(_model.parameters()).device
+    dtype = next(_model.parameters()).dtype
+    latent_dim = getattr(_model, "embd_dim", None)
+    mean_latent = getattr(_model, "mean_latent", True)
+    if latent_dim is None:
+        latent_dim = _model.fc_mu.out_features
+
+    with torch.no_grad():
+        if mean_latent:
+            z = torch.randn(1, latent_dim, device=device, dtype=dtype)
+        else:
+            query_dim = _model.latent_queries.shape[0]
+            z = torch.randn(1, query_dim // 8 * latent_dim, device=device, dtype=dtype)
+        (
+            pred_degree_u,
+            pred_degree_v,
+            pred_periodic_u,
+            pred_periodic_v,
+            pred_knots_num_u,
+            pred_knots_num_v,
+            pred_mults_u,
+            pred_mults_v,
+            pred_num_poles_u,
+            pred_num_poles_v,
+            pred_knots_u,
+            pred_knots_v,
+            pred_poles,
+        ) = _model.inference(z)
+    print('Randomly sampled a z from N(0, 1)', 'pred_degree_u: ', pred_degree_u, 'pred_degree_v: ', pred_degree_v, 'pred_periodic_u: ', pred_periodic_u, 'pred_periodic_v: ', pred_periodic_v, 'pred_knots_num_u: ', pred_knots_num_u, 'pred_knots_num_v: ', pred_knots_num_v, 'pred_num_poles_u: ', pred_num_poles_u, 'pred_num_poles_v: ', pred_num_poles_v)
+    print('pred_mults_u: ', pred_mults_u, 'pred_mults_v: ', pred_mults_v, 'pred_knots_u: ', pred_knots_u, 'pred_knots_v: ', pred_knots_v, 'pred_poles: ', pred_poles)
+    random_face = build_face_from_prediction(
+        -1,
+        pred_degree_u,
+        pred_degree_v,
+        pred_periodic_u,
+        pred_periodic_v,
+        pred_knots_num_u,
+        pred_knots_num_v,
+        pred_mults_u,
+        pred_mults_v,
+        pred_num_poles_u,
+        pred_num_poles_v,
+        pred_knots_u,
+        pred_knots_v,
+        pred_poles,
+    )
+
+    return visualize_generated_face(random_face, header="random")
 
 
 def update_visualization():
@@ -658,7 +834,7 @@ def update_visualization():
         print("No valid index selected; skipping visualization.")
         return
 
-    ps.remove_all_structures()
+    reset_scene()
     gt_list, rec_list = process_index(_current_idx)
     if not gt_list:
         return
@@ -809,7 +985,7 @@ def callback():
     if filters_changed:
         previous_idx = _current_idx
         refresh_filtered_indices(preserve_current=True)
-        ps.remove_all_structures()
+        reset_scene()
         if _current_idx >= 0:
             update_visualization()
         elif previous_idx != -1:
@@ -840,9 +1016,16 @@ def callback():
             print("No valid sample selected for resampling.")
         else:
             # Remove all structures before resampling
-            ps.remove_all_structures()
+            reset_scene()
             _resampled_surfaces = {}
             resampled_json_data, _resampled_surfaces = resample_model()
+    if psim.Button("Randomly Sample"):
+        if _model is None:
+            print("Model not loaded yet!")
+        else:
+            reset_scene()
+            _resampled_surfaces = {}
+            random_json_data, _resampled_surfaces = random_sample_model()
 
     if _gt_group is not None:
         psim.Separator()
@@ -973,16 +1156,16 @@ if __name__ == "__main__":
         from src.vae.vae_bspline_v3 import BSplineVAE as BSplineVAE
         print('Use the model: vae_bspline_v3')
     elif model_name == "vae_bspline_v4":
-        print('Use the model: vae_bspline_v4')
-
         from src.vae.vae_bspline_v4 import BSplineVAE as BSplineVAE
     elif model_name == "vae_bspline_v5":
-        print('Use the model: vae_bspline_v5')
-
         from src.vae.vae_bspline_v5 import BSplineVAE as BSplineVAE
+    elif model_name == "vae_bspline_v6":
+        from src.vae.vae_bspline_v6 import BSplineVAE as BSplineVAE
+        print('Use the model: vae_bspline_v6')
     else:
         print('Use the default model: vae_bspline_v1')
         from src.vae.vae_bspline import BSplineVAE as BSplineVAE
+        
 
     def _getattr(obj, attr, default=None):
         return getattr(obj, attr, default) if obj is not None else default
@@ -1062,6 +1245,8 @@ if __name__ == "__main__":
     )
 
     ps.init()
+    _ps_initialized = True
+    register_unit_cube()
     _gt_group = ps.create_group("GT Surfaces")
     _rec_group = ps.create_group("Reconstructed Surfaces")
     _resampled_group = ps.create_group("Resampled Surfaces")

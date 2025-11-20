@@ -17,6 +17,7 @@ import warnings
 from einops import rearrange
 from pathlib import Path
 from typing import Dict, List, Tuple
+from icecream import ic
 
 import sys
 from pathlib import Path
@@ -24,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.tools.surface_to_canonical_space import to_canonical, from_canonical
 
 
-
+ic.enable()
 def safe_exp(x):
     return np.exp(x).clip(1e-6, 1e6)
 
@@ -346,6 +347,7 @@ class dataset_compound(Dataset):
                     [P(3), D(3), X(3), UV(8), scalar(max_scalar_dim)]
             surface_type: Integer representing surface type
         """
+        
         surface_type = surface_dict['type']
         surface_type_idx = SURFACE_TYPE_MAP.get(surface_type, -1)
         
@@ -380,7 +382,7 @@ class dataset_compound(Dataset):
         elif surface_type == 'cylinder':
             # scalar[0] = radius
             scalar_params = [surface_dict['scalar'][0]]
-            if scalar_params[0] < 1e-5: 
+            if scalar_params[0] < 1e-5: # Radius is too small
                 return None, -1
             P = P + D * v_min
             v_max = v_max - v_min
@@ -388,12 +390,12 @@ class dataset_compound(Dataset):
 
             # 1. guarantee u_min is positive
             if u_min < 0:
-                k = (u_min // (2 * np.pi) - 1)
+                k = (u_min // (2 * np.pi) )
                 u_min -= k * 2 * np.pi
                 u_max -= k * 2 * np.pi
 
             # 2. guarantee u_diff < 2 * np.pi
-            if u_max - u_min > 2 * np.pi:
+            if u_max - u_min > 2 * np.pi + 1e-4:
                 u_max -= (u_max - u_min) // (2 * np.pi) * 2 * np.pi
 
 
@@ -442,7 +444,7 @@ class dataset_compound(Dataset):
             # 1. guarantee u_min is positive
             if u_min < 0:
                 
-                k = (u_min // (2 * np.pi) - 1)
+                k = (u_min // (2 * np.pi) )
                 u_min -= k * 2 * np.pi
                 u_max -= k * 2 * np.pi
             # 2. guarantee u_diff < 2 * np.pi
@@ -490,12 +492,12 @@ class dataset_compound(Dataset):
             v_diff = v_max - v_min
             # while u_diff > 2 * np.pi:
             #     u_diff -= 2 * np.pi
-            if u_diff > 2 * np.pi:
-                u_diff -= u_diff // (2 * np.pi) * 2 * np.pi
+            # if u_diff > 2 * np.pi + 1e-4:
+            #     u_diff -= u_diff // (2 * np.pi) * 2 * np.pi
             # while v_diff > np.pi:
             #     v_diff -= np.pi
-            if v_diff > np.pi:
-                v_diff -= v_diff // np.pi * np.pi
+            # if v_diff > np.pi:
+            #     v_diff -= v_diff // np.pi * np.pi
             u_half = 0.5 * (u_diff)
             v_half = 0.5 * (v_diff)
             u_center, v_center = canonicalize_vc_uc(u_center, v_center)
@@ -520,30 +522,32 @@ class dataset_compound(Dataset):
 
             # 1. guarantee u_min is positive
             if u_min < 0 - 1e-6:
-                k = (u_min // (2 * np.pi) - 1)
+                k = (u_min // (2 * np.pi))
                 u_min -= k * 2 * np.pi
                 u_max -= k * 2 * np.pi
             # 2. guarantee u_diff < 2 * np.pi
-            if u_max - u_min > 2 * np.pi:
-                u_max -= (u_max - u_min) // (2 * np.pi) * 2 * np.pi
+            if u_max - u_min > 2 * np.pi + 1e-4:
+                u_max -= (u_max - u_min) // ((2 * np.pi) - 1) * 2 * np.pi
 
             # 3. guarantee v_min is positive
             if v_min < 0 - 1e-6:
-                k = (v_min // (np.pi) - 1)
+                k = (v_min // (np.pi))
                 v_min -= k * np.pi
                 v_max -= k * np.pi
-            # 4. guarantee v_diff < np.pi
-            if v_max - v_min > np.pi + 1e-6:
-                v_max -= ((v_max - v_min) // np.pi - 1) * np.pi
+                ic('v_min < 0, add ', k, 'times pi', 'now v_min: ', v_min, 'v_max: ', v_max)
+            # 4. guarantee v_diff < 2 * np.pi
+            if v_max - v_min > 2 * np.pi + 1e-4:
+                v_max -= ((v_max - v_min) // (2 * np.pi) - 1) * 2 * np.pi
 
             u_center = 0.5 * (u_min + u_max)
             u_diff = u_max - u_min
             u_half = 0.5 * (u_diff)
-            v_diff = v_max - v_min
+            
             v_center = 0.5 * (v_min + v_max)
+            v_diff = v_max - v_min
             v_half = 0.5 * (v_diff)
 
-
+            ic('u_center: ', u_center, 'v_center: ', v_center, 'u_diff: ', u_diff, 'v_diff: ', v_diff)
             sin_u_center, cos_u_center = np.sin(u_center), np.cos(u_center)
             sin_v_center, cos_v_center = np.sin(v_center), np.cos(v_center)
 
@@ -653,6 +657,8 @@ class dataset_compound(Dataset):
             major_radius = scalar_params[0]
             minor_radius = scalar_params[1]
             scalar = [major_radius, minor_radius]
+            ic('Torus recovered: u_center: ', u_center, 'v_center: ', v_center, 'u_half: ', u_half, 'v_half: ', v_half)
+            ic('u_min: ', u_min, 'u_max: ', u_max, 'v_min: ', v_min, 'v_max: ', v_max)
 
         elif surface_type == 'sphere':
             dir_vec = UV[:3].astype(np.float64)
@@ -716,7 +722,7 @@ class dataset_compound(Dataset):
         
         # Load JSON file
 
-        
+        ic('json_path: ', json_path)
         
         # Initialize arrays for all surfaces (padded)
         all_params = np.zeros((self.max_num_surfaces, self.max_param_dim), dtype=np.float64)
