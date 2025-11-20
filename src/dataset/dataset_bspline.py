@@ -16,7 +16,9 @@ from OCC.Core.TColStd import (
     TColStd_Array1OfReal,
     TColStd_Array2OfReal,
 )
-
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from src.tools.surface_to_canonical_space import compute_rotation_matrix
 
 
 class dataset_bspline(Dataset):
@@ -221,50 +223,50 @@ class dataset_bspline(Dataset):
                 prev_idx -= 1
         return prev_idx, next_idx
 
-    def _axis_angle_to_matrix(self, axis: np.ndarray, angle: float) -> np.ndarray:
-        axis = axis / np.linalg.norm(axis)
-        x, y, z = axis
-        c = np.cos(angle)
-        s = np.sin(angle)
-        C = 1 - c
-        return np.array(
-            [
-                [c + x * x * C, x * y * C - z * s, x * z * C + y * s],
-                [y * x * C + z * s, c + y * y * C, y * z * C - x * s],
-                [z * x * C - y * s, z * y * C + x * s, c + z * z * C],
-            ],
-            dtype=np.float64,
-        )
+    # def _axis_angle_to_matrix(self, axis: np.ndarray, angle: float) -> np.ndarray:
+    #     axis = axis / np.linalg.norm(axis)
+    #     x, y, z = axis
+    #     c = np.cos(angle)
+    #     s = np.sin(angle)
+    #     C = 1 - c
+    #     return np.array(
+    #         [
+    #             [c + x * x * C, x * y * C - z * s, x * z * C + y * s],
+    #             [y * x * C + z * s, c + y * y * C, y * z * C - x * s],
+    #             [z * x * C - y * s, z * y * C + x * s, c + z * z * C],
+    #         ],
+    #         dtype=np.float64,
+    #     )
 
-    def _rotation_matrix_to_z(self, normal_vec: np.ndarray) -> np.ndarray:
-        target = np.array([0.0, 0.0, 1.0], dtype=np.float64)
-        source = normal_vec / (np.linalg.norm(normal_vec) + 1e-12)
-        dot = np.clip(np.dot(source, target), -1.0, 1.0)
-        if np.isclose(dot, 1.0):
-            return np.eye(3, dtype=np.float64)
-        if np.isclose(dot, -1.0):
-            axis = np.array([1.0, 0.0, 0.0], dtype=np.float64)
-            if abs(source[0]) > 0.9:
-                axis = np.array([0.0, 1.0, 0.0], dtype=np.float64)
-            axis = axis - axis.dot(source) * source
-            axis_norm = np.linalg.norm(axis)
-            if axis_norm < 1e-8:
-                return np.eye(3, dtype=np.float64)
-            axis = axis / axis_norm
-            return self._axis_angle_to_matrix(axis, np.pi)
-        axis = np.cross(source, target)
-        s = np.linalg.norm(axis)
-        axis = axis / (s + 1e-12)
-        k = np.array(
-            [
-                [0.0, -axis[2], axis[1]],
-                [axis[2], 0.0, -axis[0]],
-                [-axis[1], axis[0], 0.0],
-            ],
-            dtype=np.float64,
-        )
-        R = np.eye(3, dtype=np.float64) + k * s + (k @ k) * ((1 - dot) / (s ** 2 + 1e-12))
-        return R
+    # def _rotation_matrix_to_z(self, normal_vec: np.ndarray) -> np.ndarray:
+    #     target = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+    #     source = normal_vec / (np.linalg.norm(normal_vec) + 1e-12)
+    #     dot = np.clip(np.dot(source, target), -1.0, 1.0)
+    #     if np.isclose(dot, 1.0):
+    #         return np.eye(3, dtype=np.float64)
+    #     if np.isclose(dot, -1.0):
+    #         axis = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+    #         if abs(source[0]) > 0.9:
+    #             axis = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+    #         axis = axis - axis.dot(source) * source
+    #         axis_norm = np.linalg.norm(axis)
+    #         if axis_norm < 1e-8:
+    #             return np.eye(3, dtype=np.float64)
+    #         axis = axis / axis_norm
+    #         return self._axis_angle_to_matrix(axis, np.pi)
+    #     axis = np.cross(source, target)
+    #     s = np.linalg.norm(axis)
+    #     axis = axis / (s + 1e-12)
+    #     k = np.array(
+    #         [
+    #             [0.0, -axis[2], axis[1]],
+    #             [axis[2], 0.0, -axis[0]],
+    #             [-axis[1], axis[0], 0.0],
+    #         ],
+    #         dtype=np.float64,
+    #     )
+    #     R = np.eye(3, dtype=np.float64) + k * s + (k @ k) * ((1 - dot) / (s ** 2 + 1e-12))
+    #     return R
 
     def _compute_centroid_and_normal(
         self,
@@ -307,6 +309,8 @@ class dataset_bspline(Dataset):
             return None, None
         grid = self._sample_surface_grid(surface, u_params, v_params)
         centroid = grid.reshape(-1, 3).mean(axis=0)
+
+        # Find the normal vector of the surface
         center_v = grid.shape[0] // 2
         center_u = grid.shape[1] // 2
         neighbors_u = self._neighbor_indices(center_u, grid.shape[1])
@@ -317,13 +321,11 @@ class dataset_bspline(Dataset):
         prev_v, next_v = neighbors_v
         u_vec = grid[center_v, next_u] - grid[center_v, prev_u]
         v_vec = grid[next_v, center_u] - grid[prev_v, center_u]
+        u_vec = u_vec / np.linalg.norm(u_vec)
+        v_vec = v_vec / np.linalg.norm(v_vec)
         normal_vec = np.cross(u_vec, v_vec)
-        norm_val = np.linalg.norm(normal_vec)
-        if norm_val < 1e-8:
-            normal_vec = np.array([0.0, 0.0, 1.0], dtype=np.float64)
-        else:
-            normal_vec = normal_vec / norm_val
-        return centroid, normal_vec
+        normal_vec = normal_vec / np.linalg.norm(normal_vec)
+        return centroid, normal_vec, u_vec, v_vec
 
     def _canonicalize_poles(
         self,
@@ -341,7 +343,7 @@ class dataset_bspline(Dataset):
         v_mults_list,
         poles,
     ):
-        centroid, normal_vec = self._compute_centroid_and_normal(
+        centroid, normal_vec, u_vec, v_vec = self._compute_centroid_and_normal(
             u_degree,
             v_degree,
             num_poles_u,
@@ -361,7 +363,7 @@ class dataset_bspline(Dataset):
             rotation = np.eye(3, dtype=np.float64)
             shift = np.zeros(3, dtype=np.float64)
             return poles, rotation, shift
-        rotation = self._rotation_matrix_to_z(normal_vec)
+        rotation = compute_rotation_matrix(normal_vec, u_vec)
         # rotation = np.eye(3, dtype=np.float64)
 
         poles_xyz = poles[..., :3] - centroid
