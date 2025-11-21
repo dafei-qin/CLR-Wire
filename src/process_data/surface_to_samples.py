@@ -106,6 +106,59 @@ def compute_grid_size(target_points):
     return num_u, num_v
 
 
+def allocate_points_uniformly(n_surfaces, max_points, min_points_per_surface=4):
+    """
+    Allocate sampling points uniformly across all surfaces.
+    Each surface gets approximately the same number of points.
+    
+    Args:
+        n_surfaces: Number of surfaces
+        max_points: Maximum total points to allocate
+        min_points_per_surface: Minimum points per surface (must be >= 4 for 2x2 grid)
+        
+    Returns:
+        List of point allocations for each surface
+    """
+    # Base allocation: divide equally
+    points_per_surface = max_points // n_surfaces
+    remainder = max_points % n_surfaces
+    
+    # Ensure minimum
+    points_per_surface = max(points_per_surface, min_points_per_surface)
+    
+    # Allocate base points to all surfaces
+    allocations = [points_per_surface] * n_surfaces
+    
+    # Distribute remainder to first few surfaces
+    for i in range(remainder):
+        allocations[i] += 1
+    
+    # Check if we exceed max_points due to minimum constraint
+    current_total = sum(allocations)
+    if current_total > max_points:
+        # Need to reduce, but respect minimum
+        diff = current_total - max_points
+        # Try to remove from surfaces with most points
+        indices_by_allocation = sorted(range(n_surfaces), 
+                                      key=lambda i: allocations[i], 
+                                      reverse=True)
+        removed = 0
+        for idx in indices_by_allocation:
+            if removed >= diff:
+                break
+            can_remove = allocations[idx] - min_points_per_surface
+            to_remove = min(can_remove, diff - removed)
+            if to_remove > 0:
+                allocations[idx] -= to_remove
+                removed += to_remove
+    
+    final_total = sum(allocations)
+    if final_total != max_points:
+        print(f"Warning: Could not allocate exactly {max_points} points with uniform distribution, got {final_total}")
+    
+    return allocations
+
+
 def allocate_points_by_area(areas, max_points, min_points_per_surface=4):
     """
     Allocate sampling points to surfaces proportionally to their areas.
@@ -188,7 +241,8 @@ def allocate_points_by_area(areas, max_points, min_points_per_surface=4):
     return allocations
 
 
-def sample_surfaces_from_json(json_path, dataset, max_points=2048, area_estimation_grid=16, skip_bspline=True):
+def sample_surfaces_from_json(json_path, dataset, max_points=2048, area_estimation_grid=16, 
+                             skip_bspline=True, sampling_mode='area'):
     """
     Sample points from all surfaces in a JSON file.
     
@@ -197,6 +251,10 @@ def sample_surfaces_from_json(json_path, dataset, max_points=2048, area_estimati
         dataset: Dataset instance for parsing surfaces
         max_points: Maximum total number of points to sample
         area_estimation_grid: Grid size for area estimation
+        skip_bspline: Whether to skip B-spline surfaces
+        sampling_mode: Sampling strategy
+            - 'area': Allocate points proportionally to surface area (default)
+            - 'uniform': Allocate equal points to each surface
         
     Returns:
         sampled_points: (N, 3) array of sampled points, where N ≤ max_points
@@ -241,8 +299,13 @@ def sample_surfaces_from_json(json_path, dataset, max_points=2048, area_estimati
     if not valid_surfaces:
         return np.zeros((0, 3), dtype=np.float32), np.zeros(0, dtype=np.int32)
     
-    # Allocate points based on areas
-    point_allocations = allocate_points_by_area(areas, max_points, min_points_per_surface=4)
+    # Allocate points based on sampling mode
+    if sampling_mode == 'uniform':
+        point_allocations = allocate_points_uniformly(len(valid_surfaces), max_points, min_points_per_surface=4)
+    elif sampling_mode == 'area':
+        point_allocations = allocate_points_by_area(areas, max_points, min_points_per_surface=4)
+    else:
+        raise ValueError(f"Unknown sampling_mode: {sampling_mode}. Use 'area' or 'uniform'.")
     
     # Sample each surface
     all_points = []
@@ -351,6 +414,13 @@ def main():
         action='store_true',
         help='Also save surface labels for each point'
     )
+    parser.add_argument(
+        '--sampling_mode',
+        type=str,
+        default='area',
+        choices=['area', 'uniform'],
+        help='Sampling strategy: "area" (proportional to surface area) or "uniform" (equal per surface) (default: area)'
+    )
     
     args = parser.parse_args()
     
@@ -365,6 +435,9 @@ def main():
     
     # Process all JSON files
     print(f"\nProcessing JSON files...")
+    print(f"Sampling mode: {args.sampling_mode}")
+    print(f"  - 'area': Points allocated proportionally to surface area")
+    print(f"  - 'uniform': Equal points for each surface")
     print(f"Max points per file: {args.max_points}")
     print(f"Area estimation grid: {args.area_estimation_grid}x{args.area_estimation_grid}")
     
@@ -375,13 +448,14 @@ def main():
         json_path = dataset.json_names[idx]
         
         # try:
-        # Sample surfaces
-        sampled_points, surface_labels = sample_surfaces_from_json(
-            json_path,
-            dataset,
-            max_points=args.max_points,
-            area_estimation_grid=args.area_estimation_grid
-        )
+            # Sample surfaces
+            sampled_points, surface_labels = sample_surfaces_from_json(
+                json_path,
+                dataset,
+                max_points=args.max_points,
+                area_estimation_grid=args.area_estimation_grid,
+                sampling_mode=args.sampling_mode
+            )
         
         if len(sampled_points) == 0:
             print(f"\nWarning: No valid points sampled from {json_path}")
