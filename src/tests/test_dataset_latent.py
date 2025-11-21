@@ -110,7 +110,7 @@ def load_corresponding_pointcloud(npz_path, pointcloud_dir):
         pointcloud_dir: Root directory containing point cloud NPY files
         
     Returns:
-        Point cloud array (N, 3) or None if not found
+        Tuple of (point cloud array (N, 3), npy_path) or (None, None) if not found
     """
     npz_path = Path(npz_path)
     pointcloud_dir = Path(pointcloud_dir)
@@ -125,21 +125,21 @@ def load_corresponding_pointcloud(npz_path, pointcloud_dir):
         npz_relative = npz_path.relative_to(npz_path.parent.parent)
         npy_path = pointcloud_dir / npz_relative.parent / f"{npz_stem}.npy"
         if npy_path.exists():
-            return np.load(npy_path)
+            return np.load(npy_path), str(npy_path)
     except:
         pass
     
     # Method 2: Direct file name match in pointcloud_dir
     npy_path = pointcloud_dir / f"{npz_stem}.npy"
     if npy_path.exists():
-        return np.load(npy_path)
+        return np.load(npy_path), str(npy_path)
     
     # Method 3: Search recursively in pointcloud_dir
     for npy_file in pointcloud_dir.rglob(f"{npz_stem}.npy"):
-        return np.load(npy_file)
+        return np.load(npy_file), str(npy_file)
     
     print(f"Warning: Could not find corresponding NPY file for {npz_path.name}")
-    return None
+    return None, None
 
 
 def decode_and_recover(model, latent_params, rotations, scales, shifts, classes, dataset_helper, device='cpu'):
@@ -224,6 +224,8 @@ device = 'cpu'
 surfaces_dict = {}
 pointcloud_dir = None
 current_pointcloud = None
+current_npz_path = None
+current_npy_path = None
 show_surfaces = True
 show_pointcloud = True
 colormap_options = ['rainbow', 'viridis', 'cool_to_warm', 'red_to_blue']
@@ -234,6 +236,7 @@ def update_visualization():
     """Update the visualization with current index"""
     global current_idx, latent_dataset, vae_model, dataset_helper, device
     global surfaces_dict, current_colormap, pointcloud_dir, current_pointcloud
+    global current_npz_path, current_npy_path
     
     # Clear existing structures
     ps.remove_all_structures()
@@ -242,11 +245,14 @@ def update_visualization():
     (latent_params, rotations, scales, shifts, classes, 
      bbox_mins, bbox_maxs, mask) = latent_dataset[current_idx]
     
+    # Store current NPZ path
+    current_npz_path = latent_dataset.npz_files[current_idx]
+    
     # Load corresponding point cloud if pointcloud_dir is provided
     current_pointcloud = None
+    current_npy_path = None
     if pointcloud_dir is not None:
-        npz_path = latent_dataset.npz_files[current_idx]
-        current_pointcloud = load_corresponding_pointcloud(npz_path, pointcloud_dir)
+        current_pointcloud, current_npy_path = load_corresponding_pointcloud(current_npz_path, pointcloud_dir)
     
     # Get valid surfaces
     valid_mask = mask.bool()
@@ -334,9 +340,33 @@ def update_visualization():
 def callback():
     """Polyscope callback function for UI controls"""
     global current_idx, max_idx, show_surfaces, surfaces_dict, current_colormap
-    global show_pointcloud, current_pointcloud
+    global show_pointcloud, current_pointcloud, current_npz_path, current_npy_path
+    global latent_dataset, pointcloud_dir
     
     psim.Text("Latent Dataset Visualization")
+    psim.Separator()
+    
+    # Display file paths
+    if current_npz_path is not None:
+        npz_path_obj = Path(current_npz_path)
+        npz_dir_obj = Path(latent_dataset.npz_dir)
+        try:
+            npz_relative = npz_path_obj.relative_to(npz_dir_obj)
+            psim.TextColored((0.3, 0.7, 1.0, 1.0), f"NPZ: {npz_relative}")
+        except:
+            psim.TextColored((0.3, 0.7, 1.0, 1.0), f"NPZ: {npz_path_obj.name}")
+    
+    if current_npy_path is not None and pointcloud_dir is not None:
+        npy_path_obj = Path(current_npy_path)
+        pc_dir_obj = Path(pointcloud_dir)
+        try:
+            npy_relative = npy_path_obj.relative_to(pc_dir_obj)
+            psim.TextColored((0.3, 1.0, 0.7, 1.0), f"NPY: {npy_relative}")
+        except:
+            psim.TextColored((0.3, 1.0, 0.7, 1.0), f"NPY: {npy_path_obj.name}")
+    elif pointcloud_dir is not None:
+        psim.TextColored((1.0, 0.5, 0.3, 1.0), "NPY: Not found")
+    
     psim.Separator()
     
     # Index controls
