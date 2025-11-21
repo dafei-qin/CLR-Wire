@@ -449,13 +449,13 @@ def main():
         
         # try:
             # Sample surfaces
-            sampled_points, surface_labels = sample_surfaces_from_json(
-                json_path,
-                dataset,
-                max_points=args.max_points,
-                area_estimation_grid=args.area_estimation_grid,
-                sampling_mode=args.sampling_mode
-            )
+        sampled_points, surface_labels = sample_surfaces_from_json(
+            json_path,
+            dataset,
+            max_points=args.max_points,
+            area_estimation_grid=args.area_estimation_grid,
+            sampling_mode=args.sampling_mode
+        )
         
         if len(sampled_points) == 0:
             print(f"\nWarning: No valid points sampled from {json_path}")
