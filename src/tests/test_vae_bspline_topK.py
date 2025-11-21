@@ -150,6 +150,14 @@ def evaluate_dataset(
     ds = dataset_bspline(**dataset_kwargs)
     model = load_model(ckpt_path, device, model_class=model_class, model_kwargs=model_kwargs or {})
     rows: List[Dict[str, Any]] = []
+    latent_stats: Dict[str, Any] = {
+        "sum_mu": None,
+        "sum_mu_sq": None,
+        "sum_var": None,
+        "count": 0,
+        "kl_sum": 0.0,
+        "kl_count": 0,
+    }
 
     dl = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=False)
     global_ptr = 0  # track dataset indices for mapping to paths (no shuffle)
@@ -266,6 +274,24 @@ def evaluate_dataset(
             num_poles_v,
         )
 
+        # Update latent distribution statistics
+        mu_cpu = mu.detach().double().cpu()
+        logvar_cpu = logvar.detach().double().cpu()
+        var_cpu = logvar_cpu.exp()
+        batch_size = mu_cpu.shape[0]
+        latent_dim = mu_cpu.shape[1]
+        if latent_stats["sum_mu"] is None:
+            latent_stats["sum_mu"] = torch.zeros(latent_dim, dtype=torch.float64)
+            latent_stats["sum_mu_sq"] = torch.zeros(latent_dim, dtype=torch.float64)
+            latent_stats["sum_var"] = torch.zeros(latent_dim, dtype=torch.float64)
+        latent_stats["sum_mu"] += mu_cpu.sum(dim=0)
+        latent_stats["sum_mu_sq"] += (mu_cpu ** 2).sum(dim=0)
+        latent_stats["sum_var"] += var_cpu.sum(dim=0)
+        latent_stats["count"] += batch_size
+        kl = 0.5 * torch.sum(var_cpu + mu_cpu ** 2 - 1 - logvar_cpu, dim=1)
+        latent_stats["kl_sum"] += kl.sum().item()
+        latent_stats["kl_count"] += kl.shape[0]
+
         # Compute masked poles MSE per sample, split into xyz mean and w
         B = pred_poles.shape[0]
         max_u = model.max_num_u_poles
@@ -347,6 +373,32 @@ def evaluate_dataset(
         _print_avg_mse("u_periodic", df[df["peri_u"] == 1])
         _print_avg_mse("v_non_periodic", df[df["peri_v"] == 0])
         _print_avg_mse("v_periodic", df[df["peri_v"] == 1])
+
+    if latent_stats["count"] > 0 and latent_stats["sum_mu"] is not None:
+        count = latent_stats["count"]
+        sum_mu = latent_stats["sum_mu"]
+        sum_mu_sq = latent_stats["sum_mu_sq"]
+        sum_var = latent_stats["sum_var"]
+        latent_dim = sum_mu.shape[0]
+        mean_mu = (sum_mu / count).numpy()
+        mean_mu_sq = (sum_mu_sq / count).numpy()
+        mean_var = (sum_var / count).numpy()
+        mean_abs_mu = np.mean(np.abs(mean_mu))
+        max_abs_mu = np.max(np.abs(mean_mu))
+        mean_var_scalar = float(np.mean(mean_var))
+        combined = mean_mu_sq + mean_var  # E[mu^2 + var] per dim
+        combined_mean = float(np.mean(combined))
+        combined_diff = combined - 1.0
+        combined_diff_mean = float(np.mean(combined_diff))
+        combined_diff_max = float(np.max(np.abs(combined_diff)))
+        mean_kl = latent_stats["kl_sum"] / max(latent_stats["kl_count"], 1)
+        mean_kl_per_dim = mean_kl / latent_dim
+        print("\nLatent z distribution vs N(0, I):")
+        print(f"  samples={count}, latent_dim={latent_dim}")
+        print(f"  mean(|mu|)={mean_abs_mu:.6e}, max(|mu|)={max_abs_mu:.6e}")
+        print(f"  mean posterior var per dim={mean_var_scalar:.6e}")
+        print(f"  mean(mu^2 + var) per dim={combined_mean:.6e}, mean deviation from 1={combined_diff_mean:.6e}, max |deviation|={combined_diff_max:.6e}")
+        print(f"  mean KL(q(z|x) || N(0,I))={mean_kl:.6e} (per-dim {mean_kl_per_dim:.6e})")
 
     return df
 
@@ -714,6 +766,9 @@ def main():
     elif model_name == "vae_bspline_v5":
         from src.vae.vae_bspline_v5 import BSplineVAE as ModelClass
         print('Use the model: vae_bspline_v5')
+    elif model_name == "vae_bspline_v6":
+        from src.vae.vae_bspline_v6 import BSplineVAE as ModelClass
+        print('Use the model: vae_bspline_v6')
     else:
         from src.vae.vae_bspline import BSplineVAE as ModelClass
         print('Use the default model: vae_bspline_v1')
