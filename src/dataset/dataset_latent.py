@@ -54,7 +54,7 @@ class LatentDataset(Dataset):
         """Return number of NPZ files in the dataset."""
         return len(self.npz_files)
     
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Load and return data from a single NPZ file.
         
@@ -68,6 +68,8 @@ class LatentDataset(Dataset):
             - scales: (max_num_surfaces, 1) - padded scale values
             - shifts: (max_num_surfaces, 3) - padded translation vectors
             - classes: (max_num_surfaces,) - padded surface type indices
+            - bbox_mins: (max_num_surfaces, 3) - padded bounding box minimums
+            - bbox_maxs: (max_num_surfaces, 3) - padded bounding box maximums
             - mask: (max_num_surfaces,) - binary mask indicating valid surfaces (1) vs padding (0)
         """
         npz_path = self.npz_files[idx]
@@ -78,6 +80,8 @@ class LatentDataset(Dataset):
         all_scales = np.zeros((self.max_num_surfaces, 1), dtype=np.float32)
         all_shifts = np.zeros((self.max_num_surfaces, 3), dtype=np.float32)
         all_classes = np.zeros(self.max_num_surfaces, dtype=np.int64)
+        all_bbox_mins = np.zeros((self.max_num_surfaces, 3), dtype=np.float32)
+        all_bbox_maxs = np.zeros((self.max_num_surfaces, 3), dtype=np.float32)
         mask = np.zeros(self.max_num_surfaces, dtype=np.float32)
         
         try:
@@ -91,6 +95,10 @@ class LatentDataset(Dataset):
             shifts = data['shifts']                # (B, 3)
             classes = data['classes']              # (B, 1)
             
+            # Extract bounding box data if available (for backward compatibility)
+            bbox_mins = data.get('bbox_mins', np.zeros((len(latent_params), 3)))  # (B, 3)
+            bbox_maxs = data.get('bbox_maxs', np.zeros((len(latent_params), 3)))  # (B, 3)
+            
             # Get number of valid surfaces
             num_surfaces = min(len(latent_params), self.max_num_surfaces)
             
@@ -102,6 +110,8 @@ class LatentDataset(Dataset):
                     torch.from_numpy(all_scales).float(),
                     torch.from_numpy(all_shifts).float(),
                     torch.from_numpy(all_classes).long(),
+                    torch.from_numpy(all_bbox_mins).float(),
+                    torch.from_numpy(all_bbox_maxs).float(),
                     torch.from_numpy(mask).float()
                 )
             
@@ -111,6 +121,8 @@ class LatentDataset(Dataset):
             all_scales[:num_surfaces] = scales[:num_surfaces]
             all_shifts[:num_surfaces] = shifts[:num_surfaces]
             all_classes[:num_surfaces] = classes[:num_surfaces].squeeze(-1)  # Remove last dimension if present
+            all_bbox_mins[:num_surfaces] = bbox_mins[:num_surfaces]
+            all_bbox_maxs[:num_surfaces] = bbox_maxs[:num_surfaces]
             mask[:num_surfaces] = 1.0
             
             if num_surfaces < len(latent_params):
@@ -127,6 +139,8 @@ class LatentDataset(Dataset):
         scales_tensor = torch.from_numpy(all_scales).float()
         shifts_tensor = torch.from_numpy(all_shifts).float()
         classes_tensor = torch.from_numpy(all_classes).long()
+        bbox_mins_tensor = torch.from_numpy(all_bbox_mins).float()
+        bbox_maxs_tensor = torch.from_numpy(all_bbox_maxs).float()
         mask_tensor = torch.from_numpy(mask).float()
         
         return (
@@ -135,6 +149,8 @@ class LatentDataset(Dataset):
             scales_tensor,
             shifts_tensor,
             classes_tensor,
+            bbox_mins_tensor,
+            bbox_maxs_tensor,
             mask_tensor
         )
     
@@ -160,7 +176,11 @@ class LatentDataset(Dataset):
                 'scales_shape': data['scales'].shape,
                 'shifts_shape': data['shifts'].shape,
                 'classes_shape': data['classes'].shape,
+                'has_bbox': 'bbox_mins' in data and 'bbox_maxs' in data,
             }
+            if info['has_bbox']:
+                info['bbox_mins_shape'] = data['bbox_mins'].shape
+                info['bbox_maxs_shape'] = data['bbox_maxs'].shape
             return info
         except Exception as e:
             return {
@@ -215,7 +235,7 @@ class LatentDatasetFlat(Dataset):
         """Return total number of surfaces across all NPZ files."""
         return len(self.surface_indices)
     
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Load and return data for a single surface.
         
@@ -229,6 +249,8 @@ class LatentDatasetFlat(Dataset):
             - scale: (1,) - scale value
             - shift: (3,) - translation vector
             - class_label: scalar - surface type index
+            - bbox_min: (3,) - bounding box minimum coordinates
+            - bbox_max: (3,) - bounding box maximum coordinates
         """
         file_idx, surf_idx, npz_path = self.surface_indices[idx]
         
@@ -243,6 +265,10 @@ class LatentDatasetFlat(Dataset):
             shift = data['shifts'][surf_idx]                 # (3,)
             class_label = data['classes'][surf_idx]          # (1,) or scalar
             
+            # Extract bounding box data if available (for backward compatibility)
+            bbox_min = data.get('bbox_mins', np.zeros((len(data['latent_params']), 3)))[surf_idx]  # (3,)
+            bbox_max = data.get('bbox_maxs', np.zeros((len(data['latent_params']), 3)))[surf_idx]  # (3,)
+            
             # Ensure class_label is scalar
             if hasattr(class_label, '__len__'):
                 class_label = class_label[0]
@@ -253,7 +279,9 @@ class LatentDatasetFlat(Dataset):
                 torch.from_numpy(rotation).float(),
                 torch.from_numpy(scale).float(),
                 torch.from_numpy(shift).float(),
-                torch.tensor(class_label, dtype=torch.long)
+                torch.tensor(class_label, dtype=torch.long),
+                torch.from_numpy(bbox_min).float(),
+                torch.from_numpy(bbox_max).float()
             )
         
         except Exception as e:
@@ -264,7 +292,9 @@ class LatentDatasetFlat(Dataset):
                 torch.zeros(6, dtype=torch.float32),
                 torch.zeros(1, dtype=torch.float32),
                 torch.zeros(3, dtype=torch.float32),
-                torch.tensor(0, dtype=torch.long)
+                torch.tensor(0, dtype=torch.long),
+                torch.zeros(3, dtype=torch.float32),
+                torch.zeros(3, dtype=torch.float32)
             )
 
 
@@ -288,7 +318,7 @@ if __name__ == '__main__':
     # Test first sample
     if len(dataset) > 0:
         print("\nTesting first sample:")
-        latent_params, rotations, scales, shifts, classes, mask = dataset[0]
+        latent_params, rotations, scales, shifts, classes, bbox_mins, bbox_maxs, mask = dataset[0]
         num_valid = mask.sum().item()
         print(f"  File: {dataset.npz_files[0]}")
         print(f"  Number of valid surfaces: {num_valid}")
@@ -297,12 +327,15 @@ if __name__ == '__main__':
         print(f"  Scales shape: {scales.shape}")
         print(f"  Shifts shape: {shifts.shape}")
         print(f"  Classes shape: {classes.shape}")
+        print(f"  Bbox mins shape: {bbox_mins.shape}")
+        print(f"  Bbox maxs shape: {bbox_maxs.shape}")
         print(f"  Mask shape: {mask.shape}")
         
         # Show some statistics
         if num_valid > 0:
             print(f"\n  Valid surface classes: {classes[mask.bool()].tolist()}")
             print(f"  Valid surface scales: {scales[mask.bool()].squeeze().tolist()}")
+            print(f"  Valid surface bbox_mins (first 3): {bbox_mins[mask.bool()][:3].tolist()}")
     
     # Test LatentDatasetFlat
     print("\n" + "="*80)
@@ -313,12 +346,16 @@ if __name__ == '__main__':
     
     if len(flat_dataset) > 0:
         print("\nTesting first surface:")
-        latent_params, rotation, scale, shift, class_label = flat_dataset[0]
+        latent_params, rotation, scale, shift, class_label, bbox_min, bbox_max = flat_dataset[0]
         print(f"  Latent params shape: {latent_params.shape}")
         print(f"  Rotation shape: {rotation.shape}")
         print(f"  Scale shape: {scale.shape}")
         print(f"  Shift shape: {shift.shape}")
         print(f"  Class label: {class_label.item()}")
+        print(f"  Bbox min shape: {bbox_min.shape}")
+        print(f"  Bbox max shape: {bbox_max.shape}")
+        print(f"  Bbox min: {bbox_min.tolist()}")
+        print(f"  Bbox max: {bbox_max.tolist()}")
     
     # Iterate through dataset to check for errors
     print("\n" + "="*80)

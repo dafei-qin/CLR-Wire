@@ -17,12 +17,15 @@ import os
 from pathlib import Path
 from tqdm import tqdm
 import argparse
+from icecream import ic
+ic.disable()
 
 # Add project root to path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from src.dataset.dataset_v1 import dataset_compound, SURFACE_TYPE_MAP
 from src.vae.vae_v1 import SurfaceVAE
+from src.tools.sample_simple_surface import sample_surface_uniform
 
 
 def load_model(checkpoint_path, device='cpu'):
@@ -51,30 +54,127 @@ def load_model(checkpoint_path, device='cpu'):
     return model
 
 
+def compute_bounding_box(points):
+    """
+    Compute the bounding box of a point cloud.
+    
+    Args:
+        points: (N, 3) array of 3D points
+        
+    Returns:
+        bbox_min: (3,) array of minimum coordinates [x_min, y_min, z_min]
+        bbox_max: (3,) array of maximum coordinates [x_max, y_max, z_max]
+    """
+    bbox_min = np.min(points, axis=0)
+    bbox_max = np.max(points, axis=0)
+    return bbox_min, bbox_max
+
+
+def sample_and_compute_bbox(params, surface_type_idx, num_u=8, num_v=8):
+    """
+    Sample a surface and compute its bounding box.
+    
+    Args:
+        params: Surface parameters
+        surface_type_idx: Surface type index
+        num_u: Number of samples in u direction
+        num_v: Number of samples in v direction
+        
+    Returns:
+        bbox_min: (3,) array of minimum coordinates
+        bbox_max: (3,) array of maximum coordinates
+    """
+    try:
+        # Sample the surface
+        points = sample_surface_uniform(
+            params,
+            surface_type_idx,
+            num_u=num_u,
+            num_v=num_v,
+            flatten=True
+        )
+        
+        # Compute bounding box
+        bbox_min, bbox_max = compute_bounding_box(points)
+        return bbox_min, bbox_max
+    
+    except Exception as e:
+        # If sampling fails, return zero bounding box
+        print(f"Warning: Failed to sample surface (type {surface_type_idx}): {e}")
+        return np.zeros(3), np.zeros(3)
+
+
+def sort_by_bbox(latent_params, rotations, scales, shifts, classes, bbox_mins, bbox_maxs):
+    """
+    Sort all data by bounding box minimum coordinates.
+    Priority: x > y > z (first sort by x, then by y, then by z)
+    
+    Args:
+        latent_params: (N, latent_dim) array
+        rotations: (N, 6) array
+        scales: (N, 1) array
+        shifts: (N, 3) array
+        classes: (N, 1) array
+        bbox_mins: (N, 3) array of bbox minimum coordinates
+        bbox_maxs: (N, 3) array of bbox maximum coordinates
+        
+    Returns:
+        All arrays sorted by bbox_mins with priority x > y > z
+    """
+    # Create sorting key: prioritize x, then y, then z
+    # Use lexsort: sorts by last key first, so we reverse the order
+    sort_indices = np.lexsort((bbox_mins[:, 2], bbox_mins[:, 1], bbox_mins[:, 0]))
+    
+    # Sort all arrays
+    latent_params_sorted = latent_params[sort_indices]
+    rotations_sorted = rotations[sort_indices]
+    scales_sorted = scales[sort_indices]
+    shifts_sorted = shifts[sort_indices]
+    classes_sorted = classes[sort_indices]
+    bbox_mins_sorted = bbox_mins[sort_indices]
+    bbox_maxs_sorted = bbox_maxs[sort_indices]
+    
+    return (
+        latent_params_sorted,
+        rotations_sorted,
+        scales_sorted,
+        shifts_sorted,
+        classes_sorted,
+        bbox_mins_sorted,
+        bbox_maxs_sorted
+    )
+
+
 def process_sample(model, dataset, params_tensor, types_tensor, mask_tensor, 
-                   all_shifts, all_rotations, all_scales, device='cpu'):
+                   all_shifts, all_rotations, all_scales, 
+                   params_tensor_original=None, device='cpu'):
     """
     Process a single sample and extract latent representations.
     Also decode to check reconstruction accuracy.
+    Samples each surface with 8x8 grid to compute bounding boxes.
+    Sorts all data by bounding box minimum coordinates (priority: x > y > z).
     
     Args:
         model: The VAE model
         dataset: The dataset object (for getting valid param masks)
-        params_tensor: Surface parameters (max_num_surfaces, max_param_dim)
+        params_tensor: Surface parameters (max_num_surfaces, max_param_dim) - for VAE encoding
         types_tensor: Surface types (max_num_surfaces,)
         mask_tensor: Valid surface mask (max_num_surfaces,)
         all_shifts: Shift vectors (max_num_surfaces, 3)
         all_rotations: Rotation matrices (max_num_surfaces, 3, 3)
         all_scales: Scale values (max_num_surfaces,)
+        params_tensor_original: Original space parameters for bbox computation (if None, use params_tensor)
         device: Device to run inference on
         
     Returns:
-        Dictionary containing:
+        Dictionary containing (all sorted by bbox):
         - latent_params: (num_valid_surfaces, latent_dim)
         - rotations: (num_valid_surfaces, 6) - first 6 elements of rotation matrix
         - scales: (num_valid_surfaces, 1)
         - shifts: (num_valid_surfaces, 3)
         - classes: (num_valid_surfaces, 1)
+        - bbox_mins: (num_valid_surfaces, 3) - minimum coordinates of bounding boxes (in original space)
+        - bbox_maxs: (num_valid_surfaces, 3) - maximum coordinates of bounding boxes (in original space)
         - cls_acc: classification accuracy (float)
         - params_mse: mean squared error of reconstructed parameters (float)
     """
@@ -132,13 +232,68 @@ def process_sample(model, dataset, params_tensor, types_tensor, mask_tensor,
     # Expand dimensions for classes
     classes = valid_types.unsqueeze(-1)
     
-    # Return as numpy arrays
+    # Convert to numpy arrays (before sorting)
+    latent_params_np = latent.cpu().numpy()
+    rotations_np = rotations_6d.cpu().numpy()
+    scales_np = scales_expanded.cpu().numpy()
+    shifts_np = valid_shifts.cpu().numpy()
+    classes_np = classes.cpu().numpy()
+    
+    # Sample surfaces and compute bounding boxes
+    # Use original space parameters if provided, otherwise use canonical parameters
+    num_valid_surfaces = len(valid_params)
+    bbox_mins = np.zeros((num_valid_surfaces, 3), dtype=np.float32)
+    bbox_maxs = np.zeros((num_valid_surfaces, 3), dtype=np.float32)
+    
+    # Determine which parameters to use for bbox computation
+    if params_tensor_original is not None:
+        # Use original space parameters for bbox computation
+        valid_params_for_bbox = params_tensor_original[mask_tensor.bool()]
+        bbox_space = "original"
+    else:
+        # Use the same parameters (canonical or original depending on dataset setting)
+        valid_params_for_bbox = valid_params
+        bbox_space = "same as encoding"
+    
+    # print(f"  Sampling {num_valid_surfaces} surfaces for bounding boxes (space: {bbox_space})...")
+    for i in range(num_valid_surfaces):
+        bbox_min, bbox_max = sample_and_compute_bbox(
+            valid_params_for_bbox[i].cpu().numpy() if torch.is_tensor(valid_params_for_bbox[i]) else valid_params_for_bbox[i],
+            valid_types[i].item(),
+            num_u=8,
+            num_v=8
+        )
+        bbox_mins[i] = bbox_min
+        bbox_maxs[i] = bbox_max
+    
+    # Sort all data by bounding box (priority: x > y > z)
+    (
+        latent_params_sorted,
+        rotations_sorted,
+        scales_sorted,
+        shifts_sorted,
+        classes_sorted,
+        bbox_mins_sorted,
+        bbox_maxs_sorted
+    ) = sort_by_bbox(
+        latent_params_np,
+        rotations_np,
+        scales_np,
+        shifts_np,
+        classes_np,
+        bbox_mins,
+        bbox_maxs
+    )
+    
+    # Return sorted data
     return {
-        'latent_params': latent.cpu().numpy(),
-        'rotations': rotations_6d.cpu().numpy(),
-        'scales': scales_expanded.cpu().numpy(),
-        'shifts': valid_shifts.cpu().numpy(),
-        'classes': classes.cpu().numpy(),
+        'latent_params': latent_params_sorted,
+        'rotations': rotations_sorted,
+        'scales': scales_sorted,
+        'shifts': shifts_sorted,
+        'classes': classes_sorted,
+        'bbox_mins': bbox_mins_sorted,
+        'bbox_maxs': bbox_maxs_sorted,
         'cls_acc': cls_acc,
         'params_mse': params_mse
     }
@@ -221,6 +376,22 @@ def main():
     dataset = dataset_compound(args.input_dir, canonical=args.canonical)
     print(f"Found {len(dataset)} samples")
     
+    # If using canonical space, also create a dataset for original space (for bbox computation)
+    dataset_original = None
+    if args.canonical:
+        print("\n" + "="*80)
+        print("CANONICAL MODE ENABLED:")
+        print("  - Latent encoding: using canonical space (normalized, centered)")
+        print("  - Bbox computation: using original space (actual positions)")
+        print("  Loading original (non-canonical) dataset for bbox computation...")
+        print("="*80 + "\n")
+        dataset_original = dataset_compound(args.input_dir, canonical=False)
+    else:
+        print("\n" + "="*80)
+        print("NON-CANONICAL MODE:")
+        print("  - Both encoding and bbox computation use original space")
+        print("="*80 + "\n")
+    
     # Load model
     print(f"Loading model from: {args.checkpoint_path}")
     model = load_model(args.checkpoint_path, device=args.device)
@@ -239,7 +410,7 @@ def main():
     
     for idx in tqdm(range(len(dataset)), desc="Converting to latent"):
         try:
-            # Get data from dataset
+            # Get data from dataset (canonical space if args.canonical=True)
             params_tensor, types_tensor, mask_tensor, all_shifts, all_rotations, all_scales = dataset[idx]
             
             # Check if there are any valid surfaces
@@ -248,10 +419,16 @@ def main():
                 print(f"\nWarning: No valid surfaces in sample {idx} ({dataset.json_names[idx]})")
                 continue
             
+            # If using canonical space, also load original space parameters for bbox computation
+            params_tensor_original = None
+            if dataset_original is not None:
+                params_tensor_original, _, _, _, _, _ = dataset_original[idx]
+            
             # Process sample
             result = process_sample(
                 model, dataset, params_tensor, types_tensor, mask_tensor,
                 all_shifts, all_rotations, all_scales,
+                params_tensor_original=params_tensor_original,
                 device=args.device
             )
             
@@ -266,14 +443,16 @@ def main():
             # Create output directory if it doesn't exist
             output_path.parent.mkdir(parents=True, exist_ok=True)
             
-            # Save to npz file (excluding metrics)
+            # Save to npz file (excluding metrics, including bounding boxes)
             np.savez_compressed(
                 output_path,
                 latent_params=result['latent_params'],
                 rotations=result['rotations'],
                 scales=result['scales'],
                 shifts=result['shifts'],
-                classes=result['classes']
+                classes=result['classes'],
+                bbox_mins=result['bbox_mins'],
+                bbox_maxs=result['bbox_maxs']
             )
             
         except Exception as e:
