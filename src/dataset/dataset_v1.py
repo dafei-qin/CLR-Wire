@@ -335,6 +335,75 @@ class dataset_compound(Dataset):
         """Return number of JSON files in the dataset."""
         return len(self.json_names)
     
+    def get_valid_param_length(self, surface_type_idx):
+        """
+        Get the valid parameter length for a given surface type.
+        
+        Args:
+            surface_type_idx: Integer or array of integers representing surface type indices
+                             (0=plane, 1=cylinder, 2=cone, 3=sphere, 4=torus)
+        
+        Returns:
+            Integer or array of integers representing the valid parameter length for each type
+        """
+        # Map from surface type index to valid parameter length
+        # base_dim (17) + scalar_dim
+        type_to_length = {
+            0: 17,  # plane: base_dim + 0
+            1: 18,  # cylinder: base_dim + 1
+            2: 19,  # cone: base_dim + 2
+            3: 18,  # sphere: base_dim + 1
+            4: 19,  # torus: base_dim + 2
+        }
+        
+        # Handle both single value and array inputs
+        if isinstance(surface_type_idx, (np.ndarray, torch.Tensor)):
+            if isinstance(surface_type_idx, torch.Tensor):
+                surface_type_idx = surface_type_idx.cpu().numpy()
+            return np.array([type_to_length.get(int(t), 0) for t in surface_type_idx])
+        else:
+            return type_to_length.get(int(surface_type_idx), 0)
+    
+    def get_valid_param_mask(self, surface_type_idx, return_tensor=False):
+        """
+        Get a boolean mask indicating valid parameter positions for given surface type(s).
+        
+        Args:
+            surface_type_idx: Integer, numpy array, or torch tensor of surface type indices
+                             Shape can be (,) for single type or (N,) for batch
+            return_tensor: If True, return torch.Tensor; otherwise return numpy array
+        
+        Returns:
+            Boolean mask of shape (max_param_dim,) or (N, max_param_dim)
+            True indicates valid parameter positions, False indicates padding
+        """
+        is_batch = isinstance(surface_type_idx, (np.ndarray, torch.Tensor))
+        
+        if isinstance(surface_type_idx, torch.Tensor):
+            surface_type_idx_np = surface_type_idx.cpu().numpy()
+        elif isinstance(surface_type_idx, np.ndarray):
+            surface_type_idx_np = surface_type_idx
+        else:
+            surface_type_idx_np = np.array([surface_type_idx])
+            is_batch = False
+        
+        # Get valid lengths for all types
+        valid_lengths = self.get_valid_param_length(surface_type_idx_np)
+        
+        # Create mask
+        if is_batch:
+            batch_size = len(surface_type_idx_np)
+            mask = np.zeros((batch_size, self.max_param_dim), dtype=bool)
+            for i, length in enumerate(valid_lengths):
+                mask[i, :length] = True
+        else:
+            mask = np.zeros(self.max_param_dim, dtype=bool)
+            mask[:valid_lengths] = True
+        
+        if return_tensor:
+            return torch.from_numpy(mask)
+        return mask
+    
     def _parse_surface(self, surface_dict: Dict) -> Tuple[np.ndarray, int]:
         """
         Parse a single surface from JSON format to parameter vector.
@@ -735,9 +804,6 @@ class dataset_compound(Dataset):
                 f.write(json_path + '\n')
             return torch.from_numpy(all_params).float(), torch.from_numpy(all_types).long(), torch.from_numpy(mask).float(), torch.from_numpy(all_shifts).float(), torch.from_numpy(all_rotations).float(), torch.from_numpy(all_scales).float()
         
-        # Here we load the .npz which stores the bspline approximation and the points data. 
-        # npz_data = np.load(json_path.replace('.json', '.npz'))
-
         # When the params are larger than 10, instead of dropping them we use the approx bspline instead.
         # Parse each surface
         for i, surface_dict in enumerate(surfaces_data):
@@ -838,6 +904,24 @@ if __name__ == '__main__':
     from tqdm import tqdm
     import time
     dataset = dataset_compound(sys.argv[1], canonical=True)
+    
+    # Test the get_valid_param_length and get_valid_param_mask functions
+    print("Testing get_valid_param_length and get_valid_param_mask:")
+    print(f"Max param dim: {dataset.max_param_dim}")
+    for surf_type_idx, surf_type_name in SURFACE_TYPE_MAP_INV.items():
+        if surf_type_idx < 5:  # Skip bspline
+            length = dataset.get_valid_param_length(surf_type_idx)
+            mask = dataset.get_valid_param_mask(surf_type_idx)
+            print(f"  {surf_type_name} (type {surf_type_idx}): valid length = {length}, mask sum = {mask.sum()}")
+    
+    # Test batch processing
+    batch_types = np.array([0, 1, 2, 3, 4])
+    batch_lengths = dataset.get_valid_param_length(batch_types)
+    batch_masks = dataset.get_valid_param_mask(batch_types)
+    print(f"\nBatch test: types={batch_types}, lengths={batch_lengths}")
+    print(f"Batch mask shape: {batch_masks.shape}, sums per row: {batch_masks.sum(axis=1)}")
+    print()
+    
     for i in tqdm(range(len(dataset))):
         _ = dataset[i]
         # t = time.time()

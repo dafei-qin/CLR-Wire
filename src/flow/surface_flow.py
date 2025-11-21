@@ -428,11 +428,11 @@ def enforce_zero_terminal_snr(betas):
     return betas
 
 
-def get_new_scheduler(type='v_prediction'):
+def get_new_scheduler(type='v_prediction', num_train_timesteps=1000):
     if type == 'v_prediction':
         print("Using v_prediction scheduler")
         scheduler = DDPMScheduler(
-            num_train_timesteps=1000,
+            num_train_timesteps=num_train_timesteps,
             # beta_start=0.00085,
             # beta_end=0.012,
             # beta_schedule="scaled_linear",
@@ -444,7 +444,7 @@ def get_new_scheduler(type='v_prediction'):
         betas = (scheduler.betas)
 
         scheduler = DDPMScheduler(
-            num_train_timesteps=1000,
+            num_train_timesteps=num_train_timesteps,
             trained_betas=betas,
             clip_sample=False,
             prediction_type="v_prediction",
@@ -453,7 +453,7 @@ def get_new_scheduler(type='v_prediction'):
     elif type == 'sample':
         print("Using sample scheduler")
         scheduler = DDPMScheduler(
-            num_train_timesteps=1000, 
+            num_train_timesteps=num_train_timesteps, 
             prediction_type="sample"
         )
     else:
