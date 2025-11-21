@@ -490,14 +490,6 @@ class dataset_compound(Dataset):
             v_center = 0.5 * (v_min + v_max)
             u_diff = u_max - u_min
             v_diff = v_max - v_min
-            # while u_diff > 2 * np.pi:
-            #     u_diff -= 2 * np.pi
-            # if u_diff > 2 * np.pi + 1e-4:
-            #     u_diff -= u_diff // (2 * np.pi) * 2 * np.pi
-            # while v_diff > np.pi:
-            #     v_diff -= np.pi
-            # if v_diff > np.pi:
-            #     v_diff -= v_diff // np.pi * np.pi
             u_half = 0.5 * (u_diff)
             v_half = 0.5 * (v_diff)
             u_center, v_center = canonicalize_vc_uc(u_center, v_center)
@@ -531,10 +523,10 @@ class dataset_compound(Dataset):
 
             # 3. guarantee v_min is positive
             if v_min < 0 - 1e-6:
-                k = (v_min // (np.pi))
-                v_min -= k * np.pi
-                v_max -= k * np.pi
-                ic('v_min < 0, add ', k, 'times pi', 'now v_min: ', v_min, 'v_max: ', v_max)
+                k = (v_min // (2 * np.pi))
+                v_min -= k * 2 * np.pi
+                v_max -= k * 2 *np.pi
+                ic('v_min < 0, add ', k, 'times 2pi', 'now v_min: ', v_min, 'v_max: ', v_max)
             # 4. guarantee v_diff < 2 * np.pi
             if v_max - v_min > 2 * np.pi + 1e-4:
                 v_max -= ((v_max - v_min) // (2 * np.pi) - 1) * 2 * np.pi
