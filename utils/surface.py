@@ -462,6 +462,16 @@ def visualize_json_interset(cad_data, plot=True, plot_gui=True,tol=1e-2, ps_head
 
         surface_type = face['type']
         surface_index = face['idx'][0]
+        if len(face['uv']) > 0:
+            for i in range(len(face['uv'])):
+                if type(face['uv'][i]) == np.float32 or type(face['uv'][i]) == np.float64:
+                    face['uv'][i] = face['uv'][i].item()
+
+        if len(face['scalar']) > 0:
+            for i in range(len(face['scalar'])):
+                if type(face['scalar'][i]) == np.float32 or type(face['scalar'][i]) == np.float64:
+                    face['scalar'][i] = face['scalar'][i].item()
+
         if surface_type != 'bspline_surface':
             ic(f"Processing face {surface_index} with type {surface_type}, uv: {face['uv']}, scalar: {face['scalar']}, D: {face['direction'][0]}, X: {face['direction'][1]}...")
         if surface_type == 'plane':
