@@ -5,7 +5,8 @@ This script:
 1. Loads latent representations from NPZ files
 2. Decodes them using VAE to get canonical space parameters
 3. Transforms back to original space using from_canonical
-4. Visualizes surfaces with gradient colors based on bbox sorting order
+4. Loads corresponding point cloud data from NPY files
+5. Visualizes surfaces with gradient colors and point clouds side by side
 """
 
 import torch
@@ -100,6 +101,47 @@ def generate_gradient_colors(n, colormap='rainbow'):
     return colors
 
 
+def load_corresponding_pointcloud(npz_path, pointcloud_dir):
+    """
+    Load the corresponding point cloud NPY file for a given NPZ file.
+    
+    Args:
+        npz_path: Path to the NPZ file
+        pointcloud_dir: Root directory containing point cloud NPY files
+        
+    Returns:
+        Point cloud array (N, 3) or None if not found
+    """
+    npz_path = Path(npz_path)
+    pointcloud_dir = Path(pointcloud_dir)
+    
+    # Get the NPZ file name (without extension)
+    npz_stem = npz_path.stem
+    
+    # Try to find the corresponding NPY file
+    # Method 1: Same relative path structure
+    try:
+        # Get relative path from NPZ directory
+        npz_relative = npz_path.relative_to(npz_path.parent.parent)
+        npy_path = pointcloud_dir / npz_relative.parent / f"{npz_stem}.npy"
+        if npy_path.exists():
+            return np.load(npy_path)
+    except:
+        pass
+    
+    # Method 2: Direct file name match in pointcloud_dir
+    npy_path = pointcloud_dir / f"{npz_stem}.npy"
+    if npy_path.exists():
+        return np.load(npy_path)
+    
+    # Method 3: Search recursively in pointcloud_dir
+    for npy_file in pointcloud_dir.rglob(f"{npz_stem}.npy"):
+        return np.load(npy_file)
+    
+    print(f"Warning: Could not find corresponding NPY file for {npz_path.name}")
+    return None
+
+
 def decode_and_recover(model, latent_params, rotations, scales, shifts, classes, dataset_helper, device='cpu'):
     """
     Decode latent representations and recover to original space.
@@ -180,7 +222,10 @@ vae_model = None
 dataset_helper = None
 device = 'cpu'
 surfaces_dict = {}
+pointcloud_dir = None
+current_pointcloud = None
 show_surfaces = True
+show_pointcloud = True
 colormap_options = ['rainbow', 'viridis', 'cool_to_warm', 'red_to_blue']
 current_colormap = 0
 
@@ -188,7 +233,7 @@ current_colormap = 0
 def update_visualization():
     """Update the visualization with current index"""
     global current_idx, latent_dataset, vae_model, dataset_helper, device
-    global surfaces_dict, current_colormap
+    global surfaces_dict, current_colormap, pointcloud_dir, current_pointcloud
     
     # Clear existing structures
     ps.remove_all_structures()
@@ -196,6 +241,12 @@ def update_visualization():
     # Load data from latent dataset
     (latent_params, rotations, scales, shifts, classes, 
      bbox_mins, bbox_maxs, mask) = latent_dataset[current_idx]
+    
+    # Load corresponding point cloud if pointcloud_dir is provided
+    current_pointcloud = None
+    if pointcloud_dir is not None:
+        npz_path = latent_dataset.npz_files[current_idx]
+        current_pointcloud = load_corresponding_pointcloud(npz_path, pointcloud_dir)
     
     # Get valid surfaces
     valid_mask = mask.bool()
@@ -264,11 +315,26 @@ def update_visualization():
         print(f"Error visualizing surfaces: {e}")
         import traceback
         traceback.print_exc()
+    
+    # Visualize point cloud if available
+    if current_pointcloud is not None:
+        try:
+            print(f"Visualizing point cloud with {len(current_pointcloud)} points")
+            pc_cloud = ps.register_point_cloud("point_cloud", current_pointcloud)
+            pc_cloud.set_enabled(show_pointcloud)
+            # Set point cloud color to gray for contrast with colored surfaces
+            pc_cloud.set_color([0.5, 0.5, 0.5])
+            pc_cloud.set_radius(0.003, relative=False)
+        except Exception as e:
+            print(f"Error visualizing point cloud: {e}")
+            import traceback
+            traceback.print_exc()
 
 
 def callback():
     """Polyscope callback function for UI controls"""
     global current_idx, max_idx, show_surfaces, surfaces_dict, current_colormap
+    global show_pointcloud, current_pointcloud
     
     psim.Text("Latent Dataset Visualization")
     psim.Separator()
@@ -290,6 +356,10 @@ def callback():
     psim.Text(f"Current Index: {current_idx}")
     psim.Text(f"Max Index: {max_idx}")
     psim.Text(f"Surfaces: {len(surfaces_dict)}")
+    if current_pointcloud is not None:
+        psim.Text(f"Points: {len(current_pointcloud)}")
+    else:
+        psim.Text("Points: N/A")
     
     # Colormap selection
     psim.Separator()
@@ -307,6 +377,14 @@ def callback():
         for surface_data in surfaces_dict.values():
             if 'ps_handler' in surface_data and surface_data['ps_handler'] is not None:
                 surface_data['ps_handler'].set_enabled(show_surfaces)
+    
+    # Point cloud show/hide control
+    if current_pointcloud is not None:
+        changed, show_pointcloud = psim.Checkbox("Show Point Cloud", show_pointcloud)
+        if changed:
+            pc_structure = ps.get_point_cloud("point_cloud", error_if_absent=False)
+            if pc_structure is not None:
+                pc_structure.set_enabled(show_pointcloud)
     
     # Navigation buttons
     psim.Separator()
@@ -328,20 +406,29 @@ def callback():
     psim.Text("  Red/Start → surfaces with small X")
     psim.Text("  Blue/End → surfaces with large X")
     psim.Text("Sorting priority: X > Y > Z")
+    if current_pointcloud is not None:
+        psim.Text("")
+        psim.Text("Point Cloud (gray):")
+        psim.Text("  Original sampled points")
 
 
 def main():
-    global current_idx, max_idx, latent_dataset, vae_model, dataset_helper, device
+    global current_idx, max_idx, latent_dataset, vae_model, dataset_helper, device, pointcloud_dir
     
-    parser = argparse.ArgumentParser(description='Test and visualize LatentDataset')
+    parser = argparse.ArgumentParser(description='Test and visualize LatentDataset with point clouds')
     parser.add_argument('npz_dir', type=str, help='Directory containing NPZ files')
     parser.add_argument('checkpoint_path', type=str, help='Path to VAE checkpoint')
+    parser.add_argument('--pointcloud_dir', type=str, default=None,
+                       help='Directory containing corresponding NPY point cloud files')
     parser.add_argument('--device', type=str, default='cpu', choices=['cpu', 'cuda'],
                        help='Device to run on')
     parser.add_argument('--index', type=int, default=0, help='Initial sample index')
     parser.add_argument('--latent_dim', type=int, default=128, help='Latent dimension')
     
     args = parser.parse_args()
+    
+    # Set point cloud directory
+    pointcloud_dir = args.pointcloud_dir
     
     device = args.device
     if device == 'cuda' and not torch.cuda.is_available():
@@ -390,6 +477,9 @@ def main():
     print("  - Use colormap radio buttons to change gradient colors")
     print("  - Colors show sorting order (red=start, blue=end)")
     print("  - Surfaces are sorted by bounding box (X > Y > Z)")
+    if pointcloud_dir:
+        print("  - Point clouds (gray) are loaded from corresponding NPY files")
+        print("  - Toggle 'Show Point Cloud' to show/hide point clouds")
     print("="*80 + "\n")
     
     ps.show()
