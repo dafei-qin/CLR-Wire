@@ -442,13 +442,13 @@ class dataset_compound(Dataset):
             radius = max(r_min, r_min_thresh)
 
             # 1. guarantee u_min is positive
-            if u_min < 0:
+            if u_min < 0 - 1e-4:
                 
                 k = (u_min // (2 * np.pi) )
                 u_min -= k * 2 * np.pi
                 u_max -= k * 2 * np.pi
             # 2. guarantee u_diff < 2 * np.pi
-            if u_max - u_min > 2 * np.pi:
+            if u_max - u_min > 2 * np.pi + 1e-4:
                 u_max -= (u_max - u_min) // (2 * np.pi) * 2 * np.pi
 
             
