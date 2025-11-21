@@ -188,7 +188,7 @@ def allocate_points_by_area(areas, max_points, min_points_per_surface=4):
     return allocations
 
 
-def sample_surfaces_from_json(json_path, dataset, max_points=2048, area_estimation_grid=16):
+def sample_surfaces_from_json(json_path, dataset, max_points=2048, area_estimation_grid=16, skip_bspline=True):
     """
     Sample points from all surfaces in a JSON file.
     
@@ -209,12 +209,14 @@ def sample_surfaces_from_json(json_path, dataset, max_points=2048, area_estimati
     if not surfaces_data:
         return np.zeros((0, 3), dtype=np.float32), np.zeros(0, dtype=np.int32)
     
+    if skip_bspline:
+        surfaces_data = [surface_dict for surface_dict in surfaces_data if surface_dict['type'] != 'bspline_surface']
     # Parse surfaces and estimate areas
     valid_surfaces = []
     areas = []
     
     for i, surface_dict in enumerate(surfaces_data):
-        try:
+#         try:
             # Parse surface
             params, surface_type_idx = dataset._parse_surface(surface_dict)
             
@@ -232,9 +234,9 @@ def sample_surfaces_from_json(json_path, dataset, max_points=2048, area_estimati
             valid_surfaces.append((params, surface_type_idx))
             areas.append(area)
             
-        except Exception as e:
-            print(f"Warning: Failed to parse surface {i} in {json_path}: {e}")
-            continue
+        # except Exception as e:
+        #     print(f"Warning: Failed to parse surface {i} in {json_path}: {e}")
+        #     continue
     
     if not valid_surfaces:
         return np.zeros((0, 3), dtype=np.float32), np.zeros(0, dtype=np.int32)
@@ -372,38 +374,38 @@ def main():
     for idx in tqdm(range(len(dataset.json_names)), desc="Sampling surfaces"):
         json_path = dataset.json_names[idx]
         
-        try:
-            # Sample surfaces
-            sampled_points, surface_labels = sample_surfaces_from_json(
-                json_path,
-                dataset,
-                max_points=args.max_points,
-                area_estimation_grid=args.area_estimation_grid
-            )
-            
-            if len(sampled_points) == 0:
-                print(f"\nWarning: No valid points sampled from {json_path}")
-                continue
-            
-            # Get output path
-            output_path = get_output_path(json_path, args.input_dir, args.output_dir)
-            
-            # Create output directory if needed
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            # Save points
-            np.save(output_path, sampled_points)
-            total_points_saved += len(sampled_points)
-            
-            # Optionally save labels
-            if args.save_labels:
-                label_path = output_path.with_suffix('.labels.npy')
-                np.save(label_path, surface_labels)
-            
-        except Exception as e:
-            print(f"\nError processing {json_path}: {e}")
-            failed_samples.append((idx, json_path, str(e)))
+        # try:
+        # Sample surfaces
+        sampled_points, surface_labels = sample_surfaces_from_json(
+            json_path,
+            dataset,
+            max_points=args.max_points,
+            area_estimation_grid=args.area_estimation_grid
+        )
+        
+        if len(sampled_points) == 0:
+            print(f"\nWarning: No valid points sampled from {json_path}")
             continue
+        
+        # Get output path
+        output_path = get_output_path(json_path, args.input_dir, args.output_dir)
+        
+        # Create output directory if needed
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Save points
+        np.save(output_path, sampled_points)
+        total_points_saved += len(sampled_points)
+        
+        # Optionally save labels
+        if args.save_labels:
+            label_path = output_path.with_suffix('.labels.npy')
+            np.save(label_path, surface_labels)
+            
+        # except Exception as e:
+        #     print(f"\nError processing {json_path}: {e}")
+        #     failed_samples.append((idx, json_path, str(e)))
+        #     continue
     
     print("\n" + "="*80)
     print("Processing complete!")
