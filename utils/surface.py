@@ -47,7 +47,7 @@ from itertools import combinations
 from icecream import ic
 import traceback
 
-ic.enable()
+ic.disable()
 
 def Compound(faces):
     # Convert list of faces to a compound
