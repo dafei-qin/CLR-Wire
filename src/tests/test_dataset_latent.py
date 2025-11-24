@@ -101,7 +101,7 @@ def generate_gradient_colors(n, colormap='rainbow'):
     return colors
 
 
-def load_corresponding_pointcloud(npz_path, pointcloud_dir):
+def load_corresponding_pointcloud(npz_dir, npz_path, pointcloud_dir):
     """
     Load the corresponding point cloud NPY file for a given NPZ file.
     
@@ -112,32 +112,12 @@ def load_corresponding_pointcloud(npz_path, pointcloud_dir):
     Returns:
         Tuple of (point cloud array (N, 3), npy_path) or (None, None) if not found
     """
-    npz_path = Path(npz_path)
-    pointcloud_dir = Path(pointcloud_dir)
+    # npz_path = Path(npz_path)
+    pointcloud_dir = Path(npz_path.replace(str(npz_dir), pointcloud_dir))
     
-    # Get the NPZ file name (without extension)
-    npz_stem = npz_path.stem
-    
-    # Try to find the corresponding NPY file
-    # Method 1: Same relative path structure
-    try:
-        # Get relative path from NPZ directory
-        npz_relative = npz_path.relative_to(npz_path.parent.parent)
-        npy_path = pointcloud_dir / npz_relative.parent / f"{npz_stem}.npy"
-        if npy_path.exists():
-            return np.load(npy_path), str(npy_path)
-    except:
-        pass
-    
-    # Method 2: Direct file name match in pointcloud_dir
-    npy_path = pointcloud_dir / f"{npz_stem}.npy"
-    if npy_path.exists():
-        return np.load(npy_path), str(npy_path)
-    
-    # Method 3: Search recursively in pointcloud_dir
-    for npy_file in pointcloud_dir.rglob(f"{npz_stem}.npy"):
-        return np.load(npy_file), str(npy_file)
-    
+    npy_file = str(pointcloud_dir).replace('.npz', '.npy')
+    print(npy_file)
+    return np.load(npy_file), str(npy_file)
     print(f"Warning: Could not find corresponding NPY file for {npz_path.name}")
     return None, None
 
@@ -252,7 +232,7 @@ def update_visualization():
     current_pointcloud = None
     current_npy_path = None
     if pointcloud_dir is not None:
-        current_pointcloud, current_npy_path = load_corresponding_pointcloud(current_npz_path, pointcloud_dir)
+        current_pointcloud, current_npy_path = load_corresponding_pointcloud(latent_dataset.npz_dir, current_npz_path, pointcloud_dir)
     
     # Get valid surfaces
     valid_mask = mask.bool()
