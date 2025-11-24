@@ -105,21 +105,41 @@ def load_corresponding_pointcloud(npz_dir, npz_path, pointcloud_dir):
     """
     Load the corresponding point cloud NPY file for a given NPZ file.
     
+    Supports two formats:
+    - (N, 3): positions only [x, y, z]
+    - (N, 6): positions + normals [x, y, z, nx, ny, nz]
+    
     Args:
         npz_path: Path to the NPZ file
         pointcloud_dir: Root directory containing point cloud NPY files
         
     Returns:
-        Tuple of (point cloud array (N, 3), npy_path) or (None, None) if not found
+        Tuple of (positions (N, 3), normals (N, 3) or None, npy_path) 
+        or (None, None, None) if not found
     """
     # npz_path = Path(npz_path)
     pointcloud_dir = Path(npz_path.replace(str(npz_dir), pointcloud_dir))
     
     npy_file = str(pointcloud_dir).replace('.npz', '.npy')
     print(npy_file)
-    return np.load(npy_file), str(npy_file)
-    print(f"Warning: Could not find corresponding NPY file for {npz_path.name}")
-    return None, None
+    
+    try:
+        data = np.load(npy_file)
+        
+        if data.shape[1] == 3:
+            # Only positions
+            return data, None, str(npy_file)
+        elif data.shape[1] == 6:
+            # Positions + normals
+            positions = data[:, :3]
+            normals = data[:, 3:]
+            return positions, normals, str(npy_file)
+        else:
+            print(f"Warning: Unexpected data shape {data.shape} in {npy_file}")
+            return None, None, None
+    except Exception as e:
+        print(f"Warning: Could not load NPY file {npy_file}: {e}")
+        return None, None, None
 
 
 def decode_and_recover(model, latent_params, rotations, scales, shifts, classes, dataset_helper, device='cpu'):
@@ -204,10 +224,12 @@ device = 'cpu'
 surfaces_dict = {}
 pointcloud_dir = None
 current_pointcloud = None
+current_normals = None
 current_npz_path = None
 current_npy_path = None
 show_surfaces = True
 show_pointcloud = True
+show_normals = True
 colormap_options = ['rainbow', 'viridis', 'cool_to_warm', 'red_to_blue']
 current_colormap = 0
 
@@ -216,7 +238,7 @@ def update_visualization():
     """Update the visualization with current index"""
     global current_idx, latent_dataset, vae_model, dataset_helper, device
     global surfaces_dict, current_colormap, pointcloud_dir, current_pointcloud
-    global current_npz_path, current_npy_path
+    global current_npz_path, current_npy_path, current_normals, show_normals
     
     # Clear existing structures
     ps.remove_all_structures()
@@ -230,9 +252,12 @@ def update_visualization():
     
     # Load corresponding point cloud if pointcloud_dir is provided
     current_pointcloud = None
+    current_normals = None
     current_npy_path = None
     if pointcloud_dir is not None:
-        current_pointcloud, current_npy_path = load_corresponding_pointcloud(latent_dataset.npz_dir, current_npz_path, pointcloud_dir)
+        current_pointcloud, current_normals, current_npy_path = load_corresponding_pointcloud(
+            latent_dataset.npz_dir, current_npz_path, pointcloud_dir
+        )
     
     # Get valid surfaces
     valid_mask = mask.bool()
@@ -311,6 +336,20 @@ def update_visualization():
             # Set point cloud color to gray for contrast with colored surfaces
             pc_cloud.set_color([0.5, 0.5, 0.5])
             pc_cloud.set_radius(0.003, relative=False)
+            
+            # Add normals if available
+            if current_normals is not None:
+                print(f"Adding normal vectors to point cloud")
+                pc_cloud.add_vector_quantity(
+                    "normals",
+                    current_normals,
+                    enabled=show_normals,
+                    vectortype='ambient',
+                    length=0.05,  # Adjust this for better visualization
+                    radius=0.002,
+                    color=[1.0, 0.3, 0.3]  # Red color for normals
+                )
+                print(f"Normal vector stats: mean magnitude = {np.linalg.norm(current_normals, axis=1).mean():.4f}")
         except Exception as e:
             print(f"Error visualizing point cloud: {e}")
             import traceback
@@ -320,8 +359,8 @@ def update_visualization():
 def callback():
     """Polyscope callback function for UI controls"""
     global current_idx, max_idx, show_surfaces, surfaces_dict, current_colormap
-    global show_pointcloud, current_pointcloud, current_npz_path, current_npy_path
-    global latent_dataset, pointcloud_dir
+    global show_pointcloud, show_normals, current_pointcloud, current_normals
+    global current_npz_path, current_npy_path, latent_dataset, pointcloud_dir
     
     psim.Text("Latent Dataset Visualization")
     psim.Separator()
@@ -368,8 +407,13 @@ def callback():
     psim.Text(f"Surfaces: {len(surfaces_dict)}")
     if current_pointcloud is not None:
         psim.Text(f"Points: {len(current_pointcloud)}")
+        if current_normals is not None:
+            psim.TextColored((0.3, 1.0, 0.3, 1.0), "Normals: Available")
+        else:
+            psim.Text("Normals: N/A")
     else:
         psim.Text("Points: N/A")
+        psim.Text("Normals: N/A")
     
     # Colormap selection
     psim.Separator()
@@ -396,6 +440,17 @@ def callback():
             if pc_structure is not None:
                 pc_structure.set_enabled(show_pointcloud)
     
+    # Normals show/hide control
+    if current_normals is not None:
+        changed, show_normals = psim.Checkbox("Show Normals", show_normals)
+        if changed:
+            pc_structure = ps.get_point_cloud("point_cloud", error_if_absent=False)
+            if pc_structure is not None:
+                try:
+                    pc_structure.set_vector_quantity_enabled("normals", show_normals)
+                except:
+                    pass
+    
     # Navigation buttons
     psim.Separator()
     if psim.Button("Previous (←)") or psim.IsKeyPressed(psim.ImGuiKey_LeftArrow):
@@ -420,6 +475,11 @@ def callback():
         psim.Text("")
         psim.Text("Point Cloud (gray):")
         psim.Text("  Original sampled points")
+        if current_normals is not None:
+            psim.Text("")
+            psim.Text("Normals (red vectors):")
+            psim.Text("  Surface normal directions")
+            psim.Text("  Format: (N, 6) [x,y,z,nx,ny,nz]")
 
 
 def main():
@@ -490,6 +550,11 @@ def main():
     if pointcloud_dir:
         print("  - Point clouds (gray) are loaded from corresponding NPY files")
         print("  - Toggle 'Show Point Cloud' to show/hide point clouds")
+        print("  - Supported formats:")
+        print("    * (N, 3): positions only [x, y, z]")
+        print("    * (N, 6): positions + normals [x, y, z, nx, ny, nz]")
+        print("  - Normal vectors (red) show surface orientation when available")
+        print("  - Toggle 'Show Normals' to show/hide normal vectors")
     print("="*80 + "\n")
     
     ps.show()
