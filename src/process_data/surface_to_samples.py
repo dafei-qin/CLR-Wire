@@ -22,7 +22,57 @@ import argparse
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from src.dataset.dataset_v1 import dataset_compound
-from src.tools.sample_simple_surface import sample_surface_uniform
+from src.tools.sample_simple_surface import sample_surface_uniform, build_occ_surface, recover_surface_dict
+
+# Import pythonocc components for normal computation
+from OCC.Core.GeomLProp import GeomLProp_SLProps
+from OCC.Core.gp import gp_Dir
+
+
+def compute_surface_normals(params, surface_type_idx, uv_coords, orientation='Forward'):
+    """
+    Compute surface normals at given UV coordinates using GeomLProp_SLProps.
+    
+    Args:
+        params: Surface parameters
+        surface_type_idx: Surface type index
+        uv_coords: (N, 2) array of UV coordinates
+        orientation: Surface orientation ('Forward' or 'Reversed')
+        
+    Returns:
+        normals: (N, 3) array of normal vectors
+    """
+    try:
+        # Recover surface dictionary and build OCC surface
+        surface_dict = recover_surface_dict(params, surface_type_idx)
+        occ_surface, (u_min, u_max, v_min, v_max) = build_occ_surface(surface_dict)
+        
+        # Initialize normal computation with resolution 1 and tolerance 1e-6
+        prop = GeomLProp_SLProps(occ_surface, 1, 1e-6)
+        
+        normals = np.zeros((len(uv_coords), 3), dtype=np.float64)
+        
+        for i, (u_val, v_val) in enumerate(uv_coords):
+            # Set UV parameters
+            prop.SetParameters(float(u_val), float(v_val))
+            
+            # Check if normal is defined at this point
+            if prop.IsNormalDefined():
+                normal_dir = prop.Normal()
+                normals[i] = [normal_dir.X(), normal_dir.Y(), normal_dir.Z()]
+            else:
+                # If normal is not defined, use a fallback (e.g., zero vector)
+                normals[i] = [0.0, 0.0, 0.0]
+        
+        # Reverse normal direction if orientation is 'Reversed'
+        if orientation == 'Reversed':
+            normals = -normals
+        
+        return normals
+    
+    except Exception as e:
+        print(f"Warning: Failed to compute normals for surface type {surface_type_idx}: {e}")
+        return np.zeros((len(uv_coords), 3), dtype=np.float64)
 
 
 def estimate_surface_area(params, surface_type_idx, num_u=16, num_v=16):
@@ -106,7 +156,7 @@ def compute_grid_size(target_points):
     return num_u, num_v
 
 
-def allocate_points_uniformly(n_surfaces, max_points, min_points_per_surface=4):
+def allocate_points_uniformly(n_surfaces, max_points, min_points_per_surface=16):
     """
     Allocate sampling points uniformly across all surfaces.
     Each surface gets approximately the same number of points.
@@ -159,14 +209,14 @@ def allocate_points_uniformly(n_surfaces, max_points, min_points_per_surface=4):
     return allocations
 
 
-def allocate_points_by_area(areas, max_points, min_points_per_surface=4):
+def allocate_points_by_area(areas, max_points, min_points_per_surface=16):
     """
     Allocate sampling points to surfaces proportionally to their areas.
     
     Args:
         areas: List of surface areas
         max_points: Maximum total points to allocate
-        min_points_per_surface: Minimum points per surface (must be >= 4 for 2x2 grid)
+        min_points_per_surface: Minimum points per surface (must be >= 16 for 4x4 grid)
         
     Returns:
         List of point allocations for each surface
@@ -242,7 +292,7 @@ def allocate_points_by_area(areas, max_points, min_points_per_surface=4):
 
 
 def sample_surfaces_from_json(json_path, dataset, max_points=2048, area_estimation_grid=16, 
-                             skip_bspline=True, sampling_mode='area'):
+                             skip_bspline=True, sampling_mode='area', compute_normal=False):
     """
     Sample points from all surfaces in a JSON file.
     
@@ -255,9 +305,13 @@ def sample_surfaces_from_json(json_path, dataset, max_points=2048, area_estimati
         sampling_mode: Sampling strategy
             - 'area': Allocate points proportionally to surface area (default)
             - 'uniform': Allocate equal points to each surface
+        compute_normal: If True, compute surface normals and return (N, 6) array
+                       with [x, y, z, nx, ny, nz]. Otherwise return (N, 3) array.
         
     Returns:
-        sampled_points: (N, 3) array of sampled points, where N ≤ max_points
+        sampled_points: (N, 3) or (N, 6) array of sampled points
+                       If compute_normal=True: (N, 6) with [x, y, z, nx, ny, nz]
+                       If compute_normal=False: (N, 3) with [x, y, z]
         surface_labels: (N,) array of surface indices for each point
     """
     # Load JSON
@@ -289,7 +343,9 @@ def sample_surfaces_from_json(json_path, dataset, max_points=2048, area_estimati
                 num_v=area_estimation_grid
             )
             
-            valid_surfaces.append((params, surface_type_idx))
+            # Store params, surface_type_idx, and orientation
+            orientation = surface_dict.get('orientation', 'Forward')
+            valid_surfaces.append((params, surface_type_idx, orientation))
             areas.append(area)
             
         # except Exception as e:
@@ -297,13 +353,14 @@ def sample_surfaces_from_json(json_path, dataset, max_points=2048, area_estimati
         #     continue
     
     if not valid_surfaces:
-        return np.zeros((0, 3), dtype=np.float32), np.zeros(0, dtype=np.int32)
+        output_dim = 6 if compute_normal else 3
+        return np.zeros((0, output_dim), dtype=np.float32), np.zeros(0, dtype=np.int32)
     
     # Allocate points based on sampling mode
     if sampling_mode == 'uniform':
-        point_allocations = allocate_points_uniformly(len(valid_surfaces), max_points, min_points_per_surface=4)
+        point_allocations = allocate_points_uniformly(len(valid_surfaces), max_points, min_points_per_surface=16)
     elif sampling_mode == 'area':
-        point_allocations = allocate_points_by_area(areas, max_points, min_points_per_surface=4)
+        point_allocations = allocate_points_by_area(areas, max_points, min_points_per_surface=16)
     else:
         raise ValueError(f"Unknown sampling_mode: {sampling_mode}. Use 'area' or 'uniform'.")
     
@@ -311,7 +368,7 @@ def sample_surfaces_from_json(json_path, dataset, max_points=2048, area_estimati
     all_points = []
     all_labels = []
     
-    for surf_idx, ((params, surface_type_idx), num_points) in enumerate(zip(valid_surfaces, point_allocations)):
+    for surf_idx, ((params, surface_type_idx, orientation), num_points) in enumerate(zip(valid_surfaces, point_allocations)):
         try:
             # Determine grid size
             num_u, num_v = compute_grid_size(num_points)
@@ -327,18 +384,42 @@ def sample_surfaces_from_json(json_path, dataset, max_points=2048, area_estimati
             
             actual_points = len(points)
             
+            # Generate corresponding UV coordinates for normal computation
+            if compute_normal:
+                # Recover surface to get UV bounds
+                surface_dict = recover_surface_dict(params, surface_type_idx)
+                u_min, u_max, v_min, v_max = surface_dict['uv']
+                
+                # Create UV grid matching the sampled points
+                u_params = np.linspace(u_min, u_max, num_u, dtype=np.float64)
+                v_params = np.linspace(v_min, v_max, num_v, dtype=np.float64)
+                u_grid, v_grid = np.meshgrid(u_params, v_params, indexing='xy')
+                uv_coords = np.stack([u_grid.flatten(), v_grid.flatten()], axis=1)  # (num_u * num_v, 2)
+            
             # Adjust if we got more or fewer points than allocated
             if actual_points > num_points:
                 # Randomly subsample
                 indices = np.random.choice(actual_points, num_points, replace=False)
                 points = points[indices]
+                if compute_normal:
+                    uv_coords = uv_coords[indices]
             elif actual_points < num_points:
                 # Oversample with replacement
                 indices = np.random.choice(actual_points, num_points, replace=True)
                 points = points[indices]
+                if compute_normal:
+                    uv_coords = uv_coords[indices]
             
-            # Add points and labels
-            all_points.append(points)
+            # Compute normals if requested
+            if compute_normal:
+                normals = compute_surface_normals(params, surface_type_idx, uv_coords, orientation)
+                # Combine points and normals: [x, y, z, nx, ny, nz]
+                points_with_normals = np.concatenate([points, normals], axis=1)
+                all_points.append(points_with_normals)
+            else:
+                all_points.append(points)
+            
+            # Add labels
             all_labels.append(np.full(len(points), surf_idx, dtype=np.int32))
             
         except Exception as e:
@@ -346,7 +427,8 @@ def sample_surfaces_from_json(json_path, dataset, max_points=2048, area_estimati
             continue
     
     if not all_points:
-        return np.zeros((0, 3), dtype=np.float32), np.zeros(0, dtype=np.int32)
+        output_dim = 6 if compute_normal else 3
+        return np.zeros((0, output_dim), dtype=np.float32), np.zeros(0, dtype=np.int32)
     
     # Concatenate all points
     sampled_points = np.concatenate(all_points, axis=0).astype(np.float32)
@@ -421,6 +503,11 @@ def main():
         choices=['area', 'uniform'],
         help='Sampling strategy: "area" (proportional to surface area) or "uniform" (equal per surface) (default: area)'
     )
+    parser.add_argument(
+        '--compute_normal',
+        action='store_true',
+        help='Compute surface normals at each sampled point (output will be (N, 6) with [x,y,z,nx,ny,nz])'
+    )
     
     args = parser.parse_args()
     
@@ -440,6 +527,11 @@ def main():
     print(f"  - 'uniform': Equal points for each surface")
     print(f"Max points per file: {args.max_points}")
     print(f"Area estimation grid: {args.area_estimation_grid}x{args.area_estimation_grid}")
+    print(f"Compute normals: {args.compute_normal}")
+    if args.compute_normal:
+        print(f"  - Output format: (N, 6) with [x, y, z, nx, ny, nz]")
+    else:
+        print(f"  - Output format: (N, 3) with [x, y, z]")
     
     failed_samples = []
     total_points_saved = 0
@@ -454,7 +546,8 @@ def main():
             dataset,
             max_points=args.max_points,
             area_estimation_grid=args.area_estimation_grid,
-            sampling_mode=args.sampling_mode
+            sampling_mode=args.sampling_mode,
+            compute_normal=args.compute_normal
         )
         
         if len(sampled_points) == 0:

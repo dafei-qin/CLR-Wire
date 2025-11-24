@@ -297,12 +297,8 @@ class TrainerFlowSurface(BaseTrainer):
 
                 forward_kwargs = self.next_data_to_forward_kwargs(self.train_dl_iter)
                 with self.accelerator.autocast(), maybe_no_sync():
-                    params_padded, surface_type, masks, shifts_padded, rotations_padded, scales_padded = forward_kwargs
-                    params_padded = params_padded
-                    surface_type = surface_type
-                    shifts_padded = shifts_padded
-                    rotations_padded = rotations_padded
-                    scales_padded = scales_padded
+                    params_padded, surface_type, masks, shifts_padded, rotations_padded, scales_padded, pc_cond = forward_kwargs
+
 
 
                     if masks.sum() == 0:

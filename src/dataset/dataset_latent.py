@@ -26,7 +26,7 @@ class LatentDataset(Dataset):
     The data is padded to max_num_surfaces to ensure consistent batch sizes.
     """
     
-    def __init__(self, npz_dir: str, max_num_surfaces: int = 500, latent_dim: int = 128):
+    def __init__(self, latent_dir: str, pc_dir: str, max_num_surfaces: int = 500, latent_dim: int = 128):
         """
         Args:
             npz_dir: Path to directory containing NPZ files
@@ -34,25 +34,26 @@ class LatentDataset(Dataset):
             latent_dim: Dimension of the latent space (default: 128)
         """
         super().__init__()
-        self.npz_dir = Path(npz_dir)
+        self.latent_dir = Path(latent_dir)
+        self.pc_dir = pc_dir
         self.max_num_surfaces = max_num_surfaces
         self.latent_dim = latent_dim
         
         # Discover all NPZ files in directory and subdirectories
         self.npz_files = sorted([
-            str(p) for p in self.npz_dir.rglob("*.npz")
+            str(p) for p in self.latent_dir.rglob("*.npz")
         ])
         
         if not self.npz_files:
-            raise ValueError(f"No NPZ files found in {npz_dir}")
+            raise ValueError(f"No NPZ files found in {latent_dir}")
         
-        print(f"Found {len(self.npz_files)} NPZ files in {npz_dir}")
+        print(f"Found {len(self.npz_files)} NPZ files in {latent_dir}")
         
         self.replica = 1
     
     def __len__(self):
         """Return number of NPZ files in the dataset."""
-        return len(self.npz_files)
+        return len(self.latent_files)
     
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
@@ -72,8 +73,9 @@ class LatentDataset(Dataset):
             - bbox_maxs: (max_num_surfaces, 3) - padded bounding box maximums
             - mask: (max_num_surfaces,) - binary mask indicating valid surfaces (1) vs padding (0)
         """
-        npz_path = self.npz_files[idx]
-        
+        latent_path = self.latent_files[idx]
+        pc_path = self.latent_files[idx].replace(self.latent_dir, self.pc_dir).replace('.npz', '.npy')
+
         # Initialize padded arrays
         all_latent_params = np.zeros((self.max_num_surfaces, self.latent_dim), dtype=np.float32)
         all_rotations = np.zeros((self.max_num_surfaces, 6), dtype=np.float32)
@@ -86,7 +88,7 @@ class LatentDataset(Dataset):
         
         try:
             # Load NPZ file
-            data = np.load(npz_path)
+            data = np.load(latent_path)
             
             # Extract data
             latent_params = data['latent_params']  # (B, latent_dim)
@@ -103,7 +105,7 @@ class LatentDataset(Dataset):
             num_surfaces = min(len(latent_params), self.max_num_surfaces)
             
             if num_surfaces == 0:
-                warnings.warn(f"NPZ file {npz_path} contains no surfaces")
+                warnings.warn(f"NPZ file {latent_path} contains no surfaces")
                 return (
                     torch.from_numpy(all_latent_params).float(),
                     torch.from_numpy(all_rotations).float(),
@@ -126,11 +128,14 @@ class LatentDataset(Dataset):
             mask[:num_surfaces] = 1.0
             
             if num_surfaces < len(latent_params):
-                warnings.warn(f"NPZ file {npz_path} contains {len(latent_params)} surfaces, "
+                warnings.warn(f"NPZ file {latent_path} contains {len(latent_params)} surfaces, "
                             f"but only using first {num_surfaces} (max_num_surfaces={self.max_num_surfaces})")
+
+            pc = np.load(pc_path)
+
         
         except Exception as e:
-            warnings.warn(f"Error loading NPZ file {npz_path}: {e}")
+            warnings.warn(f"Error loading NPZ file {latent_path}: {e}")
             # Return zero-filled arrays with no valid surfaces
         
         # Convert to tensors
@@ -142,7 +147,7 @@ class LatentDataset(Dataset):
         bbox_mins_tensor = torch.from_numpy(all_bbox_mins).float()
         bbox_maxs_tensor = torch.from_numpy(all_bbox_maxs).float()
         mask_tensor = torch.from_numpy(mask).float()
-        
+        pc_tensor = torch.from_numpy(pc).float()
         return (
             latent_params_tensor,
             rotations_tensor,
@@ -151,7 +156,8 @@ class LatentDataset(Dataset):
             classes_tensor,
             bbox_mins_tensor,
             bbox_maxs_tensor,
-            mask_tensor
+            mask_tensor,
+            pc_tensor
         )
     
     def get_file_info(self, idx: int) -> dict:
@@ -164,12 +170,12 @@ class LatentDataset(Dataset):
         Returns:
             Dictionary containing file path and data shapes
         """
-        npz_path = self.npz_files[idx]
+        latent_path = self.latent_files[idx]
         
         try:
-            data = np.load(npz_path)
+            data = np.load(latent_path)
             info = {
-                'npz_path': npz_path,
+                'latent_path': latent_path,
                 'num_surfaces': len(data['latent_params']),
                 'latent_params_shape': data['latent_params'].shape,
                 'rotations_shape': data['rotations'].shape,
@@ -184,7 +190,7 @@ class LatentDataset(Dataset):
             return info
         except Exception as e:
             return {
-                'npz_path': npz_path,
+                'latent_path': latent_path,
                 'error': str(e)
             }
 

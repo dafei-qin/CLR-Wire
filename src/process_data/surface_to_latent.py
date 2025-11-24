@@ -350,8 +350,7 @@ def main():
         '--device',
         type=str,
         default='cpu',
-        choices=['cpu', 'cuda'],
-        help='Device to run inference on (default: cpu)'
+        help='Device to run inference on (e.g., cpu, cuda, cuda:0, cuda:1, default: cpu)'
     )
     parser.add_argument(
         '--canonical',
@@ -366,10 +365,30 @@ def main():
     
     args = parser.parse_args()
     
-    # Check if CUDA is available
-    if args.device == 'cuda' and not torch.cuda.is_available():
-        print("CUDA not available, falling back to CPU")
-        args.device = 'cpu'
+    # Check if CUDA is available and validate device
+    if args.device.startswith('cuda'):
+        if not torch.cuda.is_available():
+            print("CUDA not available, falling back to CPU")
+            args.device = 'cpu'
+        else:
+            # Validate specific GPU if specified (e.g., cuda:0)
+            if ':' in args.device:
+                try:
+                    device_idx = int(args.device.split(':')[1])
+                    if device_idx >= torch.cuda.device_count():
+                        print(f"GPU {device_idx} not available (only {torch.cuda.device_count()} GPU(s) detected)")
+                        print("Falling back to CPU")
+                        args.device = 'cpu'
+                    else:
+                        print(f"Using GPU {device_idx}: {torch.cuda.get_device_name(device_idx)}")
+                except (ValueError, IndexError):
+                    print(f"Invalid device format: {args.device}, falling back to CPU")
+                    args.device = 'cpu'
+            else:
+                # If just 'cuda', use default GPU
+                print(f"Using default GPU: {torch.cuda.get_device_name(0)}")
+    else:
+        print(f"Using device: {args.device}")
     
     # Load dataset
     print(f"Loading dataset from: {args.input_dir}")
