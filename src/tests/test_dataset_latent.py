@@ -245,10 +245,10 @@ def update_visualization():
     
     # Load data from latent dataset
     (latent_params, rotations, scales, shifts, classes, 
-     bbox_mins, bbox_maxs, mask) = latent_dataset[current_idx]
+     bbox_mins, bbox_maxs, mask, pc) = latent_dataset[current_idx]
     
     # Store current NPZ path
-    current_npz_path = latent_dataset.npz_files[current_idx]
+    current_npz_path = latent_dataset.latent_files[current_idx]
     
     # Load corresponding point cloud if pointcloud_dir is provided
     current_pointcloud = None
@@ -256,7 +256,7 @@ def update_visualization():
     current_npy_path = None
     if pointcloud_dir is not None:
         current_pointcloud, current_normals, current_npy_path = load_corresponding_pointcloud(
-            latent_dataset.npz_dir, current_npz_path, pointcloud_dir
+            latent_dataset.latent_dir, current_npz_path, pointcloud_dir
         )
     
     # Get valid surfaces
@@ -344,8 +344,8 @@ def update_visualization():
                     "normals",
                     current_normals,
                     enabled=show_normals,
-                    vectortype='ambient',
-                    length=0.05,  # Adjust this for better visualization
+                    vectortype='standard',
+                    length=0.02,  # Adjust this for better visualization
                     radius=0.002,
                     color=[1.0, 0.3, 0.3]  # Red color for normals
                 )
@@ -368,7 +368,7 @@ def callback():
     # Display file paths
     if current_npz_path is not None:
         npz_path_obj = Path(current_npz_path)
-        npz_dir_obj = Path(latent_dataset.npz_dir)
+        npz_dir_obj = Path(latent_dataset.latent_dir)
         try:
             npz_relative = npz_path_obj.relative_to(npz_dir_obj)
             psim.TextColored((0.3, 0.7, 1.0, 1.0), f"NPZ: {npz_relative}")
@@ -508,7 +508,8 @@ def main():
     # Load latent dataset
     print(f"Loading latent dataset from: {args.npz_dir}")
     latent_dataset = LatentDataset(
-        npz_dir=args.npz_dir,
+        latent_dir=args.npz_dir,
+        pc_dir=args.pointcloud_dir,
         max_num_surfaces=500,
         latent_dim=args.latent_dim
     )
