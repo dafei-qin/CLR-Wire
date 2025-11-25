@@ -21,10 +21,10 @@ wandb_project_name: DIT_SIMPLE
 wandb_run_name: 1124_dit_simple
 
 data:
-    train_latent_dir: /home/qindafei/CAD/data/logan_json_latents/abc
-    train_pc_dir: /home/qindafei/CAD/data/logan_jsons_michel_latent/abc
-    val_latent_dir: /home/qindafei/CAD/data/logan_json_latents/abc_test
-    val_pc_dir: /home/qindafei/CAD/data/logan_jsons_michel_latent/abc_test
+    train_latent_dir: ../data/logan_json_latents/abc
+    train_pc_dir: ../data/logan_jsons_michel_latent/abc
+    val_latent_dir: ../data/logan_json_latents/abc_test
+    val_pc_dir: ../data/logan_jsons_michel_latent/abc_test
     surface_latent_dim: 128
     max_num_surfaces: 32
     train_num: -1

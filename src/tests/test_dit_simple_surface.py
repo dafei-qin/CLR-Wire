@@ -237,7 +237,7 @@ def load_model_and_dataset(
     global _dataset, _model, _pipe, _max_idx, _vae, _dataset_compound
 
     _dataset = LatentDataset(
-    latent_dir=args.data.val_latent_dir, pc_dir=args.data.val_pc_dir, max_num_surfaces=args.data.max_num_surfaces, latent_dim=args.data.surface_latent_dim, num_data=args.data.val_num
+    latent_dir=args.data.train_latent_dir, pc_dir=args.data.train_pc_dir, max_num_surfaces=args.data.max_num_surfaces, latent_dim=args.data.surface_latent_dim, num_data=args.data.val_num
     )
     
     _dataset_compound = dataset_compound(json_dir='./',canonical=True)
@@ -315,6 +315,8 @@ def _compute_loss(output, target, masks):
         
         bce_logits_loss = torch.nn.BCEWithLogitsLoss(reduction='none')
         loss_valid = bce_logits_loss(output[..., 0], masks.float().squeeze(-1)).mean()
+        # print('gt_scale: ', target[..., 3+6+1:3+6+2])
+        # print('pred_scale: ', output[..., 3+6+1:3+6+2])
         
         return loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params
 
@@ -339,6 +341,7 @@ def process_index(idx: int, num_inference_steps: int, use_gt_mask=False):
     forward_args = [_.to(device).unsqueeze(0) for _ in forward_args]
     params_padded, rotations_padded, scales_padded, shifts_padded, surface_type, bbox_mins, bbox_maxs, masks, pc_cond = forward_args
     masks = masks.unsqueeze(-1)
+    print(scales_padded)
     gt_sample = torch.cat([masks.float(), shifts_padded, rotations_padded, scales_padded, params_padded], dim=-1)
 
     # gt_sample = gt_sample.unsqueeze(0)
@@ -348,11 +351,11 @@ def process_index(idx: int, num_inference_steps: int, use_gt_mask=False):
     sample  = _pipe(noise=noise, pc=pc_cond, num_inference_steps=num_inference_steps, show_progress=True)
 
     loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params = _compute_loss(sample, gt_sample, masks)
-
+    sample = torch.cat([gt_sample[..., :1], sample[..., 1:1+3+6], gt_sample[..., 1+3+6:1+3+6+1], sample[..., -128:]], dim=-1)
     valid, shifts, rotations, scales, params = decode_sample(sample)
 
     if use_gt_mask:
-        valid = masks.squeeze(-1)
+        valid = masks.squeeze(-1).bool()
     
     shifts = shifts[valid].squeeze()
     rotations = rotations[valid].squeeze()
@@ -374,6 +377,7 @@ def process_index(idx: int, num_inference_steps: int, use_gt_mask=False):
 def fix_rts(shifts, rotations, scales):
     shifts = shifts.cpu().numpy()
     rotations = rotations.cpu().numpy()
+    scales = scales.cpu().numpy()
     D = rotations[:, :3]
     X = rotations[:, 3:6]
     D = D / np.linalg.norm(D)
@@ -417,7 +421,7 @@ def update_visualization():
     print(f"\nProcessing index {_current_idx}...")
     with torch.no_grad():
         surface_jsons, loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params = process_index(
-            _current_idx, _num_inference_steps
+            _current_idx, _num_inference_steps, use_gt_mask=True
         )
     
     # Display losses
@@ -426,9 +430,11 @@ def update_visualization():
           f"Params: {loss_params.item():.6f}")
     
     # Visualize generated surfaces
+
     try:
-        visualize_json_interset(surface_jsons, plot=True, plot_gui=False, tol=1e-5, ps_header=f'sample_{_current_idx}')
         print(f"Visualized {len(surface_jsons)} generated surfaces")
+        visualize_json_interset(surface_jsons, plot=True, plot_gui=False, tol=1e-5, ps_header=f'sample_{_current_idx}')
+
     except Exception as e:
         print(f'Error visualizing surfaces: {e}')
 
@@ -461,7 +467,7 @@ def callback():
     # Inference steps control
     psim.Separator()
     psim.Text("Inference Settings:")
-    steps_changed, new_steps = psim.SliderInt("Inference Steps", _num_inference_steps, 1, 100)
+    steps_changed, new_steps = psim.SliderInt("Inference Steps", _num_inference_steps, 1, 1000)
     if steps_changed:
         _num_inference_steps = new_steps
     
