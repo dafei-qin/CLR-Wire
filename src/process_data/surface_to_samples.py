@@ -17,12 +17,19 @@ import json
 from pathlib import Path
 from tqdm import tqdm
 import argparse
+import open3d as o3d
 
 # Add project root to path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from src.dataset.dataset_v1 import dataset_compound
-from src.tools.sample_simple_surface import sample_surface_uniform, build_occ_surface, recover_surface_dict
+from src.tools.sample_simple_surface import (
+    sample_surface_uniform, 
+    sample_surface_flexible,
+    build_occ_surface, 
+    recover_surface_dict
+)
+from src.utils.json_tools import check_contain_surface
 
 # Import pythonocc components for normal computation
 from OCC.Core.GeomLProp import GeomLProp_SLProps
@@ -292,7 +299,8 @@ def allocate_points_by_area(areas, max_points, min_points_per_surface=16):
 
 
 def sample_surfaces_from_json(json_path, dataset, max_points=2048, area_estimation_grid=16, 
-                             skip_bspline=True, sampling_mode='area', compute_normal=False):
+                             skip_bspline=True, sampling_mode='area', compute_normal=False,
+                             sampling_strategy='stratified'):
     """
     Sample points from all surfaces in a JSON file.
     
@@ -302,11 +310,15 @@ def sample_surfaces_from_json(json_path, dataset, max_points=2048, area_estimati
         max_points: Maximum total number of points to sample
         area_estimation_grid: Grid size for area estimation
         skip_bspline: Whether to skip B-spline surfaces
-        sampling_mode: Sampling strategy
+        sampling_mode: Point allocation strategy across surfaces
             - 'area': Allocate points proportionally to surface area (default)
             - 'uniform': Allocate equal points to each surface
         compute_normal: If True, compute surface normals and return (N, 6) array
                        with [x, y, z, nx, ny, nz]. Otherwise return (N, 3) array.
+        sampling_strategy: Point sampling strategy within each surface
+            - 'stratified': Stratified random sampling (grid with jitter) (default)
+            - 'uniform': Regular grid sampling
+            - 'random': Pure random sampling in UV space
         
     Returns:
         sampled_points: (N, 3) or (N, 6) array of sampled points
@@ -370,45 +382,28 @@ def sample_surfaces_from_json(json_path, dataset, max_points=2048, area_estimati
     
     for surf_idx, ((params, surface_type_idx, orientation), num_points) in enumerate(zip(valid_surfaces, point_allocations)):
         try:
-            # Determine grid size
-            num_u, num_v = compute_grid_size(num_points)
-            
-            # Sample surface
-            points = sample_surface_uniform(
+            # Sample surface using flexible sampling strategy
+            points, uv_coords = sample_surface_flexible(
                 params,
                 surface_type_idx,
-                num_u=num_u,
-                num_v=num_v,
+                num_points=num_points,
+                sampling_strategy=sampling_strategy,
                 flatten=True
-            )  # Shape: (num_u * num_v, 3)
+            )
             
             actual_points = len(points)
-            
-            # Generate corresponding UV coordinates for normal computation
-            if compute_normal:
-                # Recover surface to get UV bounds
-                surface_dict = recover_surface_dict(params, surface_type_idx)
-                u_min, u_max, v_min, v_max = surface_dict['uv']
-                
-                # Create UV grid matching the sampled points
-                u_params = np.linspace(u_min, u_max, num_u, dtype=np.float64)
-                v_params = np.linspace(v_min, v_max, num_v, dtype=np.float64)
-                u_grid, v_grid = np.meshgrid(u_params, v_params, indexing='xy')
-                uv_coords = np.stack([u_grid.flatten(), v_grid.flatten()], axis=1)  # (num_u * num_v, 2)
             
             # Adjust if we got more or fewer points than allocated
             if actual_points > num_points:
                 # Randomly subsample
                 indices = np.random.choice(actual_points, num_points, replace=False)
                 points = points[indices]
-                if compute_normal:
-                    uv_coords = uv_coords[indices]
+                uv_coords = uv_coords[indices]
             elif actual_points < num_points:
                 # Oversample with replacement
                 indices = np.random.choice(actual_points, num_points, replace=True)
                 points = points[indices]
-                if compute_normal:
-                    uv_coords = uv_coords[indices]
+                uv_coords = uv_coords[indices]
             
             # Compute normals if requested
             if compute_normal:
@@ -508,6 +503,32 @@ def main():
         action='store_true',
         help='Compute surface normals at each sampled point (output will be (N, 6) with [x,y,z,nx,ny,nz])'
     )
+    parser.add_argument(
+        '--sampling_strategy',
+        type=str,
+        default='stratified',
+        choices=['uniform', 'random', 'stratified'],
+        help='Point sampling strategy within each surface (default: stratified)'
+    )
+    parser.add_argument(
+        '--skip-type',
+        type=str,
+        default='',
+        help='Comma-separated surface types to skip. If a JSON file contains any of these types, '
+             'the entire file will be skipped. Example: "plane,bspline_surface" or "cone" (default: "")'
+    )
+    parser.add_argument(
+        '--skip-num',
+        type=int,
+        default=0,
+        help='Skip JSON files with fewer surfaces than this number. Set to 0 to disable (default: 0)'
+    )
+    parser.add_argument(
+        '--skip-num-max',
+        type=int,
+        default=0,
+        help='Skip JSON files with more surfaces than this number. Set to 0 to disable (default: 0)'
+    )
     
     args = parser.parse_args()
     
@@ -516,15 +537,31 @@ def main():
     dataset = dataset_compound(args.input_dir, canonical=False)
     print(f"Found {len(dataset)} JSON files")
     
+    # Parse skip types
+    skip_types = []
+    if args.skip_type:
+        skip_types = [s.strip() for s in args.skip_type.split(',') if s.strip()]
+        # Validate skip types
+        valid_types = {'plane', 'cylinder', 'cone', 'sphere', 'torus', 'bspline_surface'}
+        invalid_types = set(skip_types) - valid_types
+        if invalid_types:
+            print(f"Error: Invalid surface types in --skip-type: {invalid_types}")
+            print(f"Valid types are: {valid_types}")
+            sys.exit(1)
+    
     # Create output directory
     output_root = Path(args.output_dir)
     output_root.mkdir(parents=True, exist_ok=True)
     
     # Process all JSON files
     print(f"\nProcessing JSON files...")
-    print(f"Sampling mode: {args.sampling_mode}")
+    print(f"Sampling mode (point allocation): {args.sampling_mode}")
     print(f"  - 'area': Points allocated proportionally to surface area")
     print(f"  - 'uniform': Equal points for each surface")
+    print(f"Sampling strategy (within surface): {args.sampling_strategy}")
+    print(f"  - 'stratified': Grid with random jitter (default, more natural)")
+    print(f"  - 'uniform': Regular grid (structured)")
+    print(f"  - 'random': Pure random (unstructured)")
     print(f"Max points per file: {args.max_points}")
     print(f"Area estimation grid: {args.area_estimation_grid}x{args.area_estimation_grid}")
     print(f"Compute normals: {args.compute_normal}")
@@ -533,11 +570,49 @@ def main():
     else:
         print(f"  - Output format: (N, 3) with [x, y, z]")
     
+    if skip_types:
+        print(f"Skip files containing surface types: {', '.join(skip_types)}")
+    if args.skip_num > 0:
+        print(f"Skip files with fewer than {args.skip_num} surfaces")
+    if args.skip_num_max > 0:
+        print(f"Skip files with more than {args.skip_num_max} surfaces")
+    
     failed_samples = []
+    skipped_files = 0
     total_points_saved = 0
     
     for idx in tqdm(range(len(dataset.json_names)), desc="Sampling surfaces"):
         json_path = dataset.json_names[idx]
+        
+        # Check if file should be skipped
+        if skip_types or args.skip_num > 0 or args.skip_num_max > 0:
+            try:
+                with open(json_path, 'r') as f:
+                    surfaces_data = json.load(f)
+                
+                should_skip = False
+                
+                # Check if any skip type is present
+                if skip_types:
+                    for skip_type in skip_types:
+                        if check_contain_surface(surfaces_data, skip_type) > 0:
+                            should_skip = True
+                            break
+                
+                # Check if number of surfaces is below or above threshold
+                if not should_skip and (args.skip_num > 0 or args.skip_num_max > 0):
+                    num_surfaces = len(surfaces_data)
+                    if args.skip_num > 0 and num_surfaces < args.skip_num:
+                        should_skip = True
+                    elif args.skip_num_max > 0 and num_surfaces > args.skip_num_max:
+                        should_skip = True
+                
+                if should_skip:
+                    skipped_files += 1
+                    continue
+            except Exception as e:
+                print(f"\nWarning: Failed to check skip condition for {json_path}: {e}")
+                # Continue processing if check fails
         
         # try:
             # Sample surfaces
@@ -547,7 +622,8 @@ def main():
             max_points=args.max_points,
             area_estimation_grid=args.area_estimation_grid,
             sampling_mode=args.sampling_mode,
-            compute_normal=args.compute_normal
+            compute_normal=args.compute_normal,
+            sampling_strategy=args.sampling_strategy
         )
         
         if len(sampled_points) == 0:
@@ -562,7 +638,17 @@ def main():
         
         # Save points
         np.save(output_path, sampled_points)
-        total_points_saved += len(sampled_points)
+
+        # # pc = o3d.geometry.PointCloud(points=o3d.utility.Vector3dVector()
+        # point_cloud = o3d.geometry.PointCloud()
+
+        # point_cloud.points = o3d.utility.Vector3dVector(sampled_points[:, :3])
+
+        # if sampled_points.shape[1] == 6:
+        #     point_cloud.normals = o3d.utility.Vector3dVector(sampled_points[:, 3:])
+
+        # o3d.io.write_point_cloud(output_path.with_suffix('.ply'), point_cloud)
+        total_points_saved += 1
         
         # Optionally save labels
         if args.save_labels:
@@ -576,10 +662,21 @@ def main():
     
     print("\n" + "="*80)
     print("Processing complete!")
-    print(f"Successfully processed: {len(dataset.json_names) - len(failed_samples)} files")
+    print(f"Total files: {len(dataset.json_names)}")
+    if skip_types or args.skip_num > 0 or args.skip_num_max > 0:
+        skip_reasons = []
+        if skip_types:
+            skip_reasons.append(f"containing types: {', '.join(skip_types)}")
+        if args.skip_num > 0:
+            skip_reasons.append(f"with < {args.skip_num} surfaces")
+        if args.skip_num_max > 0:
+            skip_reasons.append(f"with > {args.skip_num_max} surfaces")
+        print(f"Skipped: {skipped_files} files ({' | '.join(skip_reasons)})")
+    print(f"Successfully processed: {len(dataset.json_names) - len(failed_samples) - skipped_files} files")
     print(f"Failed: {len(failed_samples)} files")
     print(f"Total points saved: {total_points_saved:,}")
-    print(f"Average points per file: {total_points_saved / max(1, len(dataset.json_names) - len(failed_samples)):.1f}")
+    successful_files = max(1, len(dataset.json_names) - len(failed_samples) - skipped_files)
+    print(f"Average points per file: {total_points_saved / successful_files:.1f}")
     
     if failed_samples:
         print("\nFailed samples:")

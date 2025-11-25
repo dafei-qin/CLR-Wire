@@ -26,7 +26,7 @@ class LatentDataset(Dataset):
     The data is padded to max_num_surfaces to ensure consistent batch sizes.
     """
     
-    def __init__(self, latent_dir: str, pc_dir: str, max_num_surfaces: int = 500, latent_dim: int = 128):
+    def __init__(self, latent_dir: str, pc_dir: str, max_num_surfaces: int = 500, latent_dim: int = 128, num_data: int = -1):
         """
         Args:
             npz_dir: Path to directory containing NPZ files
@@ -40,14 +40,16 @@ class LatentDataset(Dataset):
         self.latent_dim = latent_dim
         
         # Discover all NPZ files in directory and subdirectories
-        self.npz_files = sorted([
+        self.latent_files = sorted([
             str(p) for p in self.latent_dir.rglob("*.npz")
         ])
-        
-        if not self.npz_files:
+        if num_data > 0:
+            self.latent_files = self.latent_files[:num_data]
+        self.latent_dir = str(self.latent_dir)
+        if not self.latent_files:
             raise ValueError(f"No NPZ files found in {latent_dir}")
         
-        print(f"Found {len(self.npz_files)} NPZ files in {latent_dir}")
+        print(f"Found {len(self.latent_files)} NPZ files in {latent_dir}")
         
         self.replica = 1
     
@@ -74,7 +76,7 @@ class LatentDataset(Dataset):
             - mask: (max_num_surfaces,) - binary mask indicating valid surfaces (1) vs padding (0)
         """
         latent_path = self.latent_files[idx]
-        pc_path = self.latent_files[idx].replace(self.latent_dir, self.pc_dir).replace('.npz', '.npy')
+        pc_path = self.latent_files[idx].replace(self.latent_dir, self.pc_dir).replace('.npz', '_latent.npy')
 
         # Initialize padded arrays
         all_latent_params = np.zeros((self.max_num_surfaces, self.latent_dim), dtype=np.float32)
@@ -195,186 +197,33 @@ class LatentDataset(Dataset):
             }
 
 
-class LatentDatasetFlat(Dataset):
-    """
-    Flattened version of LatentDataset where each surface is treated as a separate sample.
-    
-    This is useful for training models that process individual surfaces rather than
-    sequences of surfaces from the same file.
-    """
-    
-    def __init__(self, npz_dir: str, latent_dim: int = 128):
-        """
-        Args:
-            npz_dir: Path to directory containing NPZ files
-            latent_dim: Dimension of the latent space (default: 128)
-        """
-        super().__init__()
-        self.npz_dir = Path(npz_dir)
-        self.latent_dim = latent_dim
-        
-        # Discover all NPZ files in directory and subdirectories
-        npz_files = sorted([
-            str(p) for p in self.npz_dir.rglob("*.npz")
-        ])
-        
-        if not npz_files:
-            raise ValueError(f"No NPZ files found in {npz_dir}")
-        
-        # Build index mapping: (file_idx, surface_idx) for each surface
-        self.surface_indices = []
-        for file_idx, npz_path in enumerate(npz_files):
-            try:
-                data = np.load(npz_path)
-                num_surfaces = len(data['latent_params'])
-                for surf_idx in range(num_surfaces):
-                    self.surface_indices.append((file_idx, surf_idx, npz_path))
-            except Exception as e:
-                warnings.warn(f"Error scanning NPZ file {npz_path}: {e}")
-                continue
-        
-        print(f"Found {len(self.surface_indices)} surfaces across {len(npz_files)} NPZ files")
-        
-        self.replica = 1
-    
-    def __len__(self):
-        """Return total number of surfaces across all NPZ files."""
-        return len(self.surface_indices)
-    
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Load and return data for a single surface.
-        
-        Args:
-            idx: Index of the surface (flattened across all files)
-            
-        Returns:
-            Tuple containing:
-            - latent_params: (latent_dim,) - latent representation
-            - rotation: (6,) - rotation data (first 6 elements of rotation matrix)
-            - scale: (1,) - scale value
-            - shift: (3,) - translation vector
-            - class_label: scalar - surface type index
-            - bbox_min: (3,) - bounding box minimum coordinates
-            - bbox_max: (3,) - bounding box maximum coordinates
-        """
-        file_idx, surf_idx, npz_path = self.surface_indices[idx]
-        
-        try:
-            # Load NPZ file
-            data = np.load(npz_path)
-            
-            # Extract surface data
-            latent_params = data['latent_params'][surf_idx]  # (latent_dim,)
-            rotation = data['rotations'][surf_idx]           # (6,)
-            scale = data['scales'][surf_idx]                 # (1,)
-            shift = data['shifts'][surf_idx]                 # (3,)
-            class_label = data['classes'][surf_idx]          # (1,) or scalar
-            
-            # Extract bounding box data if available (for backward compatibility)
-            bbox_min = data.get('bbox_mins', np.zeros((len(data['latent_params']), 3)))[surf_idx]  # (3,)
-            bbox_max = data.get('bbox_maxs', np.zeros((len(data['latent_params']), 3)))[surf_idx]  # (3,)
-            
-            # Ensure class_label is scalar
-            if hasattr(class_label, '__len__'):
-                class_label = class_label[0]
-            
-            # Convert to tensors
-            return (
-                torch.from_numpy(latent_params).float(),
-                torch.from_numpy(rotation).float(),
-                torch.from_numpy(scale).float(),
-                torch.from_numpy(shift).float(),
-                torch.tensor(class_label, dtype=torch.long),
-                torch.from_numpy(bbox_min).float(),
-                torch.from_numpy(bbox_max).float()
-            )
-        
-        except Exception as e:
-            warnings.warn(f"Error loading surface {surf_idx} from {npz_path}: {e}")
-            # Return zero-filled data
-            return (
-                torch.zeros(self.latent_dim, dtype=torch.float32),
-                torch.zeros(6, dtype=torch.float32),
-                torch.zeros(1, dtype=torch.float32),
-                torch.zeros(3, dtype=torch.float32),
-                torch.tensor(0, dtype=torch.long),
-                torch.zeros(3, dtype=torch.float32),
-                torch.zeros(3, dtype=torch.float32)
-            )
 
 
 if __name__ == '__main__':
     import sys
     from tqdm import tqdm
-    
-    if len(sys.argv) < 2:
-        print("Usage: python dataset_latent.py <npz_directory>")
-        sys.exit(1)
-    
-    npz_dir = sys.argv[1]
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--npz_dir', type=str, required=True)
+    parser.add_argument('--pc_dir', type=str, required=True)
+    parser.add_argument('--max_num_surfaces', type=int, default=500)
+    parser.add_argument('--latent_dim', type=int, default=128)
+    args = parser.parse_args()
     
     # Test LatentDataset
     print("="*80)
     print("Testing LatentDataset (grouped by file):")
     print("="*80)
-    dataset = LatentDataset(npz_dir)
+    dataset = LatentDataset(args.npz_dir, args.pc_dir, args.max_num_surfaces, args.latent_dim)
     print(f"Dataset length: {len(dataset)}")
     
     # Test first sample
     if len(dataset) > 0:
         print("\nTesting first sample:")
-        latent_params, rotations, scales, shifts, classes, bbox_mins, bbox_maxs, mask = dataset[0]
-        num_valid = mask.sum().item()
-        print(f"  File: {dataset.npz_files[0]}")
-        print(f"  Number of valid surfaces: {num_valid}")
-        print(f"  Latent params shape: {latent_params.shape}")
-        print(f"  Rotations shape: {rotations.shape}")
-        print(f"  Scales shape: {scales.shape}")
-        print(f"  Shifts shape: {shifts.shape}")
-        print(f"  Classes shape: {classes.shape}")
-        print(f"  Bbox mins shape: {bbox_mins.shape}")
-        print(f"  Bbox maxs shape: {bbox_maxs.shape}")
-        print(f"  Mask shape: {mask.shape}")
-        
-        # Show some statistics
-        if num_valid > 0:
-            print(f"\n  Valid surface classes: {classes[mask.bool()].tolist()}")
-            print(f"  Valid surface scales: {scales[mask.bool()].squeeze().tolist()}")
-            print(f"  Valid surface bbox_mins (first 3): {bbox_mins[mask.bool()][:3].tolist()}")
-    
-    # Test LatentDatasetFlat
-    print("\n" + "="*80)
-    print("Testing LatentDatasetFlat (individual surfaces):")
-    print("="*80)
-    flat_dataset = LatentDatasetFlat(npz_dir)
-    print(f"Flat dataset length: {len(flat_dataset)}")
-    
-    if len(flat_dataset) > 0:
-        print("\nTesting first surface:")
-        latent_params, rotation, scale, shift, class_label, bbox_min, bbox_max = flat_dataset[0]
-        print(f"  Latent params shape: {latent_params.shape}")
-        print(f"  Rotation shape: {rotation.shape}")
-        print(f"  Scale shape: {scale.shape}")
-        print(f"  Shift shape: {shift.shape}")
-        print(f"  Class label: {class_label.item()}")
-        print(f"  Bbox min shape: {bbox_min.shape}")
-        print(f"  Bbox max shape: {bbox_max.shape}")
-        print(f"  Bbox min: {bbox_min.tolist()}")
-        print(f"  Bbox max: {bbox_max.tolist()}")
-    
-    # Iterate through dataset to check for errors
-    print("\n" + "="*80)
-    print("Scanning all files for errors:")
-    print("="*80)
-    error_count = 0
-    for i in tqdm(range(len(dataset)), desc="Checking files"):
-        try:
-            _ = dataset[i]
-        except Exception as e:
-            print(f"\nError at index {i}: {e}")
-            error_count += 1
-    
-    print(f"\nTotal errors: {error_count}/{len(dataset)}")
-    print("="*80)
+        for i in tqdm(range(len(dataset))):
+            latent_params, rotations, scales, shifts, classes, bbox_mins, bbox_maxs, mask, pc = dataset[i]
 
+
+        
+    # Test LatentDatasetFlat
