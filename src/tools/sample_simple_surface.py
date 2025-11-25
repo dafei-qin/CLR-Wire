@@ -149,6 +149,114 @@ def sample_surface_uniform(
     return grid
 
 
+def sample_surface_flexible(
+    params: Union[np.ndarray, torch.Tensor],
+    surface_type_idx: int,
+    num_points: int = 1024,
+    sampling_strategy: str = 'stratified',
+    flatten: bool = True,
+    random_seed: int = None,
+) -> tuple:
+    """
+    Sample a simple surface with flexible sampling strategies.
+    
+    Args:
+        params: Parameter vector from dataset_v1 (shape: [param_dim])
+        surface_type_idx: Integer index of surface type (0-4 for plane/cylinder/cone/sphere/torus)
+        num_points: Target number of points to sample
+        sampling_strategy: Sampling strategy
+            - 'uniform': Regular grid sampling (like sample_surface_uniform)
+            - 'random': Pure random sampling in UV space
+            - 'stratified': Stratified random sampling (grid with jitter)
+        flatten: If True, return flattened arrays
+        random_seed: Random seed for reproducibility
+        
+    Returns:
+        Tuple of (points, uv_coords):
+            - points: (N, 3) or (num_v, num_u, 3) sampled points
+            - uv_coords: (N, 2) or (num_v, num_u, 2) UV coordinates
+    """
+    if random_seed is not None:
+        np.random.seed(random_seed)
+    
+    # Convert to numpy if needed
+    params = _to_numpy(params)
+    
+    # Recover surface dictionary
+    surface_dict = recover_surface_dict(params, surface_type_idx)
+    
+    # Build OCC surface
+    occ_surface, (u_min, u_max, v_min, v_max) = build_occ_surface(surface_dict)
+    
+    # Compute grid size for uniform and stratified sampling
+    if sampling_strategy in ['uniform', 'stratified']:
+        sqrt_points = int(np.sqrt(num_points))
+        num_u = max(2, sqrt_points)
+        num_v = max(2, int(np.ceil(num_points / num_u)))
+        actual_points = num_u * num_v
+    else:
+        actual_points = num_points
+    
+    # Generate UV coordinates based on strategy
+    if sampling_strategy == 'uniform':
+        # Regular grid sampling
+        u_params = np.linspace(u_min, u_max, num_u, dtype=np.float64)
+        v_params = np.linspace(v_min, v_max, num_v, dtype=np.float64)
+        u_grid, v_grid = np.meshgrid(u_params, v_params, indexing='xy')
+        uv_coords = np.stack([u_grid, v_grid], axis=-1)  # (num_v, num_u, 2)
+        
+    elif sampling_strategy == 'random':
+        # Pure random sampling
+        u_samples = np.random.uniform(u_min, u_max, num_points)
+        v_samples = np.random.uniform(v_min, v_max, num_points)
+        uv_coords = np.stack([u_samples, v_samples], axis=-1)  # (N, 2)
+        
+    elif sampling_strategy == 'stratified':
+        # Stratified random sampling (grid with jitter)
+        # Divide UV space into grid cells
+        u_edges = np.linspace(u_min, u_max, num_u + 1, dtype=np.float64)
+        v_edges = np.linspace(v_min, v_max, num_v + 1, dtype=np.float64)
+        
+        # Sample randomly within each cell
+        u_samples = np.zeros((num_v, num_u), dtype=np.float64)
+        v_samples = np.zeros((num_v, num_u), dtype=np.float64)
+        
+        for i in range(num_v):
+            for j in range(num_u):
+                # Random sample within cell [u_edges[j], u_edges[j+1]] x [v_edges[i], v_edges[i+1]]
+                u_samples[i, j] = np.random.uniform(u_edges[j], u_edges[j+1])
+                v_samples[i, j] = np.random.uniform(v_edges[i], v_edges[i+1])
+        
+        uv_coords = np.stack([u_samples, v_samples], axis=-1)  # (num_v, num_u, 2)
+    
+    else:
+        raise ValueError(f"Unknown sampling_strategy: {sampling_strategy}. "
+                        f"Choose from 'uniform', 'random', 'stratified'.")
+    
+    # Evaluate surface at UV coordinates
+    if sampling_strategy in ['uniform', 'stratified']:
+        # Grid-based sampling
+        points = np.zeros((num_v, num_u, 3), dtype=np.float64)
+        for i in range(num_v):
+            for j in range(num_u):
+                u_val, v_val = uv_coords[i, j]
+                point = occ_surface.Value(float(u_val), float(v_val))
+                points[i, j] = [point.X(), point.Y(), point.Z()]
+        
+        if flatten:
+            points = points.reshape(-1, 3)
+            uv_coords = uv_coords.reshape(-1, 2)
+    else:
+        # Random sampling
+        points = np.zeros((num_points, 3), dtype=np.float64)
+        for i in range(num_points):
+            u_val, v_val = uv_coords[i]
+            point = occ_surface.Value(float(u_val), float(v_val))
+            points[i] = [point.X(), point.Y(), point.Z()]
+    
+    return points, uv_coords
+
+
 def sample_surface_batch(
     params_batch: Union[np.ndarray, torch.Tensor],
     surface_types_batch: Union[np.ndarray, torch.Tensor],

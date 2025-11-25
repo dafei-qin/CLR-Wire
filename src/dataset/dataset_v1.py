@@ -310,7 +310,7 @@ class dataset_compound(Dataset):
         ])
         
         if not self.json_names:
-            raise ValueError(f"No JSON files found in {json_dir}")
+            print(f"No JSON files found in {json_dir}")
         
         # Calculate maximum parameter dimension for padding
         # P(3) + D(3) + UV(4) + scalar(max_dim)

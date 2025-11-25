@@ -14,6 +14,7 @@ import torch
 import numpy as np
 import sys
 import os
+import json
 from pathlib import Path
 from tqdm import tqdm
 import argparse
@@ -26,6 +27,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 from src.dataset.dataset_v1 import dataset_compound, SURFACE_TYPE_MAP
 from src.vae.vae_v1 import SurfaceVAE
 from src.tools.sample_simple_surface import sample_surface_uniform
+from src.utils.json_tools import check_contain_surface
 
 
 def load_model(checkpoint_path, device='cpu'):
@@ -362,6 +364,25 @@ def main():
         action='store_true',
         help='Process in batches for better efficiency'
     )
+    parser.add_argument(
+        '--skip-type',
+        type=str,
+        default='',
+        help='Comma-separated surface types to skip. If a JSON file contains any of these types, '
+             'the entire file will be skipped. Example: "plane,bspline_surface" or "cone" (default: "")'
+    )
+    parser.add_argument(
+        '--skip-num',
+        type=int,
+        default=0,
+        help='Skip JSON files with fewer surfaces than this number. Set to 0 to disable (default: 0)'
+    )
+    parser.add_argument(
+        '--skip-num-max',
+        type=int,
+        default=0,
+        help='Skip JSON files with more surfaces than this number. Set to 0 to disable (default: 0)'
+    )
     
     args = parser.parse_args()
     
@@ -389,6 +410,18 @@ def main():
                 print(f"Using default GPU: {torch.cuda.get_device_name(0)}")
     else:
         print(f"Using device: {args.device}")
+    
+    # Parse skip types
+    skip_types = []
+    if args.skip_type:
+        skip_types = [s.strip() for s in args.skip_type.split(',') if s.strip()]
+        # Validate skip types
+        valid_types = {'plane', 'cylinder', 'cone', 'sphere', 'torus', 'bspline_surface'}
+        invalid_types = set(skip_types) - valid_types
+        if invalid_types:
+            print(f"Error: Invalid surface types in --skip-type: {invalid_types}")
+            print(f"Valid types are: {valid_types}")
+            sys.exit(1)
     
     # Load dataset
     print(f"Loading dataset from: {args.input_dir}")
@@ -419,15 +452,56 @@ def main():
     output_root = Path(args.output_dir)
     output_root.mkdir(parents=True, exist_ok=True)
     
+    # Print skip conditions
+    if skip_types:
+        print(f"Skip files containing surface types: {', '.join(skip_types)}")
+    if args.skip_num > 0:
+        print(f"Skip files with fewer than {args.skip_num} surfaces")
+    if args.skip_num_max > 0:
+        print(f"Skip files with more than {args.skip_num_max} surfaces")
+    
     # Process all samples
-    print("Processing samples...")
+    print("\nProcessing samples...")
     failed_samples = []
+    skipped_files = 0
     
     # Statistics tracking
     all_cls_acc = []
     all_params_mse = []
     
     for idx in tqdm(range(len(dataset)), desc="Converting to latent"):
+        json_path = dataset.json_names[idx]
+        
+        # Check if file should be skipped
+        if skip_types or args.skip_num > 0 or args.skip_num_max > 0:
+            try:
+                with open(json_path, 'r') as f:
+                    surfaces_data = json.load(f)
+                
+                should_skip = False
+                
+                # Check if any skip type is present
+                if skip_types:
+                    for skip_type in skip_types:
+                        if check_contain_surface(surfaces_data, skip_type) > 0:
+                            should_skip = True
+                            break
+                
+                # Check if number of surfaces is below or above threshold
+                if not should_skip and (args.skip_num > 0 or args.skip_num_max > 0):
+                    num_surfaces = len(surfaces_data)
+                    if args.skip_num > 0 and num_surfaces < args.skip_num:
+                        should_skip = True
+                    elif args.skip_num_max > 0 and num_surfaces > args.skip_num_max:
+                        should_skip = True
+                
+                if should_skip:
+                    skipped_files += 1
+                    continue
+            except Exception as e:
+                print(f"\nWarning: Failed to check skip condition for {json_path}: {e}")
+                # Continue processing if check fails
+        
         try:
             # Get data from dataset (canonical space if args.canonical=True)
             params_tensor, types_tensor, mask_tensor, all_shifts, all_rotations, all_scales = dataset[idx]
@@ -435,7 +509,7 @@ def main():
             # Check if there are any valid surfaces
             num_valid = mask_tensor.sum().item()
             if num_valid == 0:
-                print(f"\nWarning: No valid surfaces in sample {idx} ({dataset.json_names[idx]})")
+                print(f"\nWarning: No valid surfaces in sample {idx} ({json_path})")
                 continue
             
             # If using canonical space, also load original space parameters for bbox computation
@@ -481,7 +555,17 @@ def main():
     
     print("\n" + "="*80)
     print("Processing complete!")
-    print(f"Successfully processed: {len(dataset) - len(failed_samples)} samples")
+    print(f"Total files: {len(dataset)}")
+    if skip_types or args.skip_num > 0 or args.skip_num_max > 0:
+        skip_reasons = []
+        if skip_types:
+            skip_reasons.append(f"containing types: {', '.join(skip_types)}")
+        if args.skip_num > 0:
+            skip_reasons.append(f"with < {args.skip_num} surfaces")
+        if args.skip_num_max > 0:
+            skip_reasons.append(f"with > {args.skip_num_max} surfaces")
+        print(f"Skipped: {skipped_files} files ({' | '.join(skip_reasons)})")
+    print(f"Successfully processed: {len(dataset) - len(failed_samples) - skipped_files} samples")
     print(f"Failed: {len(failed_samples)} samples")
     
     # Print reconstruction statistics

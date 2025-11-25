@@ -16,6 +16,7 @@ from einops import rearrange
 from functools import partial
 from contextlib import nullcontext
 import time
+from collections import defaultdict
 
 from src.flow.surface_flow import ZLDMPipeline, get_new_scheduler
 from src.vae.layers import BSplineSurfaceLayer
@@ -29,6 +30,7 @@ class TrainerFlowSurface(BaseTrainer):
         self,
         model: Union[ModelMixin, ConfigMixin] | nn.Module,
         dataset: Dataset, 
+        val_dataset: Dataset,
         *,
         batch_size = 16,
         checkpoint_folder: str = './checkpoints',
@@ -58,11 +60,14 @@ class TrainerFlowSurface(BaseTrainer):
         prediction_type: str = 'v_prediction',
         num_training_timesteps: int = 1000,
         num_inference_timesteps: int = 50,
+        weight_valid = 1.0,
+        weight_params = 1.0,
         **kwargs
     ):
         super().__init__(
             model=model, 
             dataset=dataset,
+            val_dataset=val_dataset,
             batch_size=batch_size,
             checkpoint_folder=checkpoint_folder,
             checkpoint_every_step=checkpoint_every_step,
@@ -88,13 +93,17 @@ class TrainerFlowSurface(BaseTrainer):
             **kwargs
         )
         
-        # Visual evaluation parameters
-        self.visual_eval_every_step = visual_eval_every_step
         self.num_visual_samples = num_visual_samples
         self.scheduler = get_new_scheduler(prediction_type, num_training_timesteps)
-        self.pipe = ZLDMPipeline(self.model, self.scheduler, dtype=torch.float32) # Model will be replaced with EMA during inference
-        # self.cp2surfaceLayer = BSplineSurfaceLayer(resolution=model.res)
+        self.num_inference_timesteps = num_inference_timesteps
+        self.pipe = ZLDMPipeline(self.model, self.scheduler, dtype=torch.float32) # Model will be replaced with EMA during 
+
         self.raw_model = self.model.module if hasattr(self.model, 'module') else self.model
+
+        self.bce_logits_loss = torch.nn.BCEWithLogitsLoss(reduction='none')
+
+        self.weight_valid = weight_valid
+        self.weight_params = weight_params
 
     # def create_surface_visualization_bs(self, gt_samples, cross_attention_recon, bspline_recon, control_points, step):
     #     """Create comprehensive visualization for B-spline enhanced surface VAE"""
@@ -210,46 +219,10 @@ class TrainerFlowSurface(BaseTrainer):
         
     #     return fig
     
-    def perform_visual_evaluation(self, step):
-        """Perform visual evaluation with B-spline branch visualization"""
-        if not self.use_wandb_tracking or not self.is_main:
-            return
-            
-        self.ema.eval()
-        
-        with torch.no_grad():
-            # Get a batch of validation data
-            forward_kwargs = self.next_data_to_forward_kwargs(self.val_dl_iter)
-            if isinstance(forward_kwargs, dict):
-                forward_kwargs = {k: v.to(self.device) for k, v in forward_kwargs.items()}
-                # data = forward_kwargs.get('data', list(forward_kwargs.values())[0])
-            else:
-                forward_kwargs = forward_kwargs.to(self.device)
-                # data = forward_kwargs
-            
-            device = forward_kwargs['data'].device
-
-            sample  = self.pipe(pc=forward_kwargs['pc'], num_latents=3, sample=None, sample_mask=None, num_samples=forward_kwargs['data'].shape[0], device=device, num_inference_steps=50)
-
-            control_point_results = sample
-            sampled_surface_results = self.cp2surfaceLayer(control_point_results)
-            gt_surface_samples = self.cp2surfaceLayer(forward_kwargs['data'])
-
-        
-            fig = self.create_surface_visualization_bs(
-                gt_surface_samples, None, sampled_surface_results, control_point_results, step
-            )
-            
-            # Log to wandb
-            wandb.log({
-                "bspline_visual_evaluation": wandb.Image(fig),
-                "step": step
-            })
-            
-            plt.close(fig)  # Clean up memory
+    
                     
     
-    def log_loss(self, total_loss, lr, total_norm, step):
+    def log_loss(self, total_loss, lr, total_norm, step, loss_dict={}):
         """Enhanced loss logging for B-spline model"""
         if not self.use_wandb_tracking or not self.is_main:
             return
@@ -260,7 +233,8 @@ class TrainerFlowSurface(BaseTrainer):
             'lr': lr,
             'grad_norm': total_norm,
             'step': step,
-
+            **loss_dict
+            
         }
         
         self.log(**log_dict)
@@ -272,22 +246,27 @@ class TrainerFlowSurface(BaseTrainer):
         self.print(get_current_time() + f' {loss_str} lr: {lr:.6f} norm: {total_norm:.3f}')
 
 
-    def assemble_sample(self, params_padded, surface_type, shifts_padded, rotations_padded, scales_padded, valid_masks):
+    def compute_loss(self, output, target, masks):
 
-        surface_type_onehot = F.one_hot(surface_type, num_classes=self.model.num_surface_types)
-        surface_type_onehot = surface_type_onehot.float()
-        shifts = torch.log(shifts_padded.float())
-        rotations = rotations_padded[:, :6]
-        scales = torch.log(scales_padded.float())
-        sample = torch.cat([valid_masks.float(), surface_type_onehot, shifts, rotations, scales, params_padded], dim=-1)
-        return sample
+        loss_raw = torch.nn.functional.mse_loss(output, target, reduction='none')
+
+        loss_others = loss_raw[..., 1:] * (1 - masks.float())
+        total_valid_surfaces = masks.float().sum()
+        # loss_types = loss_others[..., :self.model.num_surface_types]
+        loss_shifts = loss_others[..., :3].mean(dim=(2)).sum() / total_valid_surfaces
+        loss_rotations = loss_others[..., 3:3+6].mean(dim=(2)).sum() / total_valid_surfaces
+        loss_scales = loss_others[..., 3+6:3+6+1].mean(dim=(2)).sum() / total_valid_surfaces
+        loss_params = loss_others[..., 3+6+1:].mean(dim=(2)).sum() / total_valid_surfaces
+        
+        loss_valid = self.bce_logits_loss(output[..., 0], masks.float().squeeze()).mean()
+        
+        return loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params
 
     def train(self):
         """Enhanced train method with B-spline specific handling"""
         step = self.step.item()
 
         while step < self.num_train_steps:
-            # print(step)
             # print(self.visual_eval_every_step)
             total_loss = 0.
 
@@ -297,15 +276,10 @@ class TrainerFlowSurface(BaseTrainer):
 
                 forward_kwargs = self.next_data_to_forward_kwargs(self.train_dl_iter)
                 with self.accelerator.autocast(), maybe_no_sync():
-                    params_padded, surface_type, masks, shifts_padded, rotations_padded, scales_padded, pc_cond = forward_kwargs
-
-
-
-                    if masks.sum() == 0:
-                        continue
-
-                    gt_sample = self.assemble_sample(params_padded, surface_type, shifts_padded, rotations_padded, scales_padded, masks.float())
-
+                    params_padded, rotations_padded, scales_padded, shifts_padded, surface_type, bbox_mins, bbox_maxs, masks, pc_cond = forward_kwargs
+                    masks = masks.unsqueeze(-1)
+                    gt_sample = torch.cat([masks.float(), shifts_padded, rotations_padded, scales_padded, params_padded], dim=-1)
+                    
                     noise = torch.randn_like(gt_sample)
                     timesteps = torch.randint(0, self.scheduler.num_train_timesteps, (gt_sample.shape[0],), device=gt_sample.device).long()
 
@@ -317,23 +291,20 @@ class TrainerFlowSurface(BaseTrainer):
                         target = gt_sample
 
                     # forward pass
-                    output = self.model(sample=noisy_sample, t = timesteps, pc_cond=pc_cond)
+                    output = self.model(sample=noisy_sample, timestep = timesteps, cond=pc_cond)
 
-                    loss_raw = torch.nn.functional.mse_loss(output, target, reduction='none')
-                    loss_valid = loss_raw[..., 0]
-                    loss_others = loss_raw[..., 1:] * (1 - masks.float())
-                    loss_types = loss_others[..., :self.model.num_surface_types]
-                    loss_shifts = loss_others[..., self.model.num_surface_types:self.model.num_surface_types+3]
-                    loss_rotations = loss_others[..., self.model.num_surface_types+3:self.model.num_surface_types+3+6]
-                    loss_scales = loss_others[..., self.model.num_surface_types+3+6:self.model.num_surface_types+3+6+1]
-                    loss_params = loss_others[..., self.model.num_surface_types+3+6+1:]
-                    
-                    # Todo: Add per params loss.
-
+                    loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params = self.compute_loss(output, target, masks)
 
                 
-                    loss = loss / self.grad_accum_every
+                    loss = loss_valid * self.weight_valid + loss_shifts + loss_rotations + loss_scales + loss_params * self.weight_params
                     total_loss += loss.item()
+                    loss_dict = {
+                        'loss_valid': loss_valid.item(),
+                        'loss_shifts': loss_shifts.item(),
+                        'loss_rotations': loss_rotations.item(),
+                        'loss_scales': loss_scales.item(),
+                        'loss_params': loss_params.item(),
+                    }
                 
                 self.accelerator.backward(loss)
             
@@ -346,7 +317,7 @@ class TrainerFlowSurface(BaseTrainer):
                 cur_lr = get_lr(self.optimizer.optimizer)
                 total_norm = self.optimizer.total_norm
                                                         
-                self.log_loss(total_loss, cur_lr, total_norm, step)
+                self.log_loss(total_loss, cur_lr, total_norm, step, loss_dict)
             
 
             
@@ -361,49 +332,46 @@ class TrainerFlowSurface(BaseTrainer):
             self.wait()
 
             # Visual evaluation with B-spline visualization
-            if self.is_main and self.should_validate and divisible_by(step, self.visual_eval_every_step):
-                print(f"Visual evaluating at step {step}")
-                self.pipe.denoiser = self.ema
-                self.perform_visual_evaluation(step)
-                # try:
-                #     self.perform_visual_evaluation(step)
-                # except Exception as e:
-                #     self.print(f"B-spline visual evaluation failed at step {step}: {e}")
-            self.wait()
+        
 
-            if self.is_main and self.should_validate and divisible_by(step, self.val_every_step):
+            if self.is_main and divisible_by(step, self.val_every_step):
                 print(f"Validating at step {step}")
                 total_val_loss = 0.
-                
+                loss_dict = defaultdict(float)
                 self.ema.eval()
                 self.pipe.denoiser = self.ema
-
+                device = next(self.model.parameters()).device
                 num_val_batches = self.val_num_batches * self.grad_accum_every
 
                 for _ in range(num_val_batches):
                     with self.accelerator.autocast(), torch.no_grad():
 
-                        forward_kwargs = self.next_data_to_forward_kwargs(self.val_dl_iter)
-                        if isinstance(forward_kwargs, dict):
-                            forward_kwargs = {k: v.to(self.device) for k, v in forward_kwargs.items()}
-                        else:
-                            forward_kwargs = forward_kwargs.to(self.device)
-                        # sample  = self.pipe(pc=forward_kwargs['pc'], num_latents=3, sample=forward_kwargs['data'], sample_mask=forward_kwargs['mask'], num_samples=forward_kwargs['data'].shape[0], device=self.device, num_inference_steps=50)
-                        sample  = self.pipe(pc=forward_kwargs['pc'], num_latents=3, sample=None, sample_mask=None, num_samples=forward_kwargs['data'].shape[0], device=self.device, num_inference_steps=50)
-                        # sample  = self.pipe(pc=forward_kwargs['pc'], num_latents=3,  num_samples=forward_kwargs['data'].shape[0], device=self.device)
-                        # loss, loss_dict = self.train_step(forward_kwargs, is_train=False)
 
-                        # Here we predict the clean sample directly.
-                        loss = torch.nn.functional.mse_loss(sample, forward_kwargs['data'], reduction='none')
-                        # loss = torch.nn.functional.mse_loss(output, gt_sample, reduction='none')
-                        loss = loss * (1-forward_kwargs['mask'])
+                        forward_args = self.next_data_to_forward_kwargs(self.val_dl_iter)
+                        forward_args = [_.to(device) for _ in forward_args]
+                        params_padded, rotations_padded, scales_padded, shifts_padded, surface_type, bbox_mins, bbox_maxs, masks, pc_cond = forward_args
+                        masks = masks.unsqueeze(-1)
+                        gt_sample = torch.cat([masks.float(), shifts_padded, rotations_padded, scales_padded, params_padded], dim=-1)
+                        
+                        noise = torch.randn_like(gt_sample)
 
-                        loss = loss.mean()
+                        sample  = self.pipe(noise=noise, pc=pc_cond, num_inference_steps=self.num_inference_timesteps, show_progress=True)
+
+                        loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params = self.compute_loss(sample, gt_sample, masks)
+                        
+                        
+
+                        loss = loss_valid * self.weight_valid + loss_shifts + loss_rotations + loss_scales + loss_params * self.weight_params
+                        loss_dict['loss_valid'] += loss_valid.item() / num_val_batches
+                        loss_dict['loss_shifts'] += loss_shifts.item() / num_val_batches
+                        loss_dict['loss_rotations'] += loss_rotations.item() / num_val_batches
+                        loss_dict['loss_scales'] += loss_scales.item() / num_val_batches
+                        loss_dict['loss_params'] += loss_params.item() / num_val_batches
                         total_val_loss += (loss / num_val_batches)
 
 
                 # Print validation losses
-                self.print(get_current_time() + f' valid loss: {total_val_loss:.3f}')
+                self.print(get_current_time() + f" valid loss: {total_val_loss:.3f}, loss_valid: {loss_dict['loss_valid']:.3f}, loss_shifts: {loss_dict['loss_shifts']:.3f}, loss_rotations: {loss_dict['loss_rotations']:.3f}, loss_scales: {loss_dict['loss_scales']:.3f}, loss_params: {loss_dict['loss_params']:.3f}")
 
                 
                 # Calculate and print estimated finishing time
@@ -414,7 +382,7 @@ class TrainerFlowSurface(BaseTrainer):
                 self.print(get_current_time() + f' estimated finish time: {time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(estimated_finish_time))}')
                 
                 # Log validation losses
-                val_log_dict = {"val_loss": total_val_loss}
+                val_log_dict = {"val_loss": total_val_loss, **loss_dict}
 
                 self.log(**val_log_dict)
 
@@ -426,4 +394,4 @@ class TrainerFlowSurface(BaseTrainer):
                 self.save(milestone)
                 self.print(get_current_time() + f' checkpoint saved at {self.checkpoint_folder / f"model-{milestone}.pt"}')
 
-        self.print('B-spline enhanced training complete') 
+        self.print('DIT Simple Surface Training complete') 
