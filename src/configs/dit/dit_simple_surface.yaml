@@ -42,14 +42,14 @@ model:
     latent_dim: 512
     num_layers: 12
     num_heads: 16
-    checkpoint_folder: checkpoints/train_1124_dit_simple
+    checkpoint_folder: checkpoints/train_1125_dit_simple_valid_0.01_params_10.0
     checkpoint_file_name: model-20.pt
 
 vae:
     param_raw_dim: [17, 18, 19, 18, 19]
-    checkpoint_folder: checkpoints/train_1113_vae_1_canonical_novar
-    checkpoint_file_name: checkpoints/train_1113_vae_1_canonical_novar/model-03.pt
+    checkpoint_folder: checkpoints/train_1113_vae_1_canonical_novar_valid_0.01_params_10.0
+    checkpoint_file_name: model-03.pt
 
 loss:
-    weight_valid: 1.0
-    weight_params: 1.0
+    weight_valid: 0.01
+    weight_params: 10.0
