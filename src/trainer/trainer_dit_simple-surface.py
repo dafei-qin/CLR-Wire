@@ -310,7 +310,7 @@ class TrainerFlowSurface(BaseTrainer):
                     timesteps = torch.randint(0, self.scheduler.num_train_timesteps, (gt_sample.shape[0],), device=gt_sample.device).long()
 
                     noisy_sample = self.scheduler.add_noise(gt_sample, noise, timesteps)
-                    # noisy_sample = noisy_sample * (1 - mask_sample) + gt_sample * mask_sample
+
                     if self.scheduler.prediction_type == 'v_prediction':
                         target = self.scheduler.get_velocity(gt_sample, noise, timesteps)
                     else:

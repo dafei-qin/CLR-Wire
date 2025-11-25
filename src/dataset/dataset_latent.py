@@ -40,15 +40,15 @@ class LatentDataset(Dataset):
         self.latent_dim = latent_dim
         
         # Discover all NPZ files in directory and subdirectories
-        self.npz_files = sorted([
+        self.latent_files = sorted([
             str(p) for p in self.latent_dir.rglob("*.npz")
         ])
         
-        if not self.npz_files:
+        if not self.latent_files:
             raise ValueError(f"No NPZ files found in {latent_dir}")
         
-        print(f"Found {len(self.npz_files)} NPZ files in {latent_dir}")
-        
+        print(f"Found {len(self.latent_files)} NPZ files in {latent_dir}")
+        self.latent_dir = str(self.latent_dir)
         self.replica = 1
     
     def __len__(self):
