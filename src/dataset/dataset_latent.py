@@ -34,6 +34,7 @@ class LatentDataset(Dataset):
             latent_dim: Dimension of the latent space (default: 128)
         """
         super().__init__()
+        print('latent_dir: ', latent_dir)
         self.latent_dir = Path(latent_dir)
         self.pc_dir = pc_dir
         self.max_num_surfaces = max_num_surfaces

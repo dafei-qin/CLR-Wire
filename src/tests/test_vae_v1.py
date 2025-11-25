@@ -1,3 +1,6 @@
+"""
+This script test the vae model for simple surface reconstruction.
+"""
 import torch
 import numpy as np
 import polyscope as ps
