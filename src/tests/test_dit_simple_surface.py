@@ -351,8 +351,15 @@ def process_index(idx: int, num_inference_steps: int, use_gt_mask=False):
     sample  = _pipe(noise=noise, pc=pc_cond, num_inference_steps=num_inference_steps, show_progress=True)
 
     loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params = _compute_loss(sample, gt_sample, masks)
-    sample = torch.cat([gt_sample[..., :1], sample[..., 1:1+3+6], gt_sample[..., 1+3+6:1+3+6+1], sample[..., -128:]], dim=-1)
+    # sample = torch.cat([gt_sample[..., :1], sample[..., 1:1+3+6], gt_sample[..., 1+3+6:1+3+6+1], sample[..., -128:]], dim=-1)
+    sample = torch.cat([gt_sample[..., :-128], sample[..., -128:]], dim=-1)
     valid, shifts, rotations, scales, params = decode_sample(sample)
+
+    valid_gt, shifts_gt, rotations_gt, scales_gt, params_gt = decode_sample(gt_sample)
+    shifts_gt = shifts_gt[valid_gt].squeeze()
+    rotations_gt = rotations_gt[valid_gt].squeeze()
+    scales_gt = scales_gt[valid_gt].squeeze()
+    params_gt = params_gt[valid_gt].squeeze()
 
     if use_gt_mask:
         valid = masks.squeeze(-1).bool()
@@ -363,6 +370,13 @@ def process_index(idx: int, num_inference_steps: int, use_gt_mask=False):
     params = params[valid].squeeze()
 
     type_logits_pred, types_pred = _vae.classify(params)
+
+    type_logits_pred_gt, types_pred_gt = _vae.classify(params_gt)
+    
+    params_decoded_gt, mask_gt = _vae.decode(params_gt, types_pred_gt)
+    shifts_gt, rotations_gt, scales_gt = fix_rts(shifts_gt, rotations_gt, scales_gt)
+    surface_jsons_gt = to_json(params_decoded_gt.cpu().numpy(), types_pred_gt.cpu().numpy(), mask_gt.cpu().numpy())
+    surface_jsons_gt = [from_canonical(surface_jsons_gt[i], shifts_gt[i], rotations_gt[i], scales_gt[i]) for i in range(len(surface_jsons_gt))]
         
     # Decode to get surface parameters
     params_decoded, mask = _vae.decode(params, types_pred)
@@ -372,7 +386,7 @@ def process_index(idx: int, num_inference_steps: int, use_gt_mask=False):
     surface_jsons = to_json(params_decoded.cpu().numpy(), types_pred.cpu().numpy(), mask.cpu().numpy())
     surface_jsons = [from_canonical(surface_jsons[i], shifts[i], rotations[i], scales[i]) for i in range(len(surface_jsons))]
 
-    return surface_jsons, loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params
+    return surface_jsons, surface_jsons_gt, loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params
 
 def fix_rts(shifts, rotations, scales):
     shifts = shifts.cpu().numpy()
@@ -420,7 +434,7 @@ def update_visualization():
     # Process current sample
     print(f"\nProcessing index {_current_idx}...")
     with torch.no_grad():
-        surface_jsons, loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params = process_index(
+        surface_jsons, surface_jsons_gt, loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params = process_index(
             _current_idx, _num_inference_steps, use_gt_mask=True
         )
     
@@ -434,6 +448,7 @@ def update_visualization():
     try:
         print(f"Visualized {len(surface_jsons)} generated surfaces")
         visualize_json_interset(surface_jsons, plot=True, plot_gui=False, tol=1e-5, ps_header=f'sample_{_current_idx}')
+        visualize_json_interset(surface_jsons_gt, plot=True, plot_gui=False, tol=1e-5, ps_header=f'gt_{_current_idx}')
 
     except Exception as e:
         print(f'Error visualizing surfaces: {e}')

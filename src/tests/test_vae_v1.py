@@ -294,8 +294,8 @@ def process_sample(idx):
     with torch.no_grad():
         mu, logvar = model.encode(valid_params, valid_types)
         
-        # z = model.reparameterize(mu, logvar)
-        z = mu
+        z = model.reparameterize(mu, logvar)
+        # z = mu
         type_logits_pred, types_pred = model.classify(z)
         params_pred, mask = model.decode(z, types_pred)
         
@@ -343,6 +343,9 @@ def resample_model(canonical):
     params_tensor, types_tensor, mask_tensor, shift, rotation, scale = dataset[current_idx]
     valid_params = params_tensor[mask_tensor.bool()]
     valid_types = types_tensor[mask_tensor.bool()]
+    shift = shift[mask_tensor.bool()]
+    rotation = rotation[mask_tensor.bool()]
+    scale = scale[mask_tensor.bool()]
     
     # Apply transformations to input if any are enabled
     if _apply_scale or _apply_rotation or _apply_shift:

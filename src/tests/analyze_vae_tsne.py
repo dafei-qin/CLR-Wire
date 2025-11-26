@@ -36,7 +36,7 @@ def collect_latents(ds: dataset_compound, model: SurfaceVAE, limit: int = None):
     with torch.no_grad():
         N = len(ds) if limit is None else min(limit, len(ds))
         for idx in range(N):
-            params_tensor, types_tensor, mask_tensor = ds[idx]
+            params_tensor, types_tensor, mask_tensor, _, _, _ = ds[idx]
             valid = mask_tensor.bool()
             if valid.sum() == 0:
                 continue
@@ -94,9 +94,10 @@ def main():
     parser.add_argument('--limit', type=int, default=100, help='Max number of files to sample')
     parser.add_argument('--perplexity', type=float, default=30.0, help='t-SNE perplexity')
     parser.add_argument('--out', type=str, default='assets/temp/vae_tsne.png', help='Output PNG path')
+    parser.add_argument('--canonical', action='store_true', help='Use canonical dataset')
     args = parser.parse_args()
 
-    ds = dataset_compound(args.dataset_path)
+    ds = dataset_compound(args.dataset_path, canonical=args.canonical)
     model = load_model(args.checkpoint_path)
 
     print('Collecting latent embeddings...')
