@@ -18,6 +18,7 @@ class Trainer_vae_v1(BaseTrainer):
         model: nn.Module,
         dataset: Dataset, 
         *,
+        val_dataset: Dataset,
         batch_size = 16,
         checkpoint_folder: str = './checkpoints',
         checkpoint_every_step: int = 1000,
@@ -39,17 +40,22 @@ class Trainer_vae_v1(BaseTrainer):
         collate_fn: Optional[Callable] = None,
         val_every_step: int = 1000,
         val_num_batches: int = 10,
+        val_batch_size: int = 256,
         accelerator_kwargs: dict = dict(),
         loss_recon_weight: float = 1.0,
         loss_cls_weight: float = 1.0,
         loss_kl_weight: float = 1.0,
         kl_annealing_steps: int = 0,
         kl_free_bits: float = 0.0,
+        use_logvar: bool = True,
+        train_sampler = None,
+        num_workers_val: int = 8,
         **kwargs
     ):
         super().__init__(
             model=model, 
             dataset=dataset,
+            val_dataset=val_dataset,
             batch_size=batch_size,
             checkpoint_folder=checkpoint_folder,
             checkpoint_every_step=checkpoint_every_step,
@@ -72,6 +78,9 @@ class Trainer_vae_v1(BaseTrainer):
             accelerator_kwargs=accelerator_kwargs,
             val_every_step=val_every_step,
             val_num_batches=val_num_batches,
+            val_batch_size=val_batch_size,
+            train_sampler = train_sampler,
+            num_workers_val=num_workers_val,
             **kwargs
         )
         
@@ -88,6 +97,7 @@ class Trainer_vae_v1(BaseTrainer):
         # Track abnormal values for logging
         self.abnormal_values_buffer = []
         self.raw_model = self.model.module if hasattr(self.model, 'module') else self.model
+        self.use_logvar = use_logvar
 
     def compute_accuracy(self, logits, labels):
         predictions = torch.argmax(logits, dim=-1)
@@ -130,14 +140,16 @@ class Trainer_vae_v1(BaseTrainer):
     def train(self):
         step = self.step.item()
 
+        tt = time.time()
         while step < self.num_train_steps:
             total_loss = 0.
             total_accuracy = 0.
             t = time.time()
-
             for i in range(self.grad_accum_every):
                 is_last = i == (self.grad_accum_every - 1)
                 maybe_no_sync = partial(self.accelerator.no_sync, self.model) if not is_last else nullcontext
+                # print('others time: ', f'{time.time() - tt:.2f}s')
+                tt = time.time()
 
                 forward_kwargs = self.next_data_to_forward_kwargs(self.train_dl_iter)
                 with self.accelerator.autocast(), maybe_no_sync():
@@ -149,16 +161,15 @@ class Trainer_vae_v1(BaseTrainer):
                     scales_padded = scales_padded[masks.bool()]
                     if surface_type.shape[0] == 0:
                         continue
-                    # print(params_padded.abs().max())
-                    # abnormal_value = params_padded.abs().max().item()
+                    
+                    # print('data time: ', f'{time.time() - tt:.2f}s')
 
-
-                    # Forward pass
-                    # params_raw_recon, mask, class_logits, mu, logvar = self.model(params_padded, surface_type)
-
+                    tt = time.time()
                     mu, logvar = self.raw_model.encode(params_padded, surface_type)
-                    z = mu
-                    # z = self.reparameterize(mu, logvar)
+                    if self.use_logvar:
+                        z = self.raw_model.reparameterize(mu, logvar)
+                    else:
+                        z = mu
                     class_logits, surface_type_pred = self.raw_model.classify(z)
                     params_raw_recon, mask = self.raw_model.decode(z, surface_type)
                     
@@ -188,6 +199,9 @@ class Trainer_vae_v1(BaseTrainer):
                     loss = loss / self.grad_accum_every
                     total_loss += loss.item()
                     total_accuracy += accuracy.item() / self.grad_accum_every
+
+                    # print('model and loss time: ', f'{time.time() - tt:.2f}s')
+                    tt = time.time()
                 
                 self.accelerator.backward(loss)
             time_per_step = (time.time() - t) / self.grad_accum_every
@@ -229,7 +243,12 @@ class Trainer_vae_v1(BaseTrainer):
 
                 for _ in range(num_val_batches):
                     with self.accelerator.autocast(), torch.no_grad():
+                        t = time.time()
+                        forward_kwargs = self.next_data_to_forward_kwargs(self.val_dl_iter)
+
                         params_padded, surface_type, masks, shifts_padded, rotations_padded, scales_padded = forward_kwargs
+                        print('Dataloader time: ', f'{time.time() - t:.2f}s')
+
                         params_padded = params_padded[masks.bool()] 
                         surface_type = surface_type[masks.bool()]
                         shifts_padded = shifts_padded[masks.bool()]
@@ -242,14 +261,16 @@ class Trainer_vae_v1(BaseTrainer):
                             continue
                         # print(params_padded.abs().max())
                         abnormal_value = params_padded.abs().max().item()
-
+                        t = time.time()
                         # params_raw_recon, mask, class_logits, mu, logvar = self.ema(params_padded, surface_type)
                         mu, logvar = self.raw_model.encode(params_padded, surface_type)
-                        z = mu
-                        # z = self.reparameterize(mu, logvar)
+                        if self.use_logvar:
+                            z = self.raw_model.reparameterize(mu, logvar)
+                        else:
+                            z = mu
                         class_logits, surface_type_pred = self.raw_model.classify(z)
                         params_raw_recon, mask = self.raw_model.decode(z, surface_type)
-
+                        print('Encode and decode time: ', f'{time.time() - t:.2f}s')
                         loss_recon = (self.loss_recon(params_raw_recon, params_padded) * mask.float()).mean()
                         loss_cls = self.loss_cls(class_logits, surface_type).mean()
                         

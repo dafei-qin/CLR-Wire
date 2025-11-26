@@ -80,11 +80,15 @@ class IndexedDataset(torch.utils.data.Dataset):
 
 
 train_dataset_raw = LatentDataset(
-    latent_dir=args.data.train_latent_dir, pc_dir=args.data.train_pc_dir, max_num_surfaces=args.data.max_num_surfaces, latent_dim=args.data.surface_latent_dim, num_data=args.data.train_num
+    latent_dir=args.data.train_latent_dir, pc_dir=args.data.train_pc_dir, max_num_surfaces=args.data.max_num_surfaces, 
+    latent_dim=args.data.surface_latent_dim, num_data=args.data.train_num,
+    log_scale=args.data.log_scale
     )
 
 val_dataset = LatentDataset(
-    latent_dir=args.data.val_latent_dir, pc_dir=args.data.val_pc_dir, max_num_surfaces=args.data.max_num_surfaces, latent_dim=args.data.surface_latent_dim, num_data=args.data.val_num
+    latent_dir=args.data.val_latent_dir, pc_dir=args.data.val_pc_dir, max_num_surfaces=args.data.max_num_surfaces, 
+    latent_dim=args.data.surface_latent_dim, num_data=args.data.val_num,
+    log_scale=args.data.log_scale
     )
 
 # weighted sampling config (optional)

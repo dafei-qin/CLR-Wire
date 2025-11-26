@@ -362,11 +362,11 @@ class TrainerFlowSurface(BaseTrainer):
                         
 
                         loss = loss_valid * self.weight_valid + loss_shifts + loss_rotations + loss_scales + loss_params * self.weight_params
-                        loss_dict['loss_valid'] += loss_valid.item() / num_val_batches
-                        loss_dict['loss_shifts'] += loss_shifts.item() / num_val_batches
-                        loss_dict['loss_rotations'] += loss_rotations.item() / num_val_batches
-                        loss_dict['loss_scales'] += loss_scales.item() / num_val_batches
-                        loss_dict['loss_params'] += loss_params.item() / num_val_batches
+                        loss_dict['val_loss_valid'] += loss_valid.item() / num_val_batches
+                        loss_dict['val_loss_shifts'] += loss_shifts.item() / num_val_batches
+                        loss_dict['val_loss_rotations'] += loss_rotations.item() / num_val_batches
+                        loss_dict['val_loss_scales'] += loss_scales.item() / num_val_batches
+                        loss_dict['val_loss_params'] += loss_params.item() / num_val_batches
                         total_val_loss += (loss / num_val_batches)
 
 

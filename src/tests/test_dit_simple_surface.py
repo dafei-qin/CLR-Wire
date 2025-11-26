@@ -237,7 +237,9 @@ def load_model_and_dataset(
     global _dataset, _model, _pipe, _max_idx, _vae, _dataset_compound
 
     _dataset = LatentDataset(
-    latent_dir=args.data.train_latent_dir, pc_dir=args.data.train_pc_dir, max_num_surfaces=args.data.max_num_surfaces, latent_dim=args.data.surface_latent_dim, num_data=args.data.val_num
+    latent_dir=args.data.train_latent_dir, pc_dir=args.data.train_pc_dir, max_num_surfaces=args.data.max_num_surfaces, 
+    latent_dim=args.data.surface_latent_dim, num_data=args.data.val_num,
+    log_scale=args.data.log_scale
     )
     
     _dataset_compound = dataset_compound(json_dir='./',canonical=True)
@@ -321,11 +323,15 @@ def _compute_loss(output, target, masks):
         return loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params
 
 def decode_sample(sample: torch.Tensor):
+    global _log_scale
     valid_tensor = sample[..., 0]
     sample = sample[..., 1:]
     shifts_tensor = sample[..., :3]
     rotations_tensor = sample[..., 3:3+6]
     scales_tensor = sample[..., 3+6:3+6+1]
+    if _log_scale:
+        scales_tensor = torch.exp(scales_tensor)
+
     params_tensor = sample[..., 3+6+1:]
     valid = torch.sigmoid(valid_tensor) > 0.5
 
@@ -529,7 +535,7 @@ if __name__ == "__main__":
     cfg = load_config(args.config) if args.config else {}
     cfg_args = NestedDictToClass(cfg) if cfg else SimpleNamespace()
 
-        
+    _log_scale = args.data.log_scale
     _num_inference_steps = args.num_inference_steps
     _current_idx = args.start_idx
 
