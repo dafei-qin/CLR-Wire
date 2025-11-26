@@ -26,7 +26,7 @@ class LatentDataset(Dataset):
     The data is padded to max_num_surfaces to ensure consistent batch sizes.
     """
     
-    def __init__(self, latent_dir: str, pc_dir: str, max_num_surfaces: int = 500, latent_dim: int = 128, num_data: int = -1):
+    def __init__(self, latent_dir: str, pc_dir: str, max_num_surfaces: int = 500, latent_dim: int = 128, num_data: int = -1, log_scale=False):
         """
         Args:
             npz_dir: Path to directory containing NPZ files
@@ -39,6 +39,7 @@ class LatentDataset(Dataset):
         self.pc_dir = pc_dir
         self.max_num_surfaces = max_num_surfaces
         self.latent_dim = latent_dim
+        self.log_scale = log_scale
         
         # Discover all NPZ files in directory and subdirectories
         self.latent_files = sorted([
@@ -99,7 +100,11 @@ class LatentDataset(Dataset):
             scales = data['scales']                # (B, 1)
             shifts = data['shifts']                # (B, 3)
             classes = data['classes']              # (B, 1)
-            
+
+            assert scales.min() > 0, f"Scales must be positive, but got {scales.min()}"
+            if self.log_scale:
+                scales = np.log(scales + 1e-6)
+
             # Extract bounding box data if available (for backward compatibility)
             bbox_mins = data.get('bbox_mins', np.zeros((len(latent_params), 3)))  # (B, 3)
             bbox_maxs = data.get('bbox_maxs', np.zeros((len(latent_params), 3)))  # (B, 3)

@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.tools.surface_to_canonical_space import to_canonical, from_canonical
 
 
-ic.enable()
+ic.disable()
 def safe_exp(x):
     return np.exp(x).clip(1e-6, 1e6)
 
@@ -59,6 +59,41 @@ SURFACE_PARAM_SCHEMAS = {
         "dims": [3, 3, 3, 8, 1],
         "transforms": [None, None, None, None, np.log]
     },
+}
+
+
+SURFACE_TYPE_MAP = {
+        'plane': 0,
+        'cylinder': 1,
+        'cone': 2,
+        'sphere': 3,
+        'torus': 4,
+        'bspline_surface': 5,
+}
+
+    
+    # Dimension of scalar parameters for each surface type
+SCALAR_DIM_MAP = {
+    'plane': 0,      # no scalar parameters
+    'cylinder': 1,   # [radius]
+    'cone': 2,       # [semi_angle, radius]
+    'sphere': 1,     # [radius]
+    'torus': 2,      # [major_radius, minor_radius]
+    'bspline_surface': -1,  # variable dimension
+}
+SURFACE_TYPE_MAP_INV = {v: k for k, v in SURFACE_TYPE_MAP.items()}
+
+
+
+
+
+type_weights = {
+    'plane': 1.0,
+    'cylinder': 2.0,
+    'cone': 15.0,
+    'sphere': 45.0,
+    'torus': 13.0,
+    'bspline_surface': 1.0,
 }
 
 
@@ -100,27 +135,6 @@ def build_surface_postpreprocess(schema):
         return np.concatenate(parts, axis=-1)
     return fn
 
-
-SURFACE_TYPE_MAP = {
-        'plane': 0,
-        'cylinder': 1,
-        'cone': 2,
-        'sphere': 3,
-        'torus': 4,
-        'bspline_surface': 5,
-}
-
-    
-    # Dimension of scalar parameters for each surface type
-SCALAR_DIM_MAP = {
-    'plane': 0,      # no scalar parameters
-    'cylinder': 1,   # [radius]
-    'cone': 2,       # [semi_angle, radius]
-    'sphere': 1,     # [radius]
-    'torus': 2,      # [major_radius, minor_radius]
-    'bspline_surface': -1,  # variable dimension
-}
-SURFACE_TYPE_MAP_INV = {v: k for k, v in SURFACE_TYPE_MAP.items()}
 
 
 
@@ -272,6 +286,24 @@ def normalize_cone_with_center(P, D, X, u_min, u_max, v_min, v_max, semi_angle, 
     return P, D, X, Y, UV, scalar_params
 
 
+class dataset_compound_cache(Dataset):
+    def __init__(self, cache_path: str):
+        super().__init__()
+        self.cache_path = cache_path
+        self.data = np.load(cache_path)
+        self.params = self.data['params']
+        self.types = self.data['types']
+        self.shifts = self.data['shifts']
+        self.rotations = self.data['rotations']
+        self.scales = self.data['scales']
+        self.replica = 1
+        
+    def __len__(self):
+        return len(self.params)
+    
+    def __getitem__(self, idx):
+        return torch.from_numpy(self.params[idx]), torch.from_numpy(np.array(self.types[idx])), 1, torch.from_numpy(self.shifts[idx]), torch.from_numpy(self.rotations[idx]), torch.from_numpy(np.array(self.scales[idx]))
+    
 class dataset_compound(Dataset):
     """
     Dataset for loading surface data from JSON files in a directory.
@@ -905,31 +937,7 @@ if __name__ == '__main__':
     import time
     dataset = dataset_compound(sys.argv[1], canonical=True)
     
-    # Test the get_valid_param_length and get_valid_param_mask functions
-    print("Testing get_valid_param_length and get_valid_param_mask:")
-    print(f"Max param dim: {dataset.max_param_dim}")
-    for surf_type_idx, surf_type_name in SURFACE_TYPE_MAP_INV.items():
-        if surf_type_idx < 5:  # Skip bspline
-            length = dataset.get_valid_param_length(surf_type_idx)
-            mask = dataset.get_valid_param_mask(surf_type_idx)
-            print(f"  {surf_type_name} (type {surf_type_idx}): valid length = {length}, mask sum = {mask.sum()}")
-    
-    # Test batch processing
-    batch_types = np.array([0, 1, 2, 3, 4])
-    batch_lengths = dataset.get_valid_param_length(batch_types)
-    batch_masks = dataset.get_valid_param_mask(batch_types)
-    print(f"\nBatch test: types={batch_types}, lengths={batch_lengths}")
-    print(f"Batch mask shape: {batch_masks.shape}, sums per row: {batch_masks.sum(axis=1)}")
-    print()
+
     
     for i in tqdm(range(len(dataset))):
         _ = dataset[i]
-        # t = time.time()
-        # try:
-        #     params_tensor, types_tensor, mask_tensor, all_shifts, all_rotations, all_scales = dataset[i]
-        # except Exception as e:
-        #     print(f"Error: {e}")
-        #     print(i)
-        #     print(dataset.json_names[i])
-        #     continue
-        # print(f"Time taken: {time.time() - t} seconds")
