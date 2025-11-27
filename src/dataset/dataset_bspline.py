@@ -223,50 +223,6 @@ class dataset_bspline(Dataset):
                 prev_idx -= 1
         return prev_idx, next_idx
 
-    # def _axis_angle_to_matrix(self, axis: np.ndarray, angle: float) -> np.ndarray:
-    #     axis = axis / np.linalg.norm(axis)
-    #     x, y, z = axis
-    #     c = np.cos(angle)
-    #     s = np.sin(angle)
-    #     C = 1 - c
-    #     return np.array(
-    #         [
-    #             [c + x * x * C, x * y * C - z * s, x * z * C + y * s],
-    #             [y * x * C + z * s, c + y * y * C, y * z * C - x * s],
-    #             [z * x * C - y * s, z * y * C + x * s, c + z * z * C],
-    #         ],
-    #         dtype=np.float64,
-    #     )
-
-    # def _rotation_matrix_to_z(self, normal_vec: np.ndarray) -> np.ndarray:
-    #     target = np.array([0.0, 0.0, 1.0], dtype=np.float64)
-    #     source = normal_vec / (np.linalg.norm(normal_vec) + 1e-12)
-    #     dot = np.clip(np.dot(source, target), -1.0, 1.0)
-    #     if np.isclose(dot, 1.0):
-    #         return np.eye(3, dtype=np.float64)
-    #     if np.isclose(dot, -1.0):
-    #         axis = np.array([1.0, 0.0, 0.0], dtype=np.float64)
-    #         if abs(source[0]) > 0.9:
-    #             axis = np.array([0.0, 1.0, 0.0], dtype=np.float64)
-    #         axis = axis - axis.dot(source) * source
-    #         axis_norm = np.linalg.norm(axis)
-    #         if axis_norm < 1e-8:
-    #             return np.eye(3, dtype=np.float64)
-    #         axis = axis / axis_norm
-    #         return self._axis_angle_to_matrix(axis, np.pi)
-    #     axis = np.cross(source, target)
-    #     s = np.linalg.norm(axis)
-    #     axis = axis / (s + 1e-12)
-    #     k = np.array(
-    #         [
-    #             [0.0, -axis[2], axis[1]],
-    #             [axis[2], 0.0, -axis[0]],
-    #             [-axis[1], axis[0], 0.0],
-    #         ],
-    #         dtype=np.float64,
-    #     )
-    #     R = np.eye(3, dtype=np.float64) + k * s + (k @ k) * ((1 - dot) / (s ** 2 + 1e-12))
-    #     return R
 
     def _compute_centroid_and_normal(
         self,
@@ -438,14 +394,6 @@ if __name__ == '__main__':
     from tqdm import tqdm
     dataset = dataset_bspline(path_file = "assets/all_bspline_paths_test.txt")
 
-    # def print_knots_mults(index):
-    #     u_knots_list, v_knots_list, u_mults_list, v_mults_list, poles, valid = dataset[index]
-    #     u_knots_list = np.insert(u_knots_list, 0, 0)
-    #     v_knots_list = np.insert(v_knots_list, 0, 0)
-    #     U_info = np.stack([u_knots_list, u_mults_list])
-    #     V_info = np.stack([v_knots_list, v_mults_list])
-    #     print(f"U_info: {U_info}")
-    #     print(f"V_info: {V_info}")
     print(len(dataset))
     counter = 0
     

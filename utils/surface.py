@@ -47,7 +47,7 @@ from itertools import combinations
 from icecream import ic
 import traceback
 
-ic.enable()
+ic.disable()
 
 def Compound(faces):
     # Convert list of faces to a compound
@@ -130,7 +130,7 @@ def extract_mesh_from_face(face):
 
     return vertices, faces
 
-def build_plane_face(face, tol=1e-2):
+def build_plane_face(face, tol=1e-2, meshify=True):
     position = np.array(face['location'], dtype=np.float64)[0]
     direction = np.array(face['direction'], dtype=np.float64)[0]
     XDirection = np.array(face['direction'], dtype=np.float64)[1]
@@ -163,18 +163,24 @@ def build_plane_face(face, tol=1e-2):
     if orientation == 'Reversed':
         shape = shape.Reversed()
 
+    # Build attr_str before checking meshify
+    attr_str = f"{position[0]:.2f},{position[1]:.2f},{position[2]:.2f}|{direction[0]:.2f},{direction[1]:.2f},{direction[2]:.2f}|{XDirection[0]:.2f},{XDirection[1]:.2f},{XDirection[2]:.2f}"
+    attr_str += f"|{u_min:.2f},{u_max:.2f},{v_min:.2f},{v_max:.2f}"
+
+    if not meshify:
+        return shape, [], [], attr_str
+
     mesher = BRepMesh_IncrementalMesh(shape, 0.1, True, 0.2)
     mesher.Perform() # 确保执行网格化
     if not mesher.IsDone():
          print("警告: BRepMesh_IncrementalMesh 执行后报告未完成，网格可能无效。")
     vertices, faces = extract_mesh_from_face(shape)
-    attr_str = f"{position[0]:.2f},{position[1]:.2f},{position[2]:.2f}|{direction[0]:.2f},{direction[1]:.2f},{direction[2]:.2f}|{XDirection[0]:.2f},{XDirection[1]:.2f},{XDirection[2]:.2f}"
-    attr_str += f"|{u_min:.2f},{u_max:.2f},{v_min:.2f},{v_max:.2f}"
     return shape, np.array(vertices), np.array(faces), attr_str
 
 
 
-def build_second_order_surface(face, tol=1e-2):
+def build_second_order_surface(face, tol=1e-2, meshify=True):
+
     surface_type = face['type']
     parameter_range = face['uv']
     u_min, u_max, v_min, v_max = parameter_range
@@ -191,14 +197,13 @@ def build_second_order_surface(face, tol=1e-2):
         position = position + direction * v_min
         v_max = v_max - v_min
         v_min = 0
-        # u_min = u_min % (2 * np.pi)
-        # u_max = u_max % (2 * np.pi)
+
         attr_str = f"{position[0]:.2f},{position[1]:.2f},{position[2]:.2f}|{direction[0]:.2f},{direction[1]:.2f},{direction[2]:.2f}|{XDirection[0]:.2f},{XDirection[1]:.2f},{XDirection[2]:.2f}"
         attr_str += f"|{u_min/np.pi:.2f},{u_max/np.pi:.2f},{v_min:.2f},{v_max:.2f}|{radius:.2f}"
     elif surface_type == 'cone':
         radius = face['scalar'][1]
         semi_angle = face['scalar'][0]
-        # semi_angle = semi_angle % (0.5 * np.pi)
+
         attr_str = f"{position[0]:.2f},{position[1]:.2f},{position[2]:.2f}|{direction[0]:.2f},{direction[1]:.2f},{direction[2]:.2f}|{XDirection[0]:.2f},{XDirection[1]:.2f},{XDirection[2]:.2f}"
         attr_str += f"|{u_min/np.pi:.2f},{u_max/np.pi:.2f},{v_min:.2f},{v_max:.2f}|{semi_angle:.2f}|{radius:.2f}"
     
@@ -208,25 +213,21 @@ def build_second_order_surface(face, tol=1e-2):
         minor_radius = face['scalar'][1]
         attr_str = f"{position[0]:.2f},{position[1]:.2f},{position[2]:.2f}|{direction[0]:.2f},{direction[1]:.2f},{direction[2]:.2f}|{XDirection[0]:.2f},{XDirection[1]:.2f},{XDirection[2]:.2f}"
         attr_str += f"|{u_min/np.pi:.2f},{u_max/np.pi:.2f},{v_min/np.pi:.2f},{v_max/np.pi:.2f}|{major_radius:.2f}|{minor_radius:.2f}"
-        # u_min = u_min % (2 * np.pi)
-        # u_max = u_max % (2 * np.pi)
-
+        
     elif surface_type == 'sphere':
         radius = face['scalar'][0]
-        # u_min = u_min % (2 * np.pi)
-        # u_max = u_max % (2 * np.pi)
-        # v_min = v_min % (np.pi) - np.pi/2
-        # v_max = v_max % (np.pi) - np.pi/2
+
         attr_str = f"{position[0]:.2f},{position[1]:.2f},{position[2]:.2f}|{direction[0]:.2f},{direction[1]:.2f},{direction[2]:.2f}|{XDirection[0]:.2f},{XDirection[1]:.2f},{XDirection[2]:.2f}"
         attr_str += f"|{u_min/np.pi:.2f},{u_max/np.pi:.2f},{v_min/np.pi:.2f},{v_max/np.pi:.2f}|{radius:.2f}"
     else:
         raise ValueError(f"Surface type {surface_type} not supported")
-    # print(type(radius))
+
     occ_position = gp_Pnt(position[0], position[1], position[2])
     occ_direction = gp_Dir(direction[0], direction[1], direction[2])
     occ_XDirection = gp_Dir(XDirection[0], XDirection[1], XDirection[2])
-    # occ_YDirection = gp_Dir(YDirection[0], YDirection[1], YDirection[2])
-    # 2. 创建定义圆柱位置和方向的坐标系
+
+
+
     cylinder_ax3 = gp_Ax3(occ_position, occ_direction, occ_XDirection)
     try:
         if surface_type == 'cylinder':
@@ -247,15 +248,18 @@ def build_second_order_surface(face, tol=1e-2):
     tol_fixer = ShapeFix_ShapeTolerance()
     tol_fixer.SetTolerance(shape, tol)
     if orientation == 'Reversed':
-        #shape = Face(shape).reversed_face().topods_shape()
+
         shape = shape.Reversed()
+
+    if not meshify:
+        return shape, [], [], attr_str
 
     mesher = BRepMesh_IncrementalMesh(shape, 0.1, True, 0.2)
     mesher.Perform() 
     vertices, faces = extract_mesh_from_face(shape)
     vertices = np.array(vertices)
     faces = np.array(faces)
-    # print(vertices.max(axis=0), vertices.min(axis=0))
+
     attr_str = attr_str.replace('|', '\n')
     return shape, vertices, faces, attr_str
 
@@ -458,6 +462,16 @@ def visualize_json_interset(cad_data, plot=True, plot_gui=True,tol=1e-2, ps_head
 
         surface_type = face['type']
         surface_index = face['idx'][0]
+        if len(face['uv']) > 0:
+            for i in range(len(face['uv'])):
+                if type(face['uv'][i]) == np.float32 or type(face['uv'][i]) == np.float64:
+                    face['uv'][i] = face['uv'][i].item()
+
+        if len(face['scalar']) > 0:
+            for i in range(len(face['scalar'])):
+                if type(face['scalar'][i]) == np.float32 or type(face['scalar'][i]) == np.float64:
+                    face['scalar'][i] = face['scalar'][i].item()
+
         if surface_type != 'bspline_surface':
             ic(f"Processing face {surface_index} with type {surface_type}, uv: {face['uv']}, scalar: {face['scalar']}, D: {face['direction'][0]}, X: {face['direction'][1]}...")
         if surface_type == 'plane':

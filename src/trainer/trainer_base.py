@@ -3,7 +3,7 @@ from pathlib import Path
 from functools import partial
 import torch
 from torch.nn import Module
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, Sampler
 from torch.optim.lr_scheduler import LRScheduler
 from contextlib import nullcontext
 import time
@@ -74,6 +74,9 @@ class BaseTrainer(Module):
         collate_fn: Optional[Callable] = None,
         val_every_step: int = 1000,
         val_num_batches: int = 10,
+        val_batch_size: int = 0,
+        train_sampler: Optional[Sampler] = None,
+        num_workers_val: int = 8,
         **kwargs  
     ):
         super().__init__()
@@ -109,20 +112,34 @@ class BaseTrainer(Module):
         self.max_grad_norm = max_grad_norm
 
         self.num_train_steps = num_train_steps
-
+        self.train_sampler = train_sampler
+        prefetch_factor = 1 if num_workers > 0 else None
+        persistent_workers = True if num_workers > 0 else False
         # dataset and dataloader
-
-        self.train_dl = DataLoader(
-            dataset, 
-            batch_size = batch_size, 
-            shuffle=True,
-            # sampler=self.train_sampler,
-            pin_memory = False,  # Disable pin_memory to reduce RAM usage
-            num_workers=min(num_workers, 16),  # Limit workers to prevent memory explosion
-            collate_fn=collate_fn,
-            prefetch_factor=1,  # Reduce prefetch to save memory
-            persistent_workers=False,  # Disable persistent workers to allow cleanup
-        )
+        if train_sampler is not None:
+            self.train_dl = DataLoader(
+                dataset, 
+                batch_size = batch_size, 
+                shuffle=False,
+                sampler=self.train_sampler,
+                pin_memory = True,  # Disable pin_memory to reduce RAM usage
+                num_workers=min(num_workers, 16),  # Limit workers to prevent memory explosion
+                collate_fn=collate_fn,
+                prefetch_factor=prefetch_factor,  # Reduce prefetch to save memory
+                persistent_workers=persistent_workers,  # Disable persistent workers to allow cleanup
+            )
+        else:
+            self.train_dl = DataLoader(
+                dataset, 
+                batch_size = batch_size, 
+                shuffle=True,
+                # sampler=self.train_sampler,
+                pin_memory = True,  # Disable pin_memory to reduce RAM usage
+                num_workers=min(num_workers, 16),  # Limit workers to prevent memory explosion
+                collate_fn=collate_fn,
+                prefetch_factor=prefetch_factor,  # Reduce prefetch to save memory
+                persistent_workers=persistent_workers,  # Disable persistent workers to allow cleanup
+            )
 
         self.train_dl = self.accelerator.prepare(self.train_dl)
         self.train_dl_iter = cycle(self.train_dl)
@@ -133,17 +150,19 @@ class BaseTrainer(Module):
         if self.should_validate and self.is_main:
             self.val_every_step = val_every_step
             # self.val_every_step = 20
+            if val_batch_size == 0:
+                val_batch_size = batch_size
             self.val_num_batches = val_num_batches
             self.val_dl = DataLoader(
                 val_dataset, 
-                batch_size = batch_size, 
+                batch_size = val_batch_size, 
                 shuffle = True,
                 pin_memory = False,  # Disable pin_memory to reduce RAM usage
                 drop_last=True,
-                num_workers=min(num_workers, 4),  # Even fewer workers for validation
+                num_workers=min(num_workers_val, 8),  # Even fewer workers for validation
                 collate_fn=collate_fn,
-                prefetch_factor=1,  # Reduce prefetch to save memory
-                persistent_workers=False,  # Disable persistent workers to allow cleanup
+                prefetch_factor=prefetch_factor,  # Reduce prefetch to save memory
+                persistent_workers=persistent_workers,  # Disable persistent workers to allow cleanup
             )
             # self.val_dl = self.accelerator.prepare(self.val_dl)
             self.val_dl_iter = cycle(self.val_dl)

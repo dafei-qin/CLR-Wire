@@ -1,6 +1,7 @@
 import sys
 import json
 import os
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 from pathlib import Path
 from typing import Dict, Any, Optional
 from types import SimpleNamespace
@@ -9,6 +10,7 @@ import torch
 import numpy as np
 import polyscope as ps
 import polyscope.imgui as psim
+from scipy.spatial.transform import Rotation as R
 
 # Add project root to sys.path
 project_root = Path(__file__).resolve().parents[2]
@@ -62,6 +64,113 @@ def gaps_to_knots(knots_gap_vec: np.ndarray, num_knots: int) -> np.ndarray:
     if knots[-1] > 0:
         knots = knots / knots[-1]
     return knots
+
+
+def apply_scale_to_poles(poles: torch.Tensor, scale_factor: float) -> torch.Tensor:
+    """
+    Apply uniform scaling to poles.
+    
+    Args:
+        poles: Tensor of shape (..., 3) or (..., 4) where last dimension is [x, y, z] or [x, y, z, w]
+        scale_factor: Uniform scale factor
+    
+    Returns:
+        Scaled poles with same shape as input
+    """
+    if not _apply_scale or scale_factor == 1.0:
+        return poles
+    
+    original_shape = poles.shape
+    xyz = poles[..., :3]
+    
+    # Apply uniform scaling
+    xyz_scaled = xyz * scale_factor
+    
+    # If poles have 4 dimensions (with weights), preserve the weight
+    if original_shape[-1] == 4:
+        weights = poles[..., 3:4]
+        poles_scaled = torch.cat([xyz_scaled, weights], dim=-1)
+    else:
+        poles_scaled = xyz_scaled
+    
+    return poles_scaled
+
+
+def apply_rotation_to_poles(poles: torch.Tensor, euler_angles: list) -> torch.Tensor:
+    """
+    Apply rotation to poles based on Euler angles (roll, pitch, yaw in degrees).
+    
+    Args:
+        poles: Tensor of shape (..., 3) or (..., 4) where last dimension is [x, y, z] or [x, y, z, w]
+        euler_angles: [roll, pitch, yaw] in degrees
+    
+    Returns:
+        Rotated poles with same shape as input
+    """
+    if not _apply_rotation or all(angle == 0.0 for angle in euler_angles):
+        return poles
+    
+    # Create rotation matrix from Euler angles (intrinsic rotations: ZYX)
+    rotation = R.from_euler('xyz', euler_angles, degrees=True)
+    rot_matrix = rotation.as_matrix()
+    
+    # Convert to torch tensor
+    rot_matrix_torch = torch.from_numpy(rot_matrix).double().to(poles.device)
+    
+    # Extract xyz coordinates (first 3 dimensions)
+    original_shape = poles.shape
+    xyz = poles[..., :3]
+    
+    # Flatten for matrix multiplication
+    xyz_flat = xyz.reshape(-1, 3)
+    
+    # Apply rotation: (N, 3) @ (3, 3)^T = (N, 3)
+    xyz_rotated = xyz_flat @ rot_matrix_torch.T
+    
+    # Reshape back
+    xyz_rotated = xyz_rotated.reshape(original_shape[:-1] + (3,))
+    
+    # If poles have 4 dimensions (with weights), preserve the weight
+    if original_shape[-1] == 4:
+        weights = poles[..., 3:4]
+        poles_rotated = torch.cat([xyz_rotated, weights], dim=-1)
+    else:
+        poles_rotated = xyz_rotated
+    
+    return poles_rotated
+
+
+def apply_shift_to_poles(poles: torch.Tensor, shift_xyz: list) -> torch.Tensor:
+    """
+    Apply translation (shift) to poles.
+    
+    Args:
+        poles: Tensor of shape (..., 3) or (..., 4) where last dimension is [x, y, z] or [x, y, z, w]
+        shift_xyz: [x, y, z] translation vector
+    
+    Returns:
+        Shifted poles with same shape as input
+    """
+    if not _apply_shift or all(s == 0.0 for s in shift_xyz):
+        return poles
+    
+    original_shape = poles.shape
+    xyz = poles[..., :3]
+    
+    # Create shift tensor
+    shift_tensor = torch.tensor(shift_xyz, dtype=xyz.dtype, device=xyz.device)
+    
+    # Apply translation
+    xyz_shifted = xyz + shift_tensor
+    
+    # If poles have 4 dimensions (with weights), preserve the weight
+    if original_shape[-1] == 4:
+        weights = poles[..., 3:4]
+        poles_shifted = torch.cat([xyz_shifted, weights], dim=-1)
+    else:
+        poles_shifted = xyz_shifted
+    
+    return poles_shifted
 
 
 def build_bspline_json(
@@ -241,6 +350,12 @@ _filter_limits = {
 }
 _ps_initialized = False
 _UNIT_CUBE_NAME = "unit_cube_reference"
+_rotation_euler = [0.0, 0.0, 0.0]  # [roll, pitch, yaw] in degrees
+_apply_rotation = False
+_shift_xyz = [0.0, 0.0, 0.0]  # [x, y, z] translation
+_apply_shift = False
+_scale_factor = 1.0  # uniform scale factor
+_apply_scale = False
 
 
 def build_index_metadata():
@@ -401,7 +516,7 @@ def load_model_and_dataset(
     global _dataset, _model, _max_idx
 
     if dataset_kwargs is not None:
-        _dataset = dataset_bspline(**dataset_kwargs)
+        _dataset = dataset_bspline(**dataset_kwargs, canonical=False)
     else:
         # Legacy behavior using direct path arguments.
         if os.path.isdir(path_file):
@@ -438,6 +553,8 @@ def sample_to_batch_tensors(sample):
     """
     Prepare a batch of size 1 following the preprocessing used in vae_bspline.__main__.
     """
+    global _rotation_euler, _apply_rotation, _shift_xyz, _apply_shift, _scale_factor, _apply_scale
+    
     (
         u_degree,
         v_degree,
@@ -457,6 +574,11 @@ def sample_to_batch_tensors(sample):
 
     if not valid:
         return None
+
+    # Apply transformations to poles in order: Scale → Rotate → Translate
+    poles = apply_scale_to_poles(poles, _scale_factor)
+    poles = apply_rotation_to_poles(poles, _rotation_euler)
+    poles = apply_shift_to_poles(poles, _shift_xyz)
 
     # Batch dim
     u_degree = u_degree.unsqueeze(0).unsqueeze(-1).long()
@@ -978,7 +1100,93 @@ def callback():
     global _current_idx, _current_filtered_idx, _filtered_indices, _max_idx
     global _show_gt, _show_rec, _show_resampled
     global _gt_face, _rec_face, _resampled_surfaces
+    global _rotation_euler, _apply_rotation
+    global _shift_xyz, _apply_shift
+    global _scale_factor, _apply_scale
+    
     psim.Text("BSplineVAE Reconstruction Viewer")
+    psim.Separator()
+
+    # Transformation controls
+    psim.Text("=== Transformation Controls (Test Generalization) ===")
+    transform_changed = False
+    
+    # Scale controls
+    psim.Text("Scale Controls")
+    changed_apply_scale, _apply_scale = psim.Checkbox("Apply Scale", _apply_scale)
+    if changed_apply_scale:
+        transform_changed = True
+    
+    if _apply_scale:
+        changed_scale, new_scale = psim.SliderFloat("Scale Factor", _scale_factor, 0.1, 3.0)
+        if changed_scale:
+            _scale_factor = new_scale
+            transform_changed = True
+        psim.Text(f"Current Scale: {_scale_factor:.3f}")
+        if psim.Button("Reset Scale"):
+            _scale_factor = 1.0
+            transform_changed = True
+    
+    psim.Separator()
+    
+    # Rotation controls
+    psim.Text("Rotation Controls")
+    changed_apply_rot, _apply_rotation = psim.Checkbox("Apply Rotation", _apply_rotation)
+    if changed_apply_rot:
+        transform_changed = True
+    
+    if _apply_rotation:
+        changed_roll, new_roll = psim.SliderFloat("Roll (X-axis, deg)", _rotation_euler[0], -180.0, 180.0)
+        changed_pitch, new_pitch = psim.SliderFloat("Pitch (Y-axis, deg)", _rotation_euler[1], -180.0, 180.0)
+        changed_yaw, new_yaw = psim.SliderFloat("Yaw (Z-axis, deg)", _rotation_euler[2], -180.0, 180.0)
+        
+        if changed_roll or changed_pitch or changed_yaw:
+            _rotation_euler = [new_roll, new_pitch, new_yaw]
+            transform_changed = True
+        
+        psim.Text(f"Current: Roll={_rotation_euler[0]:.1f}°, Pitch={_rotation_euler[1]:.1f}°, Yaw={_rotation_euler[2]:.1f}°")
+        
+        if psim.Button("Reset Rotation"):
+            _rotation_euler = [0.0, 0.0, 0.0]
+            transform_changed = True
+    
+    psim.Separator()
+    
+    # Shift (translation) controls
+    psim.Text("Shift Controls")
+    changed_apply_shift, _apply_shift = psim.Checkbox("Apply Shift", _apply_shift)
+    if changed_apply_shift:
+        transform_changed = True
+    
+    if _apply_shift:
+        changed_x, new_x = psim.SliderFloat("Shift X", _shift_xyz[0], -2.0, 2.0)
+        changed_y, new_y = psim.SliderFloat("Shift Y", _shift_xyz[1], -2.0, 2.0)
+        changed_z, new_z = psim.SliderFloat("Shift Z", _shift_xyz[2], -2.0, 2.0)
+        
+        if changed_x or changed_y or changed_z:
+            _shift_xyz = [new_x, new_y, new_z]
+            transform_changed = True
+        
+        psim.Text(f"Current: X={_shift_xyz[0]:.3f}, Y={_shift_xyz[1]:.3f}, Z={_shift_xyz[2]:.3f}")
+        
+        if psim.Button("Reset Shift"):
+            _shift_xyz = [0.0, 0.0, 0.0]
+            transform_changed = True
+    
+    psim.Separator()
+    
+    # Reset all transformations
+    if psim.Button("Reset All Transformations"):
+        _scale_factor = 1.0
+        _rotation_euler = [0.0, 0.0, 0.0]
+        _shift_xyz = [0.0, 0.0, 0.0]
+        transform_changed = True
+    
+    if transform_changed:
+        reset_scene()
+        if _current_idx >= 0:
+            update_visualization()
+    
     psim.Separator()
 
     filters_changed = render_filter_controls()
@@ -1137,6 +1345,43 @@ if __name__ == "__main__":
         default=None,
         help='Override dataset source (text file of paths or directory containing .npy files).',
     )
+    parser.add_argument(
+        '--rotation',
+        type=float,
+        nargs=3,
+        default=None,
+        metavar=('ROLL', 'PITCH', 'YAW'),
+        help='Initial Euler rotation angles in degrees [roll, pitch, yaw] to test rotation generalization.',
+    )
+    parser.add_argument(
+        '--apply_rotation',
+        action='store_true',
+        help='Apply rotation by default (can be toggled in UI).',
+    )
+    parser.add_argument(
+        '--shift',
+        type=float,
+        nargs=3,
+        default=None,
+        metavar=('X', 'Y', 'Z'),
+        help='Initial translation shift [x, y, z] to test translation generalization.',
+    )
+    parser.add_argument(
+        '--apply_shift',
+        action='store_true',
+        help='Apply shift by default (can be toggled in UI).',
+    )
+    parser.add_argument(
+        '--scale',
+        type=float,
+        default=None,
+        help='Initial uniform scale factor to test scale generalization.',
+    )
+    parser.add_argument(
+        '--apply_scale',
+        action='store_true',
+        help='Apply scale by default (can be toggled in UI).',
+    )
     args = parser.parse_args()
     # if len(sys.argv) != 4:
     #     print("Usage: python src/tests/test_vae_bspline.py <path_file_or_dir> <ckpt_path> <num_surfaces>")
@@ -1236,6 +1481,31 @@ if __name__ == "__main__":
     if not ckpt_path:
         raise ValueError("Checkpoint path must be provided via the config file or --ckpt_path.")
 
+    # Set initial transformations from command line arguments
+    if args.scale is not None:
+        _scale_factor = args.scale
+        print(f"Initial scale set to: {_scale_factor}")
+    
+    if args.apply_scale:
+        _apply_scale = True
+        print("Scale is enabled by default.")
+    
+    if args.rotation is not None:
+        _rotation_euler = list(args.rotation)
+        print(f"Initial rotation set to: Roll={_rotation_euler[0]}°, Pitch={_rotation_euler[1]}°, Yaw={_rotation_euler[2]}°")
+    
+    if args.apply_rotation:
+        _apply_rotation = True
+        print("Rotation is enabled by default.")
+    
+    if args.shift is not None:
+        _shift_xyz = list(args.shift)
+        print(f"Initial shift set to: X={_shift_xyz[0]}, Y={_shift_xyz[1]}, Z={_shift_xyz[2]}")
+    
+    if args.apply_shift:
+        _apply_shift = True
+        print("Shift is enabled by default.")
+    
     load_model_and_dataset(
         dataset_kwargs["path_file"],
         ckpt_path,

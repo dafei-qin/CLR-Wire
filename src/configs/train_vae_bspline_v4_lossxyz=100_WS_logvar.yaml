@@ -1,5 +1,5 @@
 # In this version, we add a loss for the xyz coordinates of the poles
-resume_training: false
+resume_training: true
 from_start: false
 
 epochs: 100
@@ -46,7 +46,7 @@ model:
     max_num_u_poles: 64
     max_num_v_poles: 32
     checkpoint_folder: checkpoints/train_1115_bspline_4_latent128_lossxyz=100_64x32_WS_logvar
-    checkpoint_file_name: model-20.pt
+    checkpoint_file_name: model-07.pt
 
 
 loss:

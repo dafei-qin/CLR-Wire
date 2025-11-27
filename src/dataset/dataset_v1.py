@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.tools.surface_to_canonical_space import to_canonical, from_canonical
 
 
-ic.enable()
+ic.disable()
 def safe_exp(x):
     return np.exp(x).clip(1e-6, 1e6)
 
@@ -59,6 +59,41 @@ SURFACE_PARAM_SCHEMAS = {
         "dims": [3, 3, 3, 8, 1],
         "transforms": [None, None, None, None, np.log]
     },
+}
+
+
+SURFACE_TYPE_MAP = {
+        'plane': 0,
+        'cylinder': 1,
+        'cone': 2,
+        'sphere': 3,
+        'torus': 4,
+        'bspline_surface': 5,
+}
+
+    
+    # Dimension of scalar parameters for each surface type
+SCALAR_DIM_MAP = {
+    'plane': 0,      # no scalar parameters
+    'cylinder': 1,   # [radius]
+    'cone': 2,       # [semi_angle, radius]
+    'sphere': 1,     # [radius]
+    'torus': 2,      # [major_radius, minor_radius]
+    'bspline_surface': -1,  # variable dimension
+}
+SURFACE_TYPE_MAP_INV = {v: k for k, v in SURFACE_TYPE_MAP.items()}
+
+
+
+
+
+type_weights = {
+    'plane': 1.0,
+    'cylinder': 2.0,
+    'cone': 15.0,
+    'sphere': 45.0,
+    'torus': 13.0,
+    'bspline_surface': 1.0,
 }
 
 
@@ -100,27 +135,6 @@ def build_surface_postpreprocess(schema):
         return np.concatenate(parts, axis=-1)
     return fn
 
-
-SURFACE_TYPE_MAP = {
-        'plane': 0,
-        'cylinder': 1,
-        'cone': 2,
-        'sphere': 3,
-        'torus': 4,
-        'bspline_surface': 5,
-}
-
-    
-    # Dimension of scalar parameters for each surface type
-SCALAR_DIM_MAP = {
-    'plane': 0,      # no scalar parameters
-    'cylinder': 1,   # [radius]
-    'cone': 2,       # [semi_angle, radius]
-    'sphere': 1,     # [radius]
-    'torus': 2,      # [major_radius, minor_radius]
-    'bspline_surface': -1,  # variable dimension
-}
-SURFACE_TYPE_MAP_INV = {v: k for k, v in SURFACE_TYPE_MAP.items()}
 
 
 
@@ -272,6 +286,24 @@ def normalize_cone_with_center(P, D, X, u_min, u_max, v_min, v_max, semi_angle, 
     return P, D, X, Y, UV, scalar_params
 
 
+class dataset_compound_cache(Dataset):
+    def __init__(self, cache_path: str):
+        super().__init__()
+        self.cache_path = cache_path
+        self.data = np.load(cache_path)
+        self.params = self.data['params']
+        self.types = self.data['types']
+        self.shifts = self.data['shifts']
+        self.rotations = self.data['rotations']
+        self.scales = self.data['scales']
+        self.replica = 1
+        
+    def __len__(self):
+        return len(self.params)
+    
+    def __getitem__(self, idx):
+        return torch.from_numpy(self.params[idx]), torch.from_numpy(np.array(self.types[idx])), 1, torch.from_numpy(self.shifts[idx]), torch.from_numpy(self.rotations[idx]), torch.from_numpy(np.array(self.scales[idx]))
+    
 class dataset_compound(Dataset):
     """
     Dataset for loading surface data from JSON files in a directory.
@@ -310,7 +342,7 @@ class dataset_compound(Dataset):
         ])
         
         if not self.json_names:
-            raise ValueError(f"No JSON files found in {json_dir}")
+            print(f"No JSON files found in {json_dir}")
         
         # Calculate maximum parameter dimension for padding
         # P(3) + D(3) + UV(4) + scalar(max_dim)
@@ -334,6 +366,75 @@ class dataset_compound(Dataset):
     def __len__(self):
         """Return number of JSON files in the dataset."""
         return len(self.json_names)
+    
+    def get_valid_param_length(self, surface_type_idx):
+        """
+        Get the valid parameter length for a given surface type.
+        
+        Args:
+            surface_type_idx: Integer or array of integers representing surface type indices
+                             (0=plane, 1=cylinder, 2=cone, 3=sphere, 4=torus)
+        
+        Returns:
+            Integer or array of integers representing the valid parameter length for each type
+        """
+        # Map from surface type index to valid parameter length
+        # base_dim (17) + scalar_dim
+        type_to_length = {
+            0: 17,  # plane: base_dim + 0
+            1: 18,  # cylinder: base_dim + 1
+            2: 19,  # cone: base_dim + 2
+            3: 18,  # sphere: base_dim + 1
+            4: 19,  # torus: base_dim + 2
+        }
+        
+        # Handle both single value and array inputs
+        if isinstance(surface_type_idx, (np.ndarray, torch.Tensor)):
+            if isinstance(surface_type_idx, torch.Tensor):
+                surface_type_idx = surface_type_idx.cpu().numpy()
+            return np.array([type_to_length.get(int(t), 0) for t in surface_type_idx])
+        else:
+            return type_to_length.get(int(surface_type_idx), 0)
+    
+    def get_valid_param_mask(self, surface_type_idx, return_tensor=False):
+        """
+        Get a boolean mask indicating valid parameter positions for given surface type(s).
+        
+        Args:
+            surface_type_idx: Integer, numpy array, or torch tensor of surface type indices
+                             Shape can be (,) for single type or (N,) for batch
+            return_tensor: If True, return torch.Tensor; otherwise return numpy array
+        
+        Returns:
+            Boolean mask of shape (max_param_dim,) or (N, max_param_dim)
+            True indicates valid parameter positions, False indicates padding
+        """
+        is_batch = isinstance(surface_type_idx, (np.ndarray, torch.Tensor))
+        
+        if isinstance(surface_type_idx, torch.Tensor):
+            surface_type_idx_np = surface_type_idx.cpu().numpy()
+        elif isinstance(surface_type_idx, np.ndarray):
+            surface_type_idx_np = surface_type_idx
+        else:
+            surface_type_idx_np = np.array([surface_type_idx])
+            is_batch = False
+        
+        # Get valid lengths for all types
+        valid_lengths = self.get_valid_param_length(surface_type_idx_np)
+        
+        # Create mask
+        if is_batch:
+            batch_size = len(surface_type_idx_np)
+            mask = np.zeros((batch_size, self.max_param_dim), dtype=bool)
+            for i, length in enumerate(valid_lengths):
+                mask[i, :length] = True
+        else:
+            mask = np.zeros(self.max_param_dim, dtype=bool)
+            mask[:valid_lengths] = True
+        
+        if return_tensor:
+            return torch.from_numpy(mask)
+        return mask
     
     def _parse_surface(self, surface_dict: Dict) -> Tuple[np.ndarray, int]:
         """
@@ -442,13 +543,13 @@ class dataset_compound(Dataset):
             radius = max(r_min, r_min_thresh)
 
             # 1. guarantee u_min is positive
-            if u_min < 0:
+            if u_min < 0 - 1e-4:
                 
                 k = (u_min // (2 * np.pi) )
                 u_min -= k * 2 * np.pi
                 u_max -= k * 2 * np.pi
             # 2. guarantee u_diff < 2 * np.pi
-            if u_max - u_min > 2 * np.pi:
+            if u_max - u_min > 2 * np.pi + 1e-4:
                 u_max -= (u_max - u_min) // (2 * np.pi) * 2 * np.pi
 
             
@@ -490,14 +591,6 @@ class dataset_compound(Dataset):
             v_center = 0.5 * (v_min + v_max)
             u_diff = u_max - u_min
             v_diff = v_max - v_min
-            # while u_diff > 2 * np.pi:
-            #     u_diff -= 2 * np.pi
-            # if u_diff > 2 * np.pi + 1e-4:
-            #     u_diff -= u_diff // (2 * np.pi) * 2 * np.pi
-            # while v_diff > np.pi:
-            #     v_diff -= np.pi
-            # if v_diff > np.pi:
-            #     v_diff -= v_diff // np.pi * np.pi
             u_half = 0.5 * (u_diff)
             v_half = 0.5 * (v_diff)
             u_center, v_center = canonicalize_vc_uc(u_center, v_center)
@@ -531,10 +624,10 @@ class dataset_compound(Dataset):
 
             # 3. guarantee v_min is positive
             if v_min < 0 - 1e-6:
-                k = (v_min // (np.pi))
-                v_min -= k * np.pi
-                v_max -= k * np.pi
-                ic('v_min < 0, add ', k, 'times pi', 'now v_min: ', v_min, 'v_max: ', v_max)
+                k = (v_min // (2 * np.pi))
+                v_min -= k * 2 * np.pi
+                v_max -= k * 2 *np.pi
+                ic('v_min < 0, add ', k, 'times 2pi', 'now v_min: ', v_min, 'v_max: ', v_max)
             # 4. guarantee v_diff < 2 * np.pi
             if v_max - v_min > 2 * np.pi + 1e-4:
                 v_max -= ((v_max - v_min) // (2 * np.pi) - 1) * 2 * np.pi
@@ -743,16 +836,14 @@ class dataset_compound(Dataset):
                 f.write(json_path + '\n')
             return torch.from_numpy(all_params).float(), torch.from_numpy(all_types).long(), torch.from_numpy(mask).float(), torch.from_numpy(all_shifts).float(), torch.from_numpy(all_rotations).float(), torch.from_numpy(all_scales).float()
         
-        # Here we load the .npz which stores the bspline approximation and the points data. 
-        # npz_data = np.load(json_path.replace('.json', '.npz'))
-
         # When the params are larger than 10, instead of dropping them we use the approx bspline instead.
         # Parse each surface
         for i, surface_dict in enumerate(surfaces_data):
             # print(i)
             if i >= self.max_num_surfaces:
                 break
-            
+            if i == 35:
+                print()
             try:
                 # Catch RuntimeWarnings (overflow, invalid value) and convert to exceptions
                 with warnings.catch_warnings():
@@ -846,14 +937,8 @@ if __name__ == '__main__':
     from tqdm import tqdm
     import time
     dataset = dataset_compound(sys.argv[1], canonical=True)
+    
+
+    
     for i in tqdm(range(len(dataset))):
         _ = dataset[i]
-        # t = time.time()
-        # try:
-        #     params_tensor, types_tensor, mask_tensor, all_shifts, all_rotations, all_scales = dataset[i]
-        # except Exception as e:
-        #     print(f"Error: {e}")
-        #     print(i)
-        #     print(dataset.json_names[i])
-        #     continue
-        # print(f"Time taken: {time.time() - t} seconds")

@@ -327,19 +327,13 @@ class ZLDMPipeline:
         return timesteps, num_inference_steps - t_start
 
     @torch.no_grad()
-    def __call__(self, pc=None, cfg=7.5, num_inference_steps=50, generator: torch.Generator = None, num_latents=512, num_samples=1, sample=None, sample_mask=None,\
-                  tgt_key_padding_mask=None, show_progress=True, device='cpu',
+    def __call__(self, noise, pc=None,  num_inference_steps=50, generator: torch.Generator = None, sample=None, show_progress=True
                 ):
         # device = self.Z.device
         # device = self.denoiser.device
+        device = noise.device
         if pc is not None:
             pc = pc.to(device)
-        if tgt_key_padding_mask is not None:
-            tgt_key_padding_mask = tgt_key_padding_mask.to(device)
-
-
-        B = pc.shape[0]
-
 
         # set step values
 
@@ -347,25 +341,16 @@ class ZLDMPipeline:
         timesteps = self.scheduler.timesteps
 
 
-
-
-        noise = torch.randn(num_samples, 16, num_latents, dtype=self.dtype, device=device, generator=generator)
-
         if sample is not None:
 
             timesteps, num_inference_steps = self.get_timesteps(num_inference_steps)
             t_start = timesteps[0]
             
             sample_noisy = self.scheduler.add_noise(sample, noise, torch.tensor(t_start).to(sample.device))
-            # Here we handle partial noising 
-            if sample_mask is not None:
-                sample_noisy = sample_noisy * (1 - sample_mask) + sample * sample_mask
             sample = sample_noisy
         else:
             sample = noise
 
-        # if gs_gt is not None:
-        #     gs_gt = gs_gt.to(device).float()
         for t in tqdm.tqdm(timesteps, "[ ZLDMPipeline.__call__ ]", disable=not show_progress):
             # 1. predict noise model_output
             if isinstance(t, torch.Tensor):
@@ -373,19 +358,12 @@ class ZLDMPipeline:
 
             t_tensor = torch.tensor([t], dtype=torch.long, device=device)
 
-
             get_input = sample
 
-            
-         
-
-            
-
             model_output_uncond = self.denoiser(
-                get_input,
-                t_tensor.expand(num_samples),
-                pc,
-                tgt_key_padding_mask=tgt_key_padding_mask,
+                sample=get_input,
+                timestep=t_tensor.expand(sample.shape[0]),
+                cond=pc,
             )
 
 
@@ -393,7 +371,6 @@ class ZLDMPipeline:
 
             # 2. compute previous image: x_t -> x_t-1
             
-
             sample = self.scheduler.step(
                 model_output[:, None, :, :].permute(0, 3, 1, 2),
                 t,
@@ -428,11 +405,11 @@ def enforce_zero_terminal_snr(betas):
     return betas
 
 
-def get_new_scheduler(type='v_prediction'):
+def get_new_scheduler(type='v_prediction', num_train_timesteps=1000):
     if type == 'v_prediction':
         print("Using v_prediction scheduler")
         scheduler = DDPMScheduler(
-            num_train_timesteps=1000,
+            num_train_timesteps=num_train_timesteps,
             # beta_start=0.00085,
             # beta_end=0.012,
             # beta_schedule="scaled_linear",
@@ -444,7 +421,7 @@ def get_new_scheduler(type='v_prediction'):
         betas = (scheduler.betas)
 
         scheduler = DDPMScheduler(
-            num_train_timesteps=1000,
+            num_train_timesteps=num_train_timesteps,
             trained_betas=betas,
             clip_sample=False,
             prediction_type="v_prediction",
@@ -453,7 +430,7 @@ def get_new_scheduler(type='v_prediction'):
     elif type == 'sample':
         print("Using sample scheduler")
         scheduler = DDPMScheduler(
-            num_train_timesteps=1000, 
+            num_train_timesteps=num_train_timesteps, 
             prediction_type="sample"
         )
     else:

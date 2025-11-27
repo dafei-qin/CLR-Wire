@@ -1,13 +1,18 @@
 import os
 import sys
+import numpy as np
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from argparse import ArgumentParser
+from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 
 from src.vae.vae_v1 import SurfaceVAE 
-from src.dataset.dataset_v1 import V1, V1_random, dataset_compound
+from src.dataset.dataset_v1 import  dataset_compound, dataset_compound_cache
 from src.trainer.trainer_vae_v1 import Trainer_vae_v1 
 from src.utils.config import NestedDictToClass, load_config
+
+from icecream import ic
+ic.disable()
 
 program_parser = ArgumentParser(description='Train vae_v1 model.')
 program_parser.add_argument('--config', type=str, default='', help='Path to config file.')
@@ -29,7 +34,23 @@ if transform is None:
     transform = None
 
 
-train_dataset = dataset_compound(json_dir=args.data.train_json_dir, max_num_surfaces=args.data.max_num_surfaces, canonical=args.data.canonical)
+if args.data.use_weighted_sampling:
+    print('use weighted sampling')
+    assert args.data.use_cache == True
+    weight_list = np.load(args.data.weight_path)
+    train_sampler = WeightedRandomSampler(
+        weights=weight_list,
+        num_samples=len(weight_list),   # 每 epoch 采样次数
+        replacement=True                   # 必须为 True 才能根据 weight 抽样
+    )
+else:
+    train_sampler = None
+if args.data.use_cache:
+    print('load cache from ', args.data.cache_path)
+    assert args.data.cache_path != ''
+    train_dataset = dataset_compound_cache(cache_path=args.data.cache_path)
+else:
+    train_dataset = dataset_compound(json_dir=args.data.train_json_dir, max_num_surfaces=args.data.max_num_surfaces, canonical=args.data.canonical)
 
 val_dataset = dataset_compound(json_dir=args.data.val_json_dir, max_num_surfaces=args.data.max_num_surfaces, canonical=args.data.canonical)
 
@@ -74,6 +95,9 @@ trainer = Trainer_vae_v1(
     from_start=args.from_start,
     checkpoint_file_name=args.model.checkpoint_file_name,
     val_every_step=int(args.val_every_epoch * num_step_per_epoch),
+    use_logvar=args.trainer.use_logvar,
+    num_workers_val=args.num_workers_val,
+    train_sampler=train_sampler
 )
 
 if args.resume_training and cli_args.resume_lr is not None:
