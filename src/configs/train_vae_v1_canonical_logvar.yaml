@@ -1,7 +1,7 @@
-resume_training: false
+resume_training: true
 from_start: false
 
-epochs: 100
+epochs: 200
 batch_size: 41960
 lr: 0.0005
 num_workers: 0
@@ -45,7 +45,7 @@ model:
     # surface_enc_block_out_channels: [16, 32, 64, 128]
     param_raw_dim: [17, 18, 19, 18, 19]
     checkpoint_folder: checkpoints/train_1126_vae_1_canonical_var
-    checkpoint_file_name: model.pt 0
+    checkpoint_file_name: model-05.pt
 
 loss:
     recon_weight: 1.0
