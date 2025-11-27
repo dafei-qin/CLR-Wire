@@ -192,7 +192,11 @@ class Trainer_vae_bspline(BaseTrainer):
         self.print(get_current_time() + f' loss: {total_loss:.3f}  lr: {lr:.6f} norm: {total_norm:.3f} kl_beta: {kl_beta:.3f} step: {step} t: {time_per_step:.2f}s')
 
     def train(self):
+
         step = self.step.item()
+        if self.enable_profiler:
+            self.start_profiler()
+
 
         while step < self.num_train_steps:
             t = time.time()
@@ -367,6 +371,9 @@ class Trainer_vae_bspline(BaseTrainer):
             step += 1
             self.step.add_(1)
             
+            self.profiler_step()
+
+
             self.wait()
             
             if self.is_main:
@@ -555,5 +562,7 @@ class Trainer_vae_bspline(BaseTrainer):
                 milestone = str(checkpoint_num).zfill(2)
                 self.save(milestone)
                 self.print(get_current_time() + f' checkpoint saved at {self.checkpoint_folder / f"model-{milestone}.pt"}')
+
+        self.stop_profiler()
 
         self.print('VAE Bspline training complete') 

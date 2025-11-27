@@ -105,122 +105,6 @@ class TrainerFlowSurface(BaseTrainer):
         self.weight_valid = weight_valid
         self.weight_params = weight_params
 
-    # def create_surface_visualization_bs(self, gt_samples, cross_attention_recon, bspline_recon, control_points, step):
-    #     """Create comprehensive visualization for B-spline enhanced surface VAE"""
-    #     # gt_samples and reconstructions should be (batch, channels, height, width)
-    #     # Convert to (batch, height, width, channels) for plotting
-    #     if gt_samples.dim() == 4 and gt_samples.shape[1] == 3:  # (B, 3, H, W)
-    #         gt_samples = rearrange(gt_samples, 'b c h w -> b h w c')
-    #         # cross_attention_recon = rearrange(cross_attention_recon, 'b c h w -> b h w c')
-    #         bspline_recon = rearrange(bspline_recon, 'b c h w -> b h w c')
-        
-    #     batch_size = min(self.num_visual_samples, gt_samples.shape[0])
-        
-    #     # Fixed axis limits for consistent scaling across all plots
-    #     axis_limit = 1.5  # Slightly larger than the normalized range [-1, 1]
-        
-    #     fig = plt.figure(figsize=(6*batch_size, 24))  # Increased height for 4 rows
-        
-    #     for i in range(batch_size):
-    #         gt_surface = gt_samples[i].cpu().numpy()  # (H, W, 3)
-    #         # ca_surface = cross_attention_recon[i].cpu().numpy()  # (H, W, 3)
-    #         bs_surface = bspline_recon[i].cpu().numpy()  # (H, W, 3)
-    #         control_pts = control_points[i].cpu().numpy()  # (16, 3)
-            
-    #         # Extract coordinates
-    #         X_gt, Y_gt, Z_gt = gt_surface[:, :, 0], gt_surface[:, :, 1], gt_surface[:, :, 2]
-    #         # X_ca, Y_ca, Z_ca = ca_surface[:, :, 0], ca_surface[:, :, 1], ca_surface[:, :, 2]
-    #         X_bs, Y_bs, Z_bs = bs_surface[:, :, 0], bs_surface[:, :, 1], bs_surface[:, :, 2]
-            
-    #         # Row 1: Ground Truth
-    #         ax_gt = fig.add_subplot(4, batch_size, i+1, projection='3d')
-    #         ax_gt.plot_surface(X_gt, Y_gt, Z_gt, 
-    #                          facecolors=plt.cm.viridis((Z_gt - Z_gt.min()) / 
-    #                                                   (Z_gt.max() - Z_gt.min() + 1e-8)),
-    #                          alpha=0.8)
-    #         ax_gt.set_title(f'Ground Truth {i+1}')
-    #         ax_gt.set_xlabel('X')
-    #         ax_gt.set_ylabel('Y')
-    #         ax_gt.set_zlabel('Z')
-    #         ax_gt.set_xlim([-axis_limit, axis_limit])
-    #         ax_gt.set_ylim([-axis_limit, axis_limit])
-    #         ax_gt.set_zlim([-axis_limit, axis_limit])
-            
-    #         # # Row 2: Cross-Attention Reconstruction
-    #         # ax_ca = fig.add_subplot(4, batch_size, batch_size+i+1, projection='3d')
-    #         # ax_ca.plot_surface(X_ca, Y_ca, Z_ca,
-    #         #                  facecolors=plt.cm.plasma((Z_ca - Z_ca.min()) / 
-    #         #                                          (Z_ca.max() - Z_ca.min() + 1e-8)),
-    #         #                  alpha=0.8)
-    #         # ax_ca.set_title(f'Cross-Attention Recon {i+1}')
-    #         # ax_ca.set_xlabel('X')
-    #         # ax_ca.set_ylabel('Y')
-    #         # ax_ca.set_zlabel('Z')
-    #         # ax_ca.set_xlim([-axis_limit, axis_limit])
-    #         # ax_ca.set_ylim([-axis_limit, axis_limit])
-    #         # ax_ca.set_zlim([-axis_limit, axis_limit])
-            
-    #         # # Row 3: B-spline Reconstruction
-    #         ax_bs = fig.add_subplot(4, batch_size, batch_size+i+1, projection='3d')
-    #         ax_bs.plot_surface(X_bs, Y_bs, Z_bs,
-    #                          facecolors=plt.cm.coolwarm((Z_bs - Z_bs.min()) / 
-    #                                                    (Z_bs.max() - Z_bs.min() + 1e-8)),
-    #                          alpha=0.8)
-    #         ax_bs.set_title(f'B-spline Recon {i+1}')
-    #         ax_bs.set_xlabel('X')
-    #         ax_bs.set_ylabel('Y')
-    #         ax_bs.set_zlabel('Z')
-    #         ax_bs.set_xlim([-axis_limit, axis_limit])
-    #         ax_bs.set_ylim([-axis_limit, axis_limit])
-    #         ax_bs.set_zlim([-axis_limit, axis_limit])
-            
-    #         # Row 4: B-spline Surface with Control Points
-    #         ax_ctrl = fig.add_subplot(4, batch_size, 2*batch_size+i+1, projection='3d')
-    #         # Plot the B-spline surface with transparency
-    #         ax_ctrl.plot_surface(X_bs, Y_bs, Z_bs,
-    #                            facecolors=plt.cm.coolwarm((Z_bs - Z_bs.min()) / 
-    #                                                      (Z_bs.max() - Z_bs.min() + 1e-8)),
-    #                            alpha=0.6)
-            
-    #         # Plot control points
-    #         ax_ctrl.scatter(control_pts[:, 0], control_pts[:, 1], control_pts[:, 2], 
-    #                       c='red', s=100, alpha=1.0, label='Control Points')
-            
-    #         # Connect control points in a grid pattern (4x4 grid)
-    #         control_grid = control_pts.reshape(4, 4, 3)
-            
-    #         # Draw grid lines for control points
-    #         for row in range(4):
-    #             for col in range(4):
-    #                 # Horizontal connections
-    #                 if col < 3:
-    #                     ax_ctrl.plot([control_grid[row, col, 0], control_grid[row, col+1, 0]],
-    #                                [control_grid[row, col, 1], control_grid[row, col+1, 1]],
-    #                                [control_grid[row, col, 2], control_grid[row, col+1, 2]], 
-    #                                'r--', alpha=0.7, linewidth=1)
-    #                 # Vertical connections
-    #                 if row < 3:
-    #                     ax_ctrl.plot([control_grid[row, col, 0], control_grid[row+1, col, 0]],
-    #                                [control_grid[row, col, 1], control_grid[row+1, col, 1]],
-    #                                [control_grid[row, col, 2], control_grid[row+1, col, 2]], 
-    #                                'r--', alpha=0.7, linewidth=1)
-            
-    #         ax_ctrl.set_title(f'B-spline + Control Points {i+1}')
-    #         ax_ctrl.set_xlabel('X')
-    #         ax_ctrl.set_ylabel('Y')
-    #         ax_ctrl.set_zlabel('Z')
-    #         ax_ctrl.set_xlim([-axis_limit, axis_limit])
-    #         ax_ctrl.set_ylim([-axis_limit, axis_limit])
-    #         ax_ctrl.set_zlim([-axis_limit, axis_limit])
-    #         ax_ctrl.legend()
-        
-    #     plt.tight_layout()
-    #     plt.suptitle(f'B-spline Surface VAE - Step {step}', y=1.02)
-        
-    #     return fig
-    
-    
-                    
     
     def log_loss(self, total_loss, lr, total_norm, step, loss_dict={}):
         """Enhanced loss logging for B-spline model"""
@@ -264,6 +148,9 @@ class TrainerFlowSurface(BaseTrainer):
     def train(self):
         """Enhanced train method with B-spline specific handling"""
         step = self.step.item()
+        
+        # Start profiler if enabled
+        self.start_profiler()
 
         while step < self.num_train_steps:
             # print(self.visual_eval_every_step)
@@ -323,6 +210,9 @@ class TrainerFlowSurface(BaseTrainer):
             step += 1
             self.step.add_(1)
             
+            # Notify profiler of step completion
+            self.profiler_step()
+            
             self.wait()
             
             if self.is_main:
@@ -370,7 +260,7 @@ class TrainerFlowSurface(BaseTrainer):
 
 
                 # Print validation losses
-                self.print(get_current_time() + f" valid loss: {total_val_loss:.3f}, loss_valid: {loss_dict['loss_valid']:.3f}, loss_shifts: {loss_dict['loss_shifts']:.3f}, loss_rotations: {loss_dict['loss_rotations']:.3f}, loss_scales: {loss_dict['loss_scales']:.3f}, loss_params: {loss_dict['loss_params']:.3f}")
+                self.print(get_current_time() + f" total loss: {total_val_loss:.3f}, loss_valid: {loss_dict['val_loss_valid']:.3f}, loss_shifts: {loss_dict['val_loss_valid']:.3f}, loss_rotations: {loss_dict['val_loss_valid']:.3f}, loss_scales: {loss_dict['val_loss_valid']:.3f}, loss_params: {loss_dict['val_loss_valid']:.3f}")
 
                 
                 # Calculate and print estimated finishing time
@@ -392,5 +282,8 @@ class TrainerFlowSurface(BaseTrainer):
                 milestone = str(checkpoint_num).zfill(2)
                 self.save(milestone)
                 self.print(get_current_time() + f' checkpoint saved at {self.checkpoint_folder / f"model-{milestone}.pt"}')
+        
+        # Stop profiler if enabled
+        self.stop_profiler()
 
         self.print('DIT Simple Surface Training complete') 

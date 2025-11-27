@@ -33,6 +33,13 @@ from src.utils.torch_tools import fmt
 
 from src.optimizer.optimizer_scheduler import OptimizerWithScheduler
 
+# Import profiler
+try:
+    from torch.profiler import profile, ProfilerActivity, schedule, tensorboard_trace_handler
+    PROFILER_AVAILABLE = True
+except ImportError:
+    PROFILER_AVAILABLE = False
+
 DEFAULT_DDP_KWARGS = DistributedDataParallelKwargs(
     find_unused_parameters = False
 )
@@ -77,6 +84,20 @@ class BaseTrainer(Module):
         val_batch_size: int = 0,
         train_sampler: Optional[Sampler] = None,
         num_workers_val: int = 8,
+        # Profiler parameters
+        enable_profiler: bool = False,
+        profiler_output_dir: str = './profiler_logs',
+        profiler_wait_steps: int = 5,
+        profiler_warmup_steps: int = 2,
+        profiler_active_steps: int = 5,
+        profiler_repeat: int = 1,
+        profiler_record_shapes: bool = True,
+        profiler_profile_memory: bool = True,
+        profiler_with_stack: bool = False,
+        profiler_with_flops: bool = False,
+        profiler_export_chrome_trace: bool = True,  # Export to Chrome Trace (JSON)
+        profiler_export_stacks: bool = False,  # Export stack traces
+        profiler_use_wandb: bool = False,  # Upload profiler data to WandB
         **kwargs  
     ):
         super().__init__()
@@ -217,6 +238,82 @@ class BaseTrainer(Module):
         if resume_training:
             print("loading checkpoint from the file: ", checkpoint_file_name)
             self.load(checkpoint_file_name, from_start=from_start)
+        
+        # Initialize profiler
+        self.enable_profiler = enable_profiler and PROFILER_AVAILABLE
+        self.profiler = None
+        self.profiler_output_dir = Path(profiler_output_dir)
+        self.profiler_export_chrome_trace = profiler_export_chrome_trace
+        self.profiler_export_stacks = profiler_export_stacks
+        self.profiler_use_wandb = profiler_use_wandb and use_wandb_tracking
+        
+        if self.enable_profiler:
+            if not PROFILER_AVAILABLE:
+                self.print("Warning: torch.profiler is not available. Profiling disabled.")
+            elif not self.is_main:
+                self.print("Profiler enabled but not on main process. Skipping profiler initialization.")
+            else:
+                self.profiler_output_dir.mkdir(exist_ok=True, parents=True)
+                
+                # Configure profiler activities
+                activities = [ProfilerActivity.CPU]
+                if torch.cuda.is_available():
+                    activities.append(ProfilerActivity.CUDA)
+                
+                # Create profiler schedule
+                profiler_schedule = schedule(
+                    wait=profiler_wait_steps,
+                    warmup=profiler_warmup_steps,
+                    active=profiler_active_steps,
+                    repeat=profiler_repeat
+                )
+                
+                # Create custom trace handler
+                def custom_trace_handler(prof):
+                    # 1. TensorBoard format (always export)
+                    tb_handler = tensorboard_trace_handler(str(self.profiler_output_dir))
+                    tb_handler(prof)
+                    
+                    # 2. Chrome Trace format (JSON - can view in chrome://tracing)
+                    if self.profiler_export_chrome_trace:
+                        chrome_trace_file = self.profiler_output_dir / f"chrome_trace_step_{prof.step_num}.json"
+                        prof.export_chrome_trace(str(chrome_trace_file))
+                        self.print(f"Chrome trace saved to: {chrome_trace_file}")
+                        self.print(f"View in Chrome: Open chrome://tracing and load the JSON file")
+                    
+                    # 3. Export stack traces
+                    if self.profiler_export_stacks and profiler_with_stack:
+                        stacks_file = self.profiler_output_dir / f"stacks_step_{prof.step_num}.txt"
+                        prof.export_stacks(str(stacks_file))
+                        self.print(f"Stack traces saved to: {stacks_file}")
+                    
+                    # 4. Generate HTML report
+                    self._generate_html_report(prof, prof.step_num)
+                    
+                    # 5. Upload to WandB
+                    if self.profiler_use_wandb and self.use_wandb_tracking:
+                        self._upload_profiler_to_wandb(prof, prof.step_num)
+                
+                # Initialize profiler
+                self.profiler = profile(
+                    activities=activities,
+                    schedule=profiler_schedule,
+                    on_trace_ready=custom_trace_handler,
+                    record_shapes=profiler_record_shapes,
+                    profile_memory=profiler_profile_memory,
+                    with_stack=profiler_with_stack,
+                    with_flops=profiler_with_flops,
+                )
+                
+                self.print(f"Profiler initialized. Output directory: {self.profiler_output_dir}")
+                self.print(f"Profiler schedule: wait={profiler_wait_steps}, warmup={profiler_warmup_steps}, "
+                          f"active={profiler_active_steps}, repeat={profiler_repeat}")
+                self.print(f"Export formats: TensorBoard=True, ChromeTrace={profiler_export_chrome_trace}, "
+                          f"Stacks={profiler_export_stacks}, WandB={self.profiler_use_wandb}")
+                if profiler_export_chrome_trace:
+                    self.print("Chrome Trace: View JSON files in chrome://tracing (no dependencies needed!)")
+                self.print("TensorBoard: Use 'tensorboard --logdir={} --port=6006'".format(
+                    self.profiler_output_dir))
 
     def log(self, **data_kwargs):
         self.accelerator.log(data_kwargs, step = self.step.item())
@@ -249,6 +346,308 @@ class BaseTrainer(Module):
 
     def print(self, msg):
         return self.accelerator.print(msg)
+    
+    def start_profiler(self):
+        """Start the profiler if enabled"""
+        if self.profiler is not None:
+            self.profiler.__enter__()
+            self.print("Profiler started")
+    
+    def stop_profiler(self):
+        """Stop the profiler if enabled"""
+        if self.profiler is not None:
+            self.profiler.__exit__(None, None, None)
+            self.print("Profiler stopped")
+    
+    def profiler_step(self):
+        """Notify profiler that a step has completed"""
+        if self.profiler is not None:
+            self.profiler.step()
+    
+    def _generate_html_report(self, prof, step_num):
+        """Generate an HTML report from profiler data"""
+        try:
+            import html
+            
+            html_file = self.profiler_output_dir / f"profiler_report_step_{step_num}.html"
+            
+            # Get profiler statistics
+            key_averages = prof.key_averages()
+            
+            # Sort by CUDA time (or CPU time if no CUDA)
+            if torch.cuda.is_available():
+                sorted_stats = sorted(key_averages, key=lambda x: x.cuda_time_total, reverse=True)
+            else:
+                sorted_stats = sorted(key_averages, key=lambda x: x.cpu_time_total, reverse=True)
+            
+            # Generate HTML content
+            html_content = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>PyTorch Profiler Report - Step {step_num}</title>
+    <style>
+        body {{
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }}
+        .container {{
+            max-width: 1400px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }}
+        h1 {{
+            color: #2c3e50;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 10px;
+        }}
+        h2 {{
+            color: #34495e;
+            margin-top: 30px;
+        }}
+        .summary {{
+            background-color: #ecf0f1;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }}
+        .summary-item {{
+            display: inline-block;
+            margin: 10px 20px 10px 0;
+        }}
+        .summary-label {{
+            font-weight: bold;
+            color: #2c3e50;
+        }}
+        .summary-value {{
+            color: #3498db;
+            font-size: 1.2em;
+        }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+            font-size: 14px;
+        }}
+        th {{
+            background-color: #3498db;
+            color: white;
+            padding: 12px;
+            text-align: left;
+            position: sticky;
+            top: 0;
+        }}
+        td {{
+            padding: 10px;
+            border-bottom: 1px solid #ddd;
+        }}
+        tr:hover {{
+            background-color: #f5f5f5;
+        }}
+        .metric {{
+            text-align: right;
+            font-family: 'Courier New', monospace;
+        }}
+        .op-name {{
+            max-width: 400px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }}
+        .note {{
+            background-color: #fff3cd;
+            padding: 10px;
+            border-left: 4px solid #ffc107;
+            margin: 20px 0;
+        }}
+        .chrome-trace-link {{
+            display: inline-block;
+            background-color: #27ae60;
+            color: white;
+            padding: 10px 20px;
+            text-decoration: none;
+            border-radius: 5px;
+            margin: 10px 0;
+        }}
+        .chrome-trace-link:hover {{
+            background-color: #229954;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔥 PyTorch Profiler Report</h1>
+        <p><strong>Step:</strong> {step_num} | <strong>Generated:</strong> {time.strftime('%Y-%m-%d %H:%M:%S')}</p>
+        
+        <div class="note">
+            <strong>💡 Tip:</strong> For interactive visualization, load the corresponding JSON file in <code>chrome://tracing</code>
+        </div>
+        
+        <div class="summary">
+            <h2>📊 Summary</h2>
+"""
+            
+            # Calculate summary statistics
+            total_cpu_time = sum(item.cpu_time_total for item in key_averages) / 1000  # Convert to ms
+            if torch.cuda.is_available():
+                total_cuda_time = sum(item.cuda_time_total for item in key_averages) / 1000
+                html_content += f"""
+            <div class="summary-item">
+                <span class="summary-label">Total CUDA Time:</span>
+                <span class="summary-value">{total_cuda_time:.2f} ms</span>
+            </div>
+"""
+            
+            html_content += f"""
+            <div class="summary-item">
+                <span class="summary-label">Total CPU Time:</span>
+                <span class="summary-value">{total_cpu_time:.2f} ms</span>
+            </div>
+            <div class="summary-item">
+                <span class="summary-label">Number of Operations:</span>
+                <span class="summary-value">{len(key_averages)}</span>
+            </div>
+        </div>
+        
+        <h2>⚡ Top Operations by Time</h2>
+        <p>Showing top operations sorted by {'CUDA' if torch.cuda.is_available() else 'CPU'} time</p>
+        
+        <table>
+            <thead>
+                <tr>
+                    <th>Rank</th>
+                    <th>Operation</th>
+                    <th>Calls</th>
+                    <th>CPU Time (ms)</th>
+                    <th>CPU Time %</th>
+"""
+            
+            if torch.cuda.is_available():
+                html_content += """
+                    <th>CUDA Time (ms)</th>
+                    <th>CUDA Time %</th>
+"""
+            
+            html_content += """
+                </tr>
+            </thead>
+            <tbody>
+"""
+            
+            # Add top operations (limit to top 100)
+            for rank, item in enumerate(sorted_stats[:100], 1):
+                cpu_time = item.cpu_time_total / 1000  # Convert to ms
+                cpu_time_pct = (item.cpu_time_total / (total_cpu_time * 1000)) * 100 if total_cpu_time > 0 else 0
+                
+                op_name = html.escape(item.key)
+                
+                html_content += f"""
+                <tr>
+                    <td>{rank}</td>
+                    <td class="op-name" title="{op_name}">{op_name}</td>
+                    <td class="metric">{item.count}</td>
+                    <td class="metric">{cpu_time:.3f}</td>
+                    <td class="metric">{cpu_time_pct:.2f}%</td>
+"""
+                
+                if torch.cuda.is_available():
+                    cuda_time = item.cuda_time_total / 1000
+                    cuda_time_pct = (item.cuda_time_total / (total_cuda_time * 1000)) * 100 if total_cuda_time > 0 else 0
+                    html_content += f"""
+                    <td class="metric">{cuda_time:.3f}</td>
+                    <td class="metric">{cuda_time_pct:.2f}%</td>
+"""
+                
+                html_content += """
+                </tr>
+"""
+            
+            html_content += """
+            </tbody>
+        </table>
+        
+        <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #ddd; color: #7f8c8d; font-size: 12px;">
+            <p>Generated by CLR-Wire Training Framework | PyTorch Profiler</p>
+        </div>
+    </div>
+</body>
+</html>
+"""
+            
+            # Write HTML file
+            with open(html_file, 'w', encoding='utf-8') as f:
+                f.write(html_content)
+            
+            self.print(f"HTML report saved to: {html_file}")
+            self.print(f"Open in browser: file://{html_file.absolute()}")
+            
+        except Exception as e:
+            self.print(f"Warning: Failed to generate HTML report: {e}")
+    
+    def _upload_profiler_to_wandb(self, prof, step_num):
+        """Upload profiler data to WandB"""
+        try:
+            import wandb
+            
+            # Check if wandb is initialized
+            if not wandb.run:
+                self.print("Warning: WandB is not initialized, skipping profiler upload")
+                return
+            
+            # Log Chrome Trace file to WandB
+            if self.profiler_export_chrome_trace:
+                chrome_trace_file = self.profiler_output_dir / f"chrome_trace_step_{step_num}.json"
+                if chrome_trace_file.exists():
+                    # Upload as artifact
+                    artifact = wandb.Artifact(
+                        name=f"profiler_trace_step_{step_num}",
+                        type="profiler",
+                        description=f"PyTorch Profiler trace for step {step_num}"
+                    )
+                    artifact.add_file(str(chrome_trace_file))
+                    wandb.log_artifact(artifact)
+                    self.print(f"Profiler trace uploaded to WandB as artifact")
+            
+            # Log summary statistics to WandB
+            key_averages = prof.key_averages()
+            
+            # Calculate metrics
+            total_cpu_time = sum(item.cpu_time_total for item in key_averages)
+            
+            wandb_data = {
+                "profiler/total_cpu_time_ms": total_cpu_time / 1000,
+                "profiler/num_operations": len(key_averages),
+                "profiler/step": step_num,
+            }
+            
+            if torch.cuda.is_available():
+                total_cuda_time = sum(item.cuda_time_total for item in key_averages)
+                wandb_data["profiler/total_cuda_time_ms"] = total_cuda_time / 1000
+            
+            # Log top operations
+            if torch.cuda.is_available():
+                top_ops = sorted(key_averages, key=lambda x: x.cuda_time_total, reverse=True)[:10]
+            else:
+                top_ops = sorted(key_averages, key=lambda x: x.cpu_time_total, reverse=True)[:10]
+            
+            for i, op in enumerate(top_ops, 1):
+                op_name = op.key.replace('/', '_').replace('.', '_')[:50]  # Shorten name
+                if torch.cuda.is_available():
+                    wandb_data[f"profiler/top{i}_{op_name}_cuda_ms"] = op.cuda_time_total / 1000
+                wandb_data[f"profiler/top{i}_{op_name}_cpu_ms"] = op.cpu_time_total / 1000
+            
+            wandb.log(wandb_data)
+            self.print(f"Profiler statistics logged to WandB")
+            
+        except ImportError:
+            self.print("Warning: wandb is not installed, skipping profiler upload")
+        except Exception as e:
+            self.print(f"Warning: Failed to upload profiler data to WandB: {e}")
 
     def next_data_to_forward_kwargs(self, dl_iter) -> dict:
         data = next(dl_iter)
@@ -365,6 +764,9 @@ class BaseTrainer(Module):
     def train(self):
 
         step = self.step.item()
+        
+        # Start profiler if enabled
+        self.start_profiler()
 
         while step < self.num_train_steps:
                 
@@ -397,6 +799,9 @@ class BaseTrainer(Module):
             
             step += 1
             self.step.add_(1)
+            
+            # Notify profiler of step completion
+            self.profiler_step()
             
             self.wait()
             
@@ -462,6 +867,9 @@ class BaseTrainer(Module):
                             torch.cuda.empty_cache()
 
             self.wait()
+        
+        # Stop profiler if enabled
+        self.stop_profiler()
 
         # Make sure that the wandb tracker finishes correctly
         self.accelerator.end_training()

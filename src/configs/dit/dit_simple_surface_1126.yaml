@@ -17,7 +17,7 @@ log_every_step: 50
 
 use_wandb_tracking: true
 wandb_project_name: DIT_SIMPLE
-wandb_run_name: 1126_dit_simple_1126
+wandb_run_name: 1127_dit_simple_1126vae_fix_mask_overfit10
 
 data:
     train_latent_dir: ../data/logan_jsons_latent_1126/abc
@@ -26,8 +26,8 @@ data:
     val_pc_dir: ../data/logan_jsons_michel_latent/abc_test
     surface_latent_dim: 128
     max_num_surfaces: 32
-    train_num: -1
-    val_num: -1
+    train_num: -10
+    val_num: -10
     log_scale: true
 
 trainer:
@@ -42,8 +42,8 @@ model:
     latent_dim: 512
     num_layers: 12
     num_heads: 16
-    checkpoint_folder: checkpoints/train_1126_dit_simple_valid_0.01_params_10.0_sigmoid_scale_1126
-    checkpoint_file_name: model-20.pt
+    checkpoint_folder: checkpoints/train_1127_dit_simple_valid_0.01_params_10.0_sigmoid_scale_1126vae_fix_mask_overfit10
+    checkpoint_file_name: model-05.pt
 
 vae:
     param_raw_dim: [17, 18, 19, 18, 19]
