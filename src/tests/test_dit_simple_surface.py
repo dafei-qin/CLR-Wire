@@ -125,6 +125,9 @@ _apply_shift = False
 _scale_factor = 1.0
 _apply_scale = False
 _num_inference_steps = 50
+# Surface groups
+_gt_surfaces = {}
+_gen_surfaces = {}
 
 # Surface type mapping
 SURFACE_TYPE_MAP_INV = {
@@ -307,7 +310,7 @@ def _compute_loss(output, target, masks):
 
         loss_raw = torch.nn.functional.mse_loss(output, target, reduction='none')
 
-        loss_others = loss_raw[..., 1:] * (1 - masks.float())
+        loss_others = loss_raw[..., 1:] * masks.float()
         total_valid_surfaces = masks.float().sum()
         # loss_types = loss_others[..., :self.model.num_surface_types]
         loss_shifts = loss_others[..., :3].mean(dim=(2)).sum() / total_valid_surfaces
@@ -357,8 +360,15 @@ def process_index(idx: int, num_inference_steps: int, use_gt_mask=False):
     sample  = _pipe(noise=noise, pc=pc_cond, num_inference_steps=num_inference_steps, show_progress=True)
 
     loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params = _compute_loss(sample, gt_sample, masks)
-    sample = torch.cat([gt_sample[..., :1], sample[..., 1:1+3+6], gt_sample[..., 1+3+6:1+3+6+1], sample[..., -128:]], dim=-1)
+    # sample = torch.cat([gt_sample[..., :1], sample[..., 1:1+3+6], gt_sample[..., 1+3+6:1+3+6+1], sample[..., -128:]], dim=-1)
+    sample = torch.cat([gt_sample[..., :-128], sample[..., -128:]], dim=-1)
     valid, shifts, rotations, scales, params = decode_sample(sample)
+
+    valid_gt, shifts_gt, rotations_gt, scales_gt, params_gt = decode_sample(gt_sample)
+    shifts_gt = shifts_gt[valid_gt].squeeze()
+    rotations_gt = rotations_gt[valid_gt].squeeze()
+    scales_gt = scales_gt[valid_gt].squeeze()
+    params_gt = params_gt[valid_gt].squeeze()
 
     if use_gt_mask:
         valid = masks.squeeze(-1).bool()
@@ -369,6 +379,13 @@ def process_index(idx: int, num_inference_steps: int, use_gt_mask=False):
     params = params[valid].squeeze()
 
     type_logits_pred, types_pred = _vae.classify(params)
+
+    type_logits_pred_gt, types_pred_gt = _vae.classify(params_gt)
+    
+    params_decoded_gt, mask_gt = _vae.decode(params_gt, types_pred_gt)
+    shifts_gt, rotations_gt, scales_gt = fix_rts(shifts_gt, rotations_gt, scales_gt)
+    surface_jsons_gt = to_json(params_decoded_gt.cpu().numpy(), types_pred_gt.cpu().numpy(), mask_gt.cpu().numpy())
+    surface_jsons_gt = [from_canonical(surface_jsons_gt[i], shifts_gt[i], rotations_gt[i], scales_gt[i]) for i in range(len(surface_jsons_gt))]
         
     # Decode to get surface parameters
     params_decoded, mask = _vae.decode(params, types_pred)
@@ -378,7 +395,7 @@ def process_index(idx: int, num_inference_steps: int, use_gt_mask=False):
     surface_jsons = to_json(params_decoded.cpu().numpy(), types_pred.cpu().numpy(), mask.cpu().numpy())
     surface_jsons = [from_canonical(surface_jsons[i], shifts[i], rotations[i], scales[i]) for i in range(len(surface_jsons))]
 
-    return surface_jsons, loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params
+    return surface_jsons, surface_jsons_gt, loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params
 
 def fix_rts(shifts, rotations, scales):
     shifts = shifts.cpu().numpy()
@@ -403,7 +420,7 @@ def to_json(params_tensor, types_tensor, mask_tensor):
         # (types_tensor[i].item(), mask_tensor[i].sum())
         params = params_tensor[i][mask_tensor[i]]
         # surface_type = SURFACE_TYPE_MAP_INVERSE[types_tensor[i].item()]
-        print('surface index: ',i)
+        # print('surface index: ',i)
         recovered_surface = _dataset_compound._recover_surface(params, types_tensor[i].item())
 
         recovered_surface['idx'] = [i, i]
@@ -415,7 +432,8 @@ def to_json(params_tensor, types_tensor, mask_tensor):
 
 def update_visualization():
     """Update the visualization with current index"""
-    global _current_idx, _gen_group, _gen_pc, _num_inference_steps
+    global _current_idx, _gen_group, _gt_group, _gen_pc, _num_inference_steps
+    global _gt_surfaces, _gen_surfaces, _show_gt, _show_gen
     
     if not _ps_initialized:
         return
@@ -426,7 +444,7 @@ def update_visualization():
     # Process current sample
     print(f"\nProcessing index {_current_idx}...")
     with torch.no_grad():
-        surface_jsons, loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params = process_index(
+        surface_jsons, surface_jsons_gt, loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params = process_index(
             _current_idx, _num_inference_steps, use_gt_mask=True
         )
     
@@ -436,10 +454,26 @@ def update_visualization():
           f"Params: {loss_params.item():.6f}")
     
     # Visualize generated surfaces
-
     try:
-        print(f"Visualized {len(surface_jsons)} generated surfaces")
-        visualize_json_interset(surface_jsons, plot=True, plot_gui=False, tol=1e-5, ps_header=f'sample_{_current_idx}')
+        print(f"Visualizing {len(surface_jsons)} generated surfaces and {len(surface_jsons_gt)} GT surfaces")
+        
+        # Visualize generated surfaces
+        _gen_surfaces = visualize_json_interset(surface_jsons, plot=True, plot_gui=False, tol=1e-5, ps_header=f'sample_{_current_idx}')
+        for surface_key, surface_data in _gen_surfaces.items():
+            if 'surface' in surface_data and surface_data['surface'] is not None and 'ps_handler' in surface_data:
+                surface_data['ps_handler'].add_to_group(_gen_group)
+        
+        # Visualize GT surfaces
+        _gt_surfaces = visualize_json_interset(surface_jsons_gt, plot=True, plot_gui=False, tol=1e-5, ps_header=f'gt_{_current_idx}')
+        for surface_key, surface_data in _gt_surfaces.items():
+            if 'surface' in surface_data and surface_data['surface'] is not None and 'ps_handler' in surface_data:
+                surface_data['ps_handler'].add_to_group(_gt_group)
+        
+        # Configure groups with current visibility settings
+        _gen_group.set_enabled(_show_gen)
+        _gt_group.set_enabled(_show_gt)
+        
+        print(f"Visualized {len(_gen_surfaces)} generated surfaces and {len(_gt_surfaces)} GT surfaces")
 
     except Exception as e:
         print(f'Error visualizing surfaces: {e}')
@@ -448,6 +482,7 @@ def update_visualization():
 def callback():
     """Polyscope callback function for UI controls"""
     global _current_idx, _max_idx, _num_inference_steps
+    global _show_gt, _show_gen, _gt_group, _gen_group
     
     psim.Text("DiT Simple Surface Inference")
     psim.Separator()
@@ -482,6 +517,18 @@ def callback():
     
     psim.Separator()
     psim.Text(f"Inference Steps: {_num_inference_steps}")
+    
+    # Group visibility controls
+    if _gt_group is not None and _gen_group is not None:
+        psim.Separator()
+        psim.Text("Visibility Controls:")
+        changed_gt, _show_gt = psim.Checkbox("Show Ground Truth", _show_gt)
+        if changed_gt:
+            _gt_group.set_enabled(_show_gt)
+        
+        changed_gen, _show_gen = psim.Checkbox("Show Generated", _show_gen)
+        if changed_gen:
+            _gen_group.set_enabled(_show_gen)
 
 
 
@@ -520,7 +567,7 @@ if __name__ == "__main__":
     cfg = load_config(args.config) if args.config else {}
     cfg_args = NestedDictToClass(cfg) if cfg else SimpleNamespace()
 
-    _log_scale = args.data.log_scale
+    _log_scale = cfg_args.data.log_scale
     _num_inference_steps = args.num_inference_steps
     _current_idx = args.start_idx
 
@@ -542,6 +589,10 @@ if __name__ == "__main__":
     # Initialize polyscope
     ps.init()
     _ps_initialized = True
+    
+    # Create surface groups
+    _gt_group = ps.create_group("Ground Truth Surfaces")
+    _gen_group = ps.create_group("Generated Surfaces")
     
     # Register reference cube
     register_unit_cube()

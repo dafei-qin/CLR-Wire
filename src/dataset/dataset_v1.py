@@ -842,7 +842,8 @@ class dataset_compound(Dataset):
             # print(i)
             if i >= self.max_num_surfaces:
                 break
-            
+            if i == 35:
+                print()
             try:
                 # Catch RuntimeWarnings (overflow, invalid value) and convert to exceptions
                 with warnings.catch_warnings():

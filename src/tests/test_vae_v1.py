@@ -288,14 +288,15 @@ def process_sample(idx):
                 transformed_gt.append(surf)
         gt_json_data = transformed_gt
 
-    print('-' * 10 + 'gt_json_data' + '-' * 10)
-    print(gt_json_data)
+    # print('-' * 10 + 'gt_json_data' + '-' * 10)
+    # print(gt_json_data)
     # Run VAE inference
     with torch.no_grad():
         mu, logvar = model.encode(valid_params, valid_types)
         
-        # z = model.reparameterize(mu, logvar)
-        z = mu
+        z = model.reparameterize(mu, logvar)
+        print('Difference between mu and z: ', (mu - z).abs().mean())
+        # z = mu
         type_logits_pred, types_pred = model.classify(z)
         params_pred, mask = model.decode(z, types_pred)
         
@@ -303,13 +304,13 @@ def process_sample(idx):
         recon_fn = torch.nn.MSELoss()
         recon_loss = (recon_fn(params_pred, valid_params)) * mask.float().mean()
         accuracy = (types_pred == valid_types).float().mean()
-        for i in range(valid_types.shape[0]):
-            print('surface index: ', i, 'type: ', valid_types[i].item())
-            print('input: ', valid_params[i])
-            print('output: ', params_pred[i])
-            print('diff: ', (params_pred[i] - valid_params[i]))
-            print('diff mean: ', (params_pred[i] - valid_params[i]).mean())
-            print('-' * 10)
+        # for i in range(valid_types.shape[0]):
+        #     print('surface index: ', i, 'type: ', valid_types[i].item())
+        #     print('input: ', valid_params[i])
+        #     print('output: ', params_pred[i])
+        #     print('diff: ', (params_pred[i] - valid_params[i]))
+        #     print('diff mean: ', (params_pred[i] - valid_params[i]).mean())
+        #     print('-' * 10)
         print(f'Index {idx}: recon_loss: {recon_loss.item():.6f}, accuracy: {accuracy.item():.4f}')
         # print(f'Predicted types: {types_pred.cpu().numpy()}')
         # print(f'Ground truth types: {valid_types.cpu().numpy()}')
@@ -343,6 +344,9 @@ def resample_model(canonical):
     params_tensor, types_tensor, mask_tensor, shift, rotation, scale = dataset[current_idx]
     valid_params = params_tensor[mask_tensor.bool()]
     valid_types = types_tensor[mask_tensor.bool()]
+    shift = shift[mask_tensor.bool()]
+    rotation = rotation[mask_tensor.bool()]
+    scale = scale[mask_tensor.bool()]
     
     # Apply transformations to input if any are enabled
     if _apply_scale or _apply_rotation or _apply_shift:
