@@ -250,9 +250,8 @@ class TrainerFlowSurface(BaseTrainer):
 
         loss_raw = torch.nn.functional.mse_loss(output, target, reduction='none')
 
-        loss_others = loss_raw[..., 1:] * (1 - masks.float())
+        loss_others = loss_raw[..., 1:] * masks.float()
         total_valid_surfaces = masks.float().sum()
-        # loss_types = loss_others[..., :self.model.num_surface_types]
         loss_shifts = loss_others[..., :3].mean(dim=(2)).sum() / total_valid_surfaces
         loss_rotations = loss_others[..., 3:3+6].mean(dim=(2)).sum() / total_valid_surfaces
         loss_scales = loss_others[..., 3+6:3+6+1].mean(dim=(2)).sum() / total_valid_surfaces

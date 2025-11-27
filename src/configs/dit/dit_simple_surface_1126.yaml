@@ -47,8 +47,7 @@ model:
 
 vae:
     param_raw_dim: [17, 18, 19, 18, 19]
-    checkpoint_folder: checkpoints/train_1126_vae_1_canonical_var
-    checkpoint_file_name: model-02.pt
+    checkpoint_file_name: checkpoints/train_1126_vae_1_canonical_logvar/model-02.pt
 
 loss:
     weight_valid: 0.01
