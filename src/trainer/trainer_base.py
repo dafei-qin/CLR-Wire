@@ -270,9 +270,9 @@ class BaseTrainer(Module):
                 
                 # Create custom trace handler
                 def custom_trace_handler(prof):
-                    # 1. TensorBoard format (always export)
-                    tb_handler = tensorboard_trace_handler(str(self.profiler_output_dir))
-                    tb_handler(prof)
+                    # 1. TensorBoard format (disabled to avoid conflict with chrome trace)
+                    # tb_handler = tensorboard_trace_handler(str(self.profiler_output_dir))
+                    # tb_handler(prof)
                     
                     # 2. Chrome Trace format (JSON - can view in chrome://tracing)
                     if self.profiler_export_chrome_trace:

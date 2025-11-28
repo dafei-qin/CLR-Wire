@@ -1,7 +1,7 @@
-resume_training: true
+resume_training: false
 from_start: false
 
-epochs: 11000
+epochs: 1000
 batch_size: 64
 lr: 0.0001
 num_workers: 4
@@ -11,31 +11,31 @@ grad_accum_every: 1
 ema_update_every: 10
 max_grad_norm: 1.0
 
-val_every_epoch: 1000
-save_every_epoch: 2500
+val_every_epoch: 1
+save_every_epoch: 50
 log_every_step: 50
 
 use_wandb_tracking: true
 wandb_project_name: DIT_SIMPLE
-wandb_run_name: 1127_dit_simple_1126vae_fix_mask_overfit_1
+wandb_run_name: 1128_dit_simple_vpred
 
 data:
     train_latent_dir: ../data/logan_jsons_latent_1126/abc
     train_pc_dir: ../data/logan_jsons_michel_latent/abc
-    val_latent_dir: ../data/logan_jsons_latent_1126/abc
-    val_pc_dir: ../data/logan_jsons_michel_latent/abc
+    val_latent_dir: ../data/logan_jsons_latent_1126/abc_test
+    val_pc_dir: ../data/logan_jsons_michel_latent/abc_test
     surface_latent_dim: 128
     max_num_surfaces: 32
-    train_num: 1
-    val_num: 1
-    replica: 640
-    replica_val: 64
+    train_num: -1
+    val_num: -1
+    replica: 1
+    replica_val: 1
     log_scale: true
 
 trainer:
     use_logvar: false
     prediction_type: v_prediction
-    num_inference_timesteps: 1000
+    num_inference_timesteps: 50
 
 
 model:
@@ -47,7 +47,7 @@ model:
     latent_dim: 512
     num_layers: 12
     num_heads: 16
-    checkpoint_folder: checkpoints/train_1127_dit_simple_valid_0.01_params_10.0_sigmoid_scale_1126vae_fix_mask_overfit_1
+    checkpoint_folder: checkpoints/train_1128_dit_simple_vpred
     checkpoint_file_name: model-04.pt
 
 vae:
@@ -56,4 +56,4 @@ vae:
 
 loss:
     weight_valid: 0.01
-    weight_params: 0
+    weight_params: 1

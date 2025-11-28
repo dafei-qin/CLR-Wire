@@ -82,13 +82,15 @@ class IndexedDataset(torch.utils.data.Dataset):
 train_dataset_raw = LatentDataset(
     latent_dir=args.data.train_latent_dir, pc_dir=args.data.train_pc_dir, max_num_surfaces=args.data.max_num_surfaces, 
     latent_dim=args.data.surface_latent_dim, num_data=args.data.train_num,
-    log_scale=args.data.log_scale
+    log_scale=args.data.log_scale,
+    replica=args.data.replica
     )
 
 val_dataset = LatentDataset(
     latent_dir=args.data.val_latent_dir, pc_dir=args.data.val_pc_dir, max_num_surfaces=args.data.max_num_surfaces, 
     latent_dim=args.data.surface_latent_dim, num_data=args.data.val_num,
-    log_scale=args.data.log_scale
+    log_scale=args.data.log_scale,
+    replica=args.data.replica_val
     )
 
 # weighted sampling config (optional)
@@ -121,6 +123,7 @@ trainer = TrainerFlowSurface(
     dataset=train_dataset,
     val_dataset=val_dataset,
     num_train_steps=num_train_steps,
+    prediction_type=args.trainer.prediction_type,
     batch_size=batch_size,
     num_workers=args.num_workers,
     accelerator_kwargs=dict(
@@ -144,6 +147,7 @@ trainer = TrainerFlowSurface(
     ws_refresh_every=getattr(ws_cfg, 'refresh_every', 1) if ws_cfg is not None else 1,
     weight_valid=args.loss.weight_valid,
     weight_params=args.loss.weight_params,
+    num_inference_timesteps=args.trainer.num_inference_timesteps,
 )
 
 if args.resume_training and cli_args.resume_lr is not None:

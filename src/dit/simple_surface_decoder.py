@@ -31,11 +31,15 @@ class SimpleSurfaceDecoder(nn.Module):
             post_act_fn="silu",
         )
         
-    def forward(self, sample, timestep, cond):
+    def forward(self, sample, timestep, cond, tgt_key_padding_mask=None):
         sample = self.input_proj(sample)
         cond = self.cond_proj(cond)
         time_embd = self.time_embedding(self.time_proj(timestep).to(sample.device))
-        sample = torch.cat([sample, time_embd[:, None]], dim=1)
-        sample = self.decoder(sample, cond)
+        sample = sample + time_embd[:, None]
+        # sample = torch.cat([sample, time_embd[:, None]], dim=1)
+        if tgt_key_padding_mask is not None:
+            sample = self.decoder(sample, cond, tgt_key_padding_mask=tgt_key_padding_mask)
+        else:
+            sample = self.decoder(sample, cond)
         sample = self.output_proj(sample)
-        return sample[:, :-1]
+        return sample

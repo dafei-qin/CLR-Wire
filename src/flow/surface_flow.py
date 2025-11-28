@@ -327,7 +327,7 @@ class ZLDMPipeline:
         return timesteps, num_inference_steps - t_start
 
     @torch.no_grad()
-    def __call__(self, noise, pc=None,  num_inference_steps=50, generator: torch.Generator = None, sample=None, show_progress=True
+    def __call__(self, noise, pc=None,  num_inference_steps=50, generator: torch.Generator = None, sample=None, show_progress=True, tgt_key_padding_mask=None
                 ):
         # device = self.Z.device
         # device = self.denoiser.device
@@ -353,20 +353,21 @@ class ZLDMPipeline:
 
         for t in tqdm.tqdm(timesteps, "[ ZLDMPipeline.__call__ ]", disable=not show_progress):
             # 1. predict noise model_output
-            if isinstance(t, torch.Tensor):
-                t = t.item()
+            # if isinstance(t, torch.Tensor):
+            #     t = t.item()
 
-            t_tensor = torch.tensor([t], dtype=torch.long, device=device)
-
+            # t_tensor = torch.tensor([t], dtype=torch.long, device=device)
+            t_tensor = t
             get_input = sample
 
             model_output_uncond = self.denoiser(
                 sample=get_input,
                 timestep=t_tensor.expand(sample.shape[0]),
                 cond=pc,
+                tgt_key_padding_mask=tgt_key_padding_mask,
             )
 
-
+            # Space for cfg
             model_output = model_output_uncond
 
             # 2. compute previous image: x_t -> x_t-1

@@ -124,7 +124,7 @@ class TrainerFlowSurface(BaseTrainer):
         self.log(**log_dict)
         
         # Print detailed loss information
-        loss_str = f'loss: {total_loss:.3f}'
+        loss_str = f'loss: {total_loss:.3f}, loss_valid: {loss_dict["loss_valid"]:.3f}, loss_shifts: {loss_dict["loss_shifts"]:.3f}, loss_rotations: {loss_dict["loss_rotations"]:.3f}, loss_scales: {loss_dict["loss_scales"]:.3f}, loss_params: {loss_dict["loss_params"]:.3f}'
 
 
         self.print(get_current_time() + f' {loss_str} lr: {lr:.6f} norm: {total_norm:.3f}')
@@ -171,15 +171,34 @@ class TrainerFlowSurface(BaseTrainer):
 
                     noisy_sample = self.scheduler.add_noise(gt_sample, noise, timesteps)
 
-                    if self.scheduler.prediction_type == 'v_prediction':
+                    if self.scheduler.config.prediction_type == 'v_prediction':
                         target = self.scheduler.get_velocity(gt_sample, noise, timesteps)
-                    else:
+                    elif self.scheduler.config.prediction_type == 'sample':
                         target = gt_sample
+                    elif self.scheduler.config.prediction_type == 'epsilon':
+                        # Not tried
+                        print('Warning, not tried')
+                        target = noise
+
+                    # This is for input gt sanity check.
+                    # noisy_sample = gt_sample
 
                     # forward pass
-                    output = self.model(sample=noisy_sample, timestep = timesteps, cond=pc_cond)
+                    output = self.model(sample=noisy_sample, timestep = timesteps, cond=pc_cond, tgt_key_padding_mask=~masks.bool().squeeze(-1))
 
+                
                     loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params = self.compute_loss(output, target, masks)
+                    
+                    # from tqdm import tqdm
+                    # loss_all = []
+                    # for _t in tqdm(range(1000)):
+                    #     _timesteps = torch.tensor([999-_t, 999-_t]).int().cuda()
+                    #     _noisy_sample = self.scheduler.add_noise(gt_sample, noise, _timesteps)
+                    #     with torch.no_grad():
+                    #         _output = self.model(sample=_noisy_sample, timestep = _timesteps, cond=pc_cond, tgt_key_padding_mask=~masks.bool().squeeze(-1))
+                    #         loss_all.append(self.compute_loss(_output, target, masks))
+                    # This is for input gt sanity check.
+                    # loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params = self.compute_loss(output, gt_sample, masks)
 
                 
                     loss = loss_valid * self.weight_valid + loss_shifts + loss_rotations + loss_scales + loss_params * self.weight_params
@@ -229,6 +248,7 @@ class TrainerFlowSurface(BaseTrainer):
                 loss_dict = defaultdict(float)
                 self.ema.eval()
                 self.pipe.denoiser = self.ema
+                # self.pipe.denoiser = self.raw_model
                 device = next(self.model.parameters()).device
                 num_val_batches = self.val_num_batches * self.grad_accum_every
 
@@ -244,7 +264,9 @@ class TrainerFlowSurface(BaseTrainer):
                         
                         noise = torch.randn_like(gt_sample)
 
-                        sample  = self.pipe(noise=noise, pc=pc_cond, num_inference_steps=self.num_inference_timesteps, show_progress=True)
+                        sample  = self.pipe(noise=noise, pc=pc_cond, num_inference_steps=self.num_inference_timesteps, show_progress=True, tgt_key_padding_mask=~masks.bool().squeeze(-1))
+                        # This is for input gt 
+                        # sample  = self.pipe(noise=gt_sample, pc=pc_cond, num_inference_steps=1, show_progress=True)
 
                         loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params = self.compute_loss(sample, gt_sample, masks)
                         
@@ -260,7 +282,7 @@ class TrainerFlowSurface(BaseTrainer):
 
 
                 # Print validation losses
-                self.print(get_current_time() + f" total loss: {total_val_loss:.3f}, loss_valid: {loss_dict['val_loss_valid']:.3f}, loss_shifts: {loss_dict['val_loss_valid']:.3f}, loss_rotations: {loss_dict['val_loss_valid']:.3f}, loss_scales: {loss_dict['val_loss_valid']:.3f}, loss_params: {loss_dict['val_loss_valid']:.3f}")
+                self.print(get_current_time() + f" total loss: {total_val_loss:.3f}, loss_valid: {loss_dict['val_loss_valid']:.3f}, loss_shifts: {loss_dict['val_loss_shifts']:.3f}, loss_rotations: {loss_dict['val_loss_rotations']:.3f}, loss_scales: {loss_dict['val_loss_scales']:.3f}, loss_params: {loss_dict['val_loss_params']:.3f}")
 
                 
                 # Calculate and print estimated finishing time

@@ -26,7 +26,9 @@ class LatentDataset(Dataset):
     The data is padded to max_num_surfaces to ensure consistent batch sizes.
     """
     
-    def __init__(self, latent_dir: str, pc_dir: str, max_num_surfaces: int = 500, latent_dim: int = 128, num_data: int = -1, log_scale=False):
+    def __init__(self, latent_dir: str, pc_dir: str, max_num_surfaces: int = 500, 
+        latent_dim: int = 128, num_data: int = -1, log_scale=False,
+        replica: int = 1):
         """
         Args:
             npz_dir: Path to directory containing NPZ files
@@ -40,7 +42,7 @@ class LatentDataset(Dataset):
         self.max_num_surfaces = max_num_surfaces
         self.latent_dim = latent_dim
         self.log_scale = log_scale
-        
+        self.replica = replica        
         # Discover all NPZ files in directory and subdirectories
         self.latent_files = sorted([
             str(p) for p in self.latent_dir.rglob("*.npz")
@@ -53,11 +55,11 @@ class LatentDataset(Dataset):
         
         print(f"Found {len(self.latent_files)} NPZ files in {latent_dir}")
         
-        self.replica = 1
+
     
     def __len__(self):
         """Return number of NPZ files in the dataset."""
-        return len(self.latent_files)
+        return len(self.latent_files) * self.replica
     
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
@@ -77,6 +79,7 @@ class LatentDataset(Dataset):
             - bbox_maxs: (max_num_surfaces, 3) - padded bounding box maximums
             - mask: (max_num_surfaces,) - binary mask indicating valid surfaces (1) vs padding (0)
         """
+        idx = idx % len(self.latent_files)
         latent_path = self.latent_files[idx]
         pc_path = self.latent_files[idx].replace(self.latent_dir, self.pc_dir).replace('.npz', '_latent.npy')
 

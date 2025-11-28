@@ -162,6 +162,8 @@ trainer = Trainer_vae_bspline(
     ws_beta=getattr(ws_cfg, 'beta', 0.9) if ws_cfg is not None else 0.9,
     ws_eps=getattr(ws_cfg, 'eps', 1e-6) if ws_cfg is not None else 1e-6,
     ws_refresh_every=getattr(ws_cfg, 'refresh_every', 1) if ws_cfg is not None else 1,
+    enable_profiler=args.profiler.enable,
+    profiler_output_dir=args.profiler.save_dir
 )
 
 if args.resume_training and cli_args.resume_lr is not None:

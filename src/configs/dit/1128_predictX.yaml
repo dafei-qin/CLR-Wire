@@ -17,7 +17,7 @@ log_every_step: 50
 
 use_wandb_tracking: true
 wandb_project_name: DIT_SIMPLE
-wandb_run_name: 1127_dit_simple_1126vae_fix_mask_overfit_1
+wandb_run_name: 1128_dit_overfit1_pred_sample
 
 data:
     train_latent_dir: ../data/logan_jsons_latent_1126/abc
@@ -34,9 +34,8 @@ data:
 
 trainer:
     use_logvar: false
-    prediction_type: v_prediction
+    prediction_type: sample
     num_inference_timesteps: 1000
-
 
 model:
     name: dit_simple_sigmoid_scale
@@ -47,7 +46,7 @@ model:
     latent_dim: 512
     num_layers: 12
     num_heads: 16
-    checkpoint_folder: checkpoints/train_1127_dit_simple_valid_0.01_params_10.0_sigmoid_scale_1126vae_fix_mask_overfit_1
+    checkpoint_folder: checkpoints/train_1128_dit_overfit1_pred_sample
     checkpoint_file_name: model-04.pt
 
 vae:
@@ -56,4 +55,4 @@ vae:
 
 loss:
     weight_valid: 0.01
-    weight_params: 0
+    weight_params: 1

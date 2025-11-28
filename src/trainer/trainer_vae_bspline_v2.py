@@ -54,6 +54,8 @@ class Trainer_vae_bspline(BaseTrainer):
         ws_beta: float = 0.9,
         ws_eps: float = 1e-6,
         ws_refresh_every: int = 1,
+        enable_profiler: bool = False,
+        profiler_output_dir: str = './profiler_logs',
         **kwargs
     ):
         super().__init__(
@@ -81,6 +83,8 @@ class Trainer_vae_bspline(BaseTrainer):
             accelerator_kwargs=accelerator_kwargs,
             val_every_step=val_every_step,
             val_num_batches=val_num_batches,
+            enable_profiler=enable_profiler,
+            profiler_output_dir=profiler_output_dir,
             **kwargs
         )
         
@@ -122,6 +126,13 @@ class Trainer_vae_bspline(BaseTrainer):
         
         # Get the raw model for DDP
         self.raw_model = self.model.module if hasattr(self.model, 'module') else self.model
+        
+        self.raw_model = torch.compile(
+            self.raw_model,
+            mode='default',
+            fullgraph=False,
+            dynamic=True
+        )
 
     def compute_accuracy(self, deg_logits_u, u_degree, deg_logits_v, v_degree, peri_logits_u, is_u_periodic, peri_logits_v, is_v_periodic, knots_num_logits_u, num_knots_u, knots_num_logits_v, num_knots_v, mults_logits_u, u_mults_list, mults_logits_v, v_mults_list):
         deg_pred_u = torch.argmax(deg_logits_u, dim=-1)
