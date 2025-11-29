@@ -133,7 +133,8 @@ class TrainerFlowSurface(BaseTrainer):
     def compute_loss(self, output, target, masks):
 
         loss_raw = torch.nn.functional.mse_loss(output, target, reduction='none')
-
+        loss_valid = loss_raw[..., :1].mean()
+        
         loss_others = loss_raw[..., 1:] * masks.float()
         total_valid_surfaces = masks.float().sum()
         loss_shifts = loss_others[..., :3].mean(dim=(2)).sum() / total_valid_surfaces
@@ -141,7 +142,7 @@ class TrainerFlowSurface(BaseTrainer):
         loss_scales = loss_others[..., 3+6:3+6+1].mean(dim=(2)).sum() / total_valid_surfaces
         loss_params = loss_others[..., 3+6+1:].mean(dim=(2)).sum() / total_valid_surfaces
         
-        loss_valid = self.bce_logits_loss(output[..., 0], masks.float().squeeze()).mean()
+        # loss_valid = self.bce_logits_loss(output[..., 0], masks.float().squeeze()).mean()
         
         return loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params
 

@@ -1,0 +1,56 @@
+resume_training: false
+from_start: false
+
+epochs: 200
+batch_size: 41960
+lr: 0.0005
+num_workers: 0
+num_workers_val: 8
+num_gpus: 6
+
+grad_accum_every: 1
+ema_update_every: 10
+max_grad_norm: 1.0
+
+val_every_epoch: 2
+save_every_epoch: 20
+log_every_step: 50
+
+use_wandb_tracking: true
+wandb_project_name: VAE_V1
+wandb_run_name: train_1128_vae_1_canonical_var_l2norm_rec_10
+
+trainer:
+    use_logvar: true
+
+data:
+    train_json_dir: ../data/logan_jsons/abc/0
+    val_json_dir: ../data/logan_jsons/abc_test
+    max_num_surfaces: 500
+    canonical: true
+    use_weighted_sampling: false
+    use_cache: true
+    cache_path: ../data/logan_jsons/abc_cache.npz
+    weight_path: assets/logan_jsons_weights.npy
+
+
+model:
+    # depth: 16
+    # dim: 512
+    # heads: 8
+    # surface_res: 32
+    # num_types: 6
+    # num_nearby: 20
+    # surface_dim: 256
+    # surface_enc_block_out_channels: [16, 32, 64, 128]
+    param_raw_dim: [17, 18, 19, 18, 19]
+    checkpoint_folder: checkpoints/train_1128_vae_1_canonical_var_l2norm_rec_10
+    checkpoint_file_name: model-05.pt
+
+loss:
+    recon_weight: 10.0
+    cls_weight: 1.0
+    kl_weight: 0.01
+    l2norm_weight: 0.01
+    kl_annealing_steps: 20000  # Number of steps to anneal KL weight from 0 to kl_weight
+    kl_free_bits: 0.25  # Free bits per latent dimension (in nats)
