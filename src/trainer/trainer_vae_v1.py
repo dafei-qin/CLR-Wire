@@ -45,6 +45,7 @@ class Trainer_vae_v1(BaseTrainer):
         loss_recon_weight: float = 1.0,
         loss_cls_weight: float = 1.0,
         loss_kl_weight: float = 1.0,
+        loss_l2norm_weight: float = 0.0,
         kl_annealing_steps: int = 0,
         kl_free_bits: float = 0.0,
         use_logvar: bool = True,
@@ -89,6 +90,7 @@ class Trainer_vae_v1(BaseTrainer):
         self.loss_recon_weight = loss_recon_weight
         self.loss_cls_weight = loss_cls_weight
         self.loss_kl_weight = loss_kl_weight
+        self.loss_l2norm_weight = loss_l2norm_weight
         
         # KL annealing and free bits parameters
         self.kl_annealing_steps = kl_annealing_steps
@@ -113,7 +115,7 @@ class Trainer_vae_v1(BaseTrainer):
             return 1.0
         return min(1.0, step / self.kl_annealing_steps)
 
-    def log_loss(self, total_loss, accuracy, loss_recon, loss_cls, loss_kl, lr, total_norm, step, time_per_step, kl_beta=1.0, active_dims=None):
+    def log_loss(self, total_loss, accuracy, loss_recon, loss_cls, loss_kl, loss_l2norm, lr, total_norm, step, time_per_step, kl_beta=1.0, active_dims=None):
         if not self.use_wandb_tracking or not self.is_main:
             return
         
@@ -123,6 +125,7 @@ class Trainer_vae_v1(BaseTrainer):
             'loss_recon': loss_recon,
             'loss_cls': loss_cls,
             'loss_kl': loss_kl,
+            'loss_l2norm': loss_l2norm,
             'lr': lr,
             'grad_norm': total_norm,
             'step': step,
@@ -175,7 +178,8 @@ class Trainer_vae_v1(BaseTrainer):
                     
                     loss_recon = (self.loss_recon(params_raw_recon, params_padded) * mask.float()).mean() * self.loss_recon_weight
                     loss_cls = self.loss_cls(class_logits, surface_type).mean()
-                    
+                    loss_l2norm = torch.norm(z, p=2, dim=-1).mean() 
+
                     # Compute KL loss with free bits strategy
                     # Per-dimension KL: [batch, latent_dim]
                     kl_per_dim = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp())
@@ -187,11 +191,12 @@ class Trainer_vae_v1(BaseTrainer):
                     # Mean across batch and dimensions
                     loss_kl = torch.mean(kl_per_dim)
                     
+
                     # Compute KL annealing beta
                     kl_beta = self.compute_kl_annealing_beta(step)
                     
                     # Final loss with annealing
-                    loss = loss_recon * self.loss_recon_weight + loss_cls * self.loss_cls_weight + loss_kl * self.loss_kl_weight * kl_beta
+                    loss = loss_recon * self.loss_recon_weight + loss_cls * self.loss_cls_weight + loss_kl * self.loss_kl_weight * kl_beta + loss_l2norm * self.loss_l2norm_weight
                     
                     accuracy = self.compute_accuracy(class_logits, surface_type)
 
@@ -219,7 +224,7 @@ class Trainer_vae_v1(BaseTrainer):
                     kl_per_dim_mean = kl_per_dim.mean(dim=0)  # Average over batch
                     active_dims = (kl_per_dim_mean > 0).float().sum().item()
                                                         
-                self.log_loss(total_loss, total_accuracy, loss_recon.item(), loss_cls.item(), loss_kl.item(), cur_lr, total_norm, step, kl_beta, active_dims)
+                self.log_loss(total_loss, total_accuracy, loss_recon.item(), loss_cls.item(), loss_kl.item(), loss_l2norm.item(), cur_lr, total_norm, step, kl_beta, active_dims)
                 
             step += 1
             self.step.add_(1)
@@ -247,7 +252,7 @@ class Trainer_vae_v1(BaseTrainer):
                         forward_kwargs = self.next_data_to_forward_kwargs(self.val_dl_iter)
 
                         params_padded, surface_type, masks, shifts_padded, rotations_padded, scales_padded = forward_kwargs
-                        print('Dataloader time: ', f'{time.time() - t:.2f}s')
+                        # print('Dataloader time: ', f'{time.time() - t:.2f}s')
 
                         params_padded = params_padded[masks.bool()] 
                         surface_type = surface_type[masks.bool()]
@@ -270,10 +275,10 @@ class Trainer_vae_v1(BaseTrainer):
                             z = mu
                         class_logits, surface_type_pred = self.raw_model.classify(z)
                         params_raw_recon, mask = self.raw_model.decode(z, surface_type)
-                        print('Encode and decode time: ', f'{time.time() - t:.2f}s')
+                        # print('Encode and decode time: ', f'{time.time() - t:.2f}s')
                         loss_recon = (self.loss_recon(params_raw_recon, params_padded) * mask.float()).mean()
                         loss_cls = self.loss_cls(class_logits, surface_type).mean()
-                        
+                        loss_l2norm = torch.norm(z, p=2, dim=-1).mean()
                         # Compute KL loss with free bits (same as training)
                         kl_per_dim = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp())
                         if self.kl_free_bits > 0:
@@ -282,7 +287,7 @@ class Trainer_vae_v1(BaseTrainer):
                         
                         # Use current annealing beta for validation loss
                         val_kl_beta = self.compute_kl_annealing_beta(step)
-                        loss = loss_recon * self.loss_recon_weight + loss_cls * self.loss_cls_weight + loss_kl * self.loss_kl_weight * val_kl_beta
+                        loss = loss_recon * self.loss_recon_weight + loss_cls * self.loss_cls_weight + loss_kl * self.loss_kl_weight * val_kl_beta + loss_l2norm * self.loss_l2norm_weight
                         accuracy = self.compute_accuracy(class_logits, surface_type)
 
                         total_val_loss += (loss / num_val_batches)
@@ -303,7 +308,8 @@ class Trainer_vae_v1(BaseTrainer):
                     "val_loss_recon": loss_recon.item(),
                     "val_loss_cls": loss_cls.item(),
                     "val_loss_kl": loss_kl.item(),
-                    "val_kl_beta": val_kl_beta
+                    "val_kl_beta": val_kl_beta,
+                    "val_loss_l2norm": loss_l2norm.item()
                 }
                 self.log(**val_log_dict)
 
