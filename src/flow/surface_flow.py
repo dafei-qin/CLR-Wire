@@ -327,7 +327,7 @@ class ZLDMPipeline:
         return timesteps, num_inference_steps - t_start
 
     @torch.no_grad()
-    def __call__(self, noise, pc=None,  num_inference_steps=50, generator: torch.Generator = None, sample=None, show_progress=True, tgt_key_padding_mask=None
+    def __call__(self, noise, pc=None,  num_inference_steps=50, generator: torch.Generator = None, sample=None, show_progress=True, tgt_key_padding_mask=None, gt_sample=None,
                 ):
         # device = self.Z.device
         # device = self.denoiser.device
@@ -372,12 +372,24 @@ class ZLDMPipeline:
 
             # 2. compute previous image: x_t -> x_t-1
             
-            sample = self.scheduler.step(
+            prev_sample = self.scheduler.step(
                 model_output[:, None, :, :].permute(0, 3, 1, 2),
                 t,
                 sample[:, None, :, :].permute(0, 3, 1, 2),
                 generator=generator,
             ).prev_sample.permute(0, 2, 3, 1)[:, 0, :, :]
+
+            print('t: ', t.item(), 'update_diff: ', (sample - prev_sample).abs().mean())
+            if gt_sample is not None:
+                loss = torch.nn.functional.mse_loss(prev_sample, gt_sample, reduction='none') * (1 - tgt_key_padding_mask.float()).unsqueeze(-1)
+                loss = loss.sum(dim=(0, 1)) / (1 - tgt_key_padding_mask.float()).sum()
+                loss_valid = loss[0]
+                loss_shifts = loss[1:4].mean()
+                loss_rotations = loss[4:10].mean()
+                loss_scales = loss[10:11].mean()
+                loss_params = loss[11:].mean()
+                print('loss_valid: ', f'{loss_valid:.4f}', 'loss_shifts: ', f'{loss_shifts:.4f}', 'loss_rotations: ', f'{loss_rotations:.4f}', 'loss_scales: ', f'{loss_scales:.4f}', 'loss_params: ', f'{loss_params:.4f}')
+            sample = prev_sample
 
 
         # return model_output_uncond

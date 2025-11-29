@@ -98,6 +98,9 @@ def reset_scene():
 
 # Globals for UI
 _dataset = None
+_dataset_train = None
+_dataset_val = None
+_use_train_dataset = False  # False = val, True = train
 _model = None
 _pipe = None
 _current_idx = 0
@@ -232,18 +235,51 @@ def refresh_filtered_indices(preserve_current: bool = True):
     _current_idx = _filtered_indices[_current_filtered_idx]
 
 
+def switch_dataset(use_train: bool):
+    """Switch between train and val datasets."""
+    global _dataset, _dataset_train, _dataset_val, _use_train_dataset, _current_idx
+    
+    _use_train_dataset = use_train
+    
+    if _use_train_dataset:
+        _dataset = _dataset_train
+        print("Switched to TRAIN dataset")
+    else:
+        _dataset = _dataset_val
+        print("Switched to VAL dataset")
+    
+    # Rebuild metadata and indices for the new dataset
+    build_index_metadata()
+    initialize_filters()
+    refresh_filtered_indices(preserve_current=False)
+    
+    # Reset current index to 0
+    _current_idx = 0 if _filtered_indices else -1
+    
+    print(f"Dataset has {len(_dataset)} samples, {len(_filtered_indices)} after filtering")
+
+
 def load_model_and_dataset(
     args,
     device = 'cuda'
 ):
     """Load dataset and corresponding model weights."""
-    global _dataset, _model, _pipe, _max_idx, _vae, _dataset_compound
+    global _dataset, _dataset_train, _dataset_val, _model, _pipe, _max_idx, _vae, _dataset_compound
 
-    _dataset = LatentDataset(
+    _dataset_val = LatentDataset(
+    latent_dir=args.data.val_latent_dir, pc_dir=args.data.val_pc_dir, max_num_surfaces=args.data.max_num_surfaces, 
+    latent_dim=args.data.surface_latent_dim, num_data=args.data.val_num,
+    log_scale=args.data.log_scale
+    )
+
+    _dataset_train = LatentDataset(
     latent_dir=args.data.train_latent_dir, pc_dir=args.data.train_pc_dir, max_num_surfaces=args.data.max_num_surfaces, 
     latent_dim=args.data.surface_latent_dim, num_data=args.data.val_num,
     log_scale=args.data.log_scale
     )
+    
+    # Set initial dataset to val
+    _dataset = _dataset_val
     
     _dataset_compound = dataset_compound(json_dir='./',canonical=True)
     build_index_metadata()
@@ -298,7 +334,7 @@ def load_model_and_dataset(
     _vae.to(device)
     _vae.eval()
 
-    _model.eval()
+    # _model.eval()
 
     # Create pipeline
     scheduler = get_new_scheduler('v_prediction', 1000)
@@ -357,10 +393,12 @@ def process_index(idx: int, num_inference_steps: int, use_gt_mask=False):
     # pc_cond = pc_cond.unsqueeze(0)
     noise = torch.randn_like(gt_sample)
 
-    sample  = _pipe(noise=noise, pc=pc_cond, num_inference_steps=num_inference_steps, show_progress=True)
+    sample  = _pipe(noise=noise, pc=pc_cond, num_inference_steps=num_inference_steps, show_progress=True, tgt_key_padding_mask=~masks.bool().squeeze(-1), gt_sample=None)
 
     loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params = _compute_loss(sample, gt_sample, masks)
     # sample = torch.cat([gt_sample[..., :1], sample[..., 1:1+3+6], gt_sample[..., 1+3+6:1+3+6+1], sample[..., -128:]], dim=-1)
+
+    print("Using GT RTS now...")
     sample = torch.cat([gt_sample[..., :-128], sample[..., -128:]], dim=-1)
     valid, shifts, rotations, scales, params = decode_sample(sample)
 
@@ -483,8 +521,28 @@ def callback():
     """Polyscope callback function for UI controls"""
     global _current_idx, _max_idx, _num_inference_steps
     global _show_gt, _show_gen, _gt_group, _gen_group
+    global _use_train_dataset, _dataset_train, _dataset_val
     
     psim.Text("DiT Simple Surface Inference")
+    psim.Separator()
+    
+    # Dataset switcher
+    psim.Text("Dataset Selection:")
+    if _dataset_train is not None and _dataset_val is not None:
+        dataset_options = ["Validation", "Train"]
+        current_selection = 1 if _use_train_dataset else 0
+        
+        changed, new_selection = psim.Combo("Dataset", current_selection, dataset_options)
+        if changed and new_selection != current_selection:
+            use_train = (new_selection == 1)
+            switch_dataset(use_train)
+            update_visualization()
+        
+        # Display dataset info
+        dataset_name = "TRAIN" if _use_train_dataset else "VAL"
+        dataset_size = len(_dataset_train) if _use_train_dataset else len(_dataset_val)
+        psim.Text(f"Current: {dataset_name} ({dataset_size} samples)")
+    
     psim.Separator()
     
     # Index controls
