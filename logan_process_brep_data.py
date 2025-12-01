@@ -139,17 +139,6 @@ class BRepDataProcessor:
         degree = curve.Degree()
         num_poles = curve.NbPoles()
         num_knots = curve.NbKnots()
-        # is_rational = curve.IsRational()
-        # if not is_rational:
-        #     raise ValueError("The curve is not rational.")
-        # if degree > 8:
-        #     raise ValueError("Degree is greater than 8.")
-        # if num_poles > 8:
-        #     raise ValueError("Number of poles is greater than 8.")
-        # if num_knots > 8:
-        #     raise ValueError("Number of knots is greater than 8.")
-        # if num_poles != num_knots:
-        #     raise ValueError("Number of poles and knots are not equal.")
 
         knots = TColStd_Array1OfReal(1, num_knots)
         curve.Knots(knots)
@@ -266,9 +255,6 @@ class BRepDataProcessor:
 
     def bspline_surface_feature(self, surface: Geom_BSplineSurface, idx):
 
-        # if surface.UDegree() < 4 or surface.VDegree() < 4:
-        #     surface.IncreaseDegree(4, 4)
-
         u_degree = surface.UDegree()
         v_degree = surface.VDegree()
 
@@ -280,14 +266,7 @@ class BRepDataProcessor:
 
         is_rational = surface.IsURational() and surface.IsVRational()
 
-        # if not is_rational:
-        #     raise ValueError("The surface is not rational.")
-        # if u_degree > 8 or v_degree > 8:
-        #     raise ValueError("Degree is greater than 8.")
-        # if num_poles_u > 8 or num_poles_v > 8:
-        #     raise ValueError("Number of poles is greater than 8.")
-        # if num_knots_u > 8 or num_knots_v > 8:
-        #     raise ValueError("Number of knots is greater than 8.")
+    
 
         u_knots = TColStd_Array1OfReal(1, num_knots_u)
         v_knots = TColStd_Array1OfReal(1, num_knots_v)
@@ -397,25 +376,6 @@ class BRepDataProcessor:
                     ic(f'Too many faces in the solid: {len(list(solid.faces()))}')
                     raise ValueError("Too many faces in the solid.")
                 solid = solid.topods_shape()
-                # bbox = Bnd_Box()
-                # brepbndlib.Add(solid, bbox)
-                # xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
-                # max_dimension = max(xmax - xmin, ymax - ymin, zmax - zmin)
-                # max_dimension = np.round(max_dimension*.5, 0) *2
-                # ic(f'Max dimension: {max_dimension}')
-                # scale_factor = 2.0 / max_dimension
-                # # ic(f'Scale factor: {scale_factor}')
-                # scale_factor = np.round(scale_factor * 500, 0) / 500
-                # ic(f'Scale factor: {scale_factor}')
-                # center = gp_Pnt(np.round((xmin + xmax) / 2, 0), np.round((ymin + ymax) / 2, 0), np.round((zmin + zmax) / 2, 0))
-                # ic(f'Center: {center.X()}, {center.Y()}, {center.Z()}')
-                # trsf = gp_Trsf()
-                # trsf.SetScale(center, scale_factor)
-                # apply_transform = BRepBuilderAPI_Transform(trsf)
-                # apply_transform.Perform(solid, True)
-                # solid = apply_transform.Modified(solid)
-                # assert solid.Size() == 1
-                # solid = solid.First()
                 solid = Solid(solid)
 
                 

@@ -80,8 +80,8 @@ def process_file(stepfile):
     dir = os.path.dirname(objfile)
     os.makedirs(dir, exist_ok=True)
     try:
-        # convert_step_to_ply(stepfile, objfile)
-        convert_step_to_numpy(stepfile, objfile.replace('.ply', '.npz'))
+        convert_step_to_ply(stepfile, objfile)
+        # convert_step_to_numpy(stepfile, objfile.replace('.ply', '.npz'))
     except Exception as e:
         print(f"Error processing {stepfile}: {e}")
 
