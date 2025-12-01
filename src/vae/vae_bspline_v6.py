@@ -696,6 +696,7 @@ class BSplineVAE(nn.Module):
         self.U_encoder = NonlinearMLPwithAttn(input_dim=mults_dim + embd_dim, model_dim=embd_dim, output_dim=embd_dim, num_heads=4)
         self.V_encoder = NonlinearMLPwithAttn(input_dim=mults_dim + embd_dim, model_dim=embd_dim, output_dim=embd_dim, num_heads=4)
 
+        # 1D knots的相对位置编码，
         self.u_knots_pe = LearnedRelativePE1D(embed_dim=embd_dim)
         self.v_knots_pe = LearnedRelativePE1D(embed_dim=embd_dim)
 
@@ -721,10 +722,7 @@ class BSplineVAE(nn.Module):
         # 输出潜空间参数
         # 使用解码器输出的最后一个token作为汇聚 → 维度为 embd_dim
         self.fc_mu = nn.Linear(embd_dim, embd_dim)
-        self.fc_logvar = nn.Linear(embd_dim, embd_dim )
-        
-        # Decoder
-        # TODO
+        self.fc_logvar = nn.Linear(embd_dim, embd_dim)
 
         
         self.deg_head_u = nn.Linear(embd_dim, max_degree)  # max_degree=3 → classes: deg1,deg2,deg3
@@ -739,7 +737,7 @@ class BSplineVAE(nn.Module):
         self.token_proj_u = NonlinearMLP(embd_dim, embd_dim, max_num_u_knots * embd_dim)
         self.token_proj_v = NonlinearMLP(embd_dim, embd_dim, max_num_v_knots * embd_dim)
 
-        # Remove attn
+
         self.knots_head_u = NonlinearMLPwithAttn(embd_dim, embd_dim, 1)
         self.knots_head_v = NonlinearMLPwithAttn(embd_dim, embd_dim, 1)
         self.mults_head_u = NonlinearMLPwithAttn(embd_dim, embd_dim, max_degree + 1)
@@ -749,9 +747,6 @@ class BSplineVAE(nn.Module):
         self.token_proj_poles = NonlinearMLP(embd_dim, embd_dim, embd_dim)
 
         self.poles_decoder = PoleDecoder(input_dim=embd_dim, model_dim=embd_dim, output_dim=4, num_layers=num_layers_poles, num_heads=8)
-
-
-
 
 
     # 
@@ -773,12 +768,13 @@ class BSplineVAE(nn.Module):
         # Get the embedding of knots and mults
         u_knots_embd = self.u_knots_proj(u_knots.unsqueeze(-1)) # (B, L_u, embd_dim)
         v_knots_embd = self.v_knots_proj(v_knots.unsqueeze(-1)) # (B, L_v, embd_dim)
+
+        # Mults embeddings are retrived from the learned embedding.
         u_mults_embd = self.u_mults_embed(u_mults) # (B, L_u, mults_dim)
         v_mults_embd = self.v_mults_embed(v_mults) # (B, L_v, mults_dim)
 
         # Add positional encoding to knots and mults
-        # u_knots_pe = sinusoidal_pe(u_knots.shape[1], self.embd_dim, u_knots.device) # (L_u, embd_dim)
-        # v_knots_pe = sinusoidal_pe(v_knots.shape[1], self.embd_dim, v_knots.device) # (L_v, embd_dim)
+
         u_knots_pe = torch.zeros(B, self.max_num_u_knots, self.embd_dim, device=u_knots.device)
         v_knots_pe = torch.zeros(B, self.max_num_v_knots, self.embd_dim, device=v_knots.device)
         u_knots_pe_mask = torch.zeros(B, self.max_num_u_knots, device=u_knots.device, dtype=torch.bool)
@@ -870,7 +866,6 @@ class BSplineVAE(nn.Module):
         eps = torch.randn_like(std)
         return mu + eps * std
 
-    
 
 
     def decode_knots_mults(self, z, num_knots_u, num_knots_v):
