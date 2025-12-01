@@ -399,7 +399,7 @@ def process_index(idx: int, num_inference_steps: int, use_gt_mask=False):
     # sample = torch.cat([gt_sample[..., :1], sample[..., 1:1+3+6], gt_sample[..., 1+3+6:1+3+6+1], sample[..., -128:]], dim=-1)
 
     print("Using GT RTS now...")
-    sample = torch.cat([gt_sample[..., :-128], sample[..., -128:]], dim=-1)
+    # sample = torch.cat([gt_sample[..., :-128], sample[..., -128:]], dim=-1)
     valid, shifts, rotations, scales, params = decode_sample(sample)
 
     valid_gt, shifts_gt, rotations_gt, scales_gt, params_gt = decode_sample(gt_sample)
