@@ -839,8 +839,6 @@ class BSplineVAE(nn.Module):
 
         # Fuse the encoded information
         query_embd = self.latent_queries.unsqueeze(0).expand(B, -1, -1) # (B, num_query, embd_dim)
-        # query_embd = einops.rearrange(query_embd, 'n d -> 1 n d') # (1, num_query, embd_dim)
-        # query_embd = query_embd.expand(u_encoder_output.shape[0], -1, -1) # (B, num_query, embd_dim)
 
         meta_embd = torch.cat([u_deg_embd, v_deg_embd, u_periodic_embd, v_periodic_embd], dim=-1)
         meta_embd = self.meta_proj(meta_embd) # (B, 1, embd_dim)
@@ -861,19 +859,6 @@ class BSplineVAE(nn.Module):
         ) # (B, num_query, embd_dim)
         fuser_output = fuser_seq[:, -1, :]  # (B, embd_dim)
         
-        # Try move the injection after fuser.
-        # fuser_output = self.fuser(query_embd, u_encoder_output, v_encoder_output, poles_encoder_output, meta_embd, U_padding_mask, V_padding_mask, P_padding_mask) # (B, num_query, embd_dim)
-        
-        # fuser_output = fuser_output + meta_embd
-        # fuser_output = fuser_output.view(B, -1) # （B, R_d * embd_dim)
-
-        # fuser_output = fuser_output.mean(dim=1) # (B, embd_dim)
-
-        # Inject the information of degree and periodic
-        
-        # fuser_output = fuser_output + meta_embd.squeeze(1)
-
-        # Project the fused information to the latent space
         mu = self.fc_mu(fuser_output) # (B, latent_dim)
         logvar = self.fc_logvar(fuser_output) # (B, latent_dim)
        
