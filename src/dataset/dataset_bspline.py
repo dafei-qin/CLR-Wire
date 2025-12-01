@@ -35,6 +35,7 @@ class dataset_bspline(Dataset):
         max_num_v_poles: int = 32,
         canonical: bool = False,
         canonical_samples_per_interval: int = 4,
+        only_periodic: bool = False,
     ):
         """
         Args:
@@ -59,7 +60,7 @@ class dataset_bspline(Dataset):
         self.canonical = canonical
         self.canonical_samples_per_interval = max(1, int(canonical_samples_per_interval))
         self._transform_cache: Dict[int, Tuple[np.ndarray, np.ndarray]] = {}
-
+        self.only_periodic = only_periodic
     def __len__(self):
         return len(self.data_names) * self.replica
 
@@ -90,7 +91,11 @@ class dataset_bspline(Dataset):
             valid = False
         if num_knots_v >= self.max_num_v_knots:
             valid = False
-
+        if self.only_periodic:
+            if not is_u_periodic:
+                valid = False
+            if not is_v_periodic:
+                valid = False
         return u_degree, v_degree, num_poles_u, num_poles_v, num_knots_u, num_knots_v, is_u_periodic, is_v_periodic, u_knots_list, v_knots_list, u_mults_list, v_mults_list, poles, valid
 
 
