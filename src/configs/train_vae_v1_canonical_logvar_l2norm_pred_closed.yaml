@@ -2,7 +2,7 @@ resume_training: false
 from_start: false
 
 epochs: 200
-batch_size: 41960
+batch_size: 256
 lr: 0.0005
 num_workers: 0
 num_workers_val: 8
@@ -22,15 +22,17 @@ wandb_run_name: train_1201_vae_1_canonical_var_l2norm_pred_closed
 
 trainer:
     use_logvar: true
+    u_closed_pos_weight: 10.0
+    v_closed_pos_weight: 50.0
 
 data:
-    train_json_dir: ../data/logan_jsons/abc/0
+    train_json_dir: ../data/logan_jsons/abc/
     val_json_dir: ../data/logan_jsons/abc_test
     max_num_surfaces: 500
     canonical: true
     use_weighted_sampling: false
-    use_cache: false
-    cache_path: ../data/logan_jsons/abc_cache.npz
+    use_cache: true
+    cache_path: ../data/logan_jsons_cache/abc_cache_w_closed.npz
     weight_path: assets/logan_jsons_weights.npy
 
 

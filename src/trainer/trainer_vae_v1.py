@@ -53,6 +53,8 @@ class Trainer_vae_v1(BaseTrainer):
         num_workers_val: int = 8,
         pred_is_closed = False,
         is_closed_weight = 1.0,
+        u_closed_pos_weight: float = 1.0,
+        v_closed_pos_weight: float = 1.0,
         **kwargs
     ):
         super().__init__(
@@ -95,8 +97,14 @@ class Trainer_vae_v1(BaseTrainer):
         self.loss_l2norm_weight = loss_l2norm_weight
         self.loss_is_closed_weight = is_closed_weight
         self.pred_is_closed = pred_is_closed
+        self.u_closed_pos_weight = u_closed_pos_weight
+        self.v_closed_pos_weight = v_closed_pos_weight
+
         if self.pred_is_closed:
-            self.loss_is_closed = nn.BCEWithLogitsLoss()
+            self.pos_weight = nn.Parameter(torch.tensor([u_closed_pos_weight, v_closed_pos_weight], dtype=torch.float32).unsqueeze(0).cuda(), requires_grad=False
+            )
+            self.loss_is_closed = nn.BCEWithLogitsLoss(pos_weight=self.pos_weight)
+            
 
         
         # KL annealing and free bits parameters
@@ -114,7 +122,8 @@ class Trainer_vae_v1(BaseTrainer):
         return correct.mean()
 
     def compute_accuracy_is_closed(self, logits, labels):
-        predictions = torch.sigmoid(logits.reshape(-1)) > 0.5
+        # logits shape: [batch, 2], labels shape: [batch, 2]
+        predictions = torch.sigmoid(logits) > 0.5
         correct = (predictions == labels).float()
         return correct.mean()
 
@@ -128,13 +137,14 @@ class Trainer_vae_v1(BaseTrainer):
             return 1.0
         return min(1.0, step / self.kl_annealing_steps)
 
-    def log_loss(self, total_loss, accuracy, loss_recon, loss_cls, loss_kl, loss_l2norm, loss_is_closed, lr, total_norm, step, time_per_step, kl_beta=1.0, active_dims=None):
+    def log_loss(self, total_loss, accuracy, accuracy_is_closed, loss_recon, loss_cls, loss_kl, loss_l2norm, loss_is_closed, lr, total_norm, step, time_per_step, kl_beta=1.0, active_dims=None):
         if not self.use_wandb_tracking or not self.is_main:
             return
         
         log_dict = {
             'loss': total_loss,
             'accuracy': accuracy,
+            'accuracy_is_closed': accuracy_is_closed,
             'loss_recon': loss_recon,
             'loss_cls': loss_cls,
             'loss_kl': loss_kl,
@@ -152,7 +162,7 @@ class Trainer_vae_v1(BaseTrainer):
         
         self.log(**log_dict)
         
-        self.print(get_current_time() + f' loss: {total_loss:.3f} acc: {accuracy:.3f} lr: {lr:.6f} norm: {total_norm:.3f} kl_beta: {kl_beta:.3f} time_per_step: {time_per_step:.3f}')
+        self.print(get_current_time() + f' loss: {total_loss:.3f} acc: {accuracy:.3f} acc_is_closed: {accuracy_is_closed:.3f} lr: {lr:.6f} norm: {total_norm:.3f} kl_beta: {kl_beta:.3f} time_per_step: {time_per_step:.3f}')
 
     def train(self):
         step = self.step.item()
@@ -169,6 +179,8 @@ class Trainer_vae_v1(BaseTrainer):
                 tt = time.time()
 
                 forward_kwargs = self.next_data_to_forward_kwargs(self.train_dl_iter)
+                # print('data loading time: ', f'{time.time() - tt:.2f}s')
+                tt = time.time()
                 with self.accelerator.autocast(), maybe_no_sync():
                     if self.pred_is_closed:
                         params_padded, surface_type, masks, shifts_padded, rotations_padded, scales_padded, is_u_closed, is_v_closed = forward_kwargs
@@ -179,15 +191,16 @@ class Trainer_vae_v1(BaseTrainer):
                     shifts_padded = shifts_padded[masks.bool()]
                     rotations_padded = rotations_padded[masks.bool()]
                     scales_padded = scales_padded[masks.bool()]
+
                     if self.pred_is_closed:
                         is_u_closed = is_u_closed[masks.bool()]
                         is_v_closed = is_v_closed[masks.bool()]
-                        is_closed_gt = torch.cat([is_u_closed, is_v_closed], dim=-1)
+                        is_closed_gt = torch.stack([is_u_closed, is_v_closed], dim=-1)
+
                     if surface_type.shape[0] == 0:
                         continue
                     
-                    # print('data time: ', f'{time.time() - tt:.2f}s')
-
+                    # print('data prepare time: ', f'{time.time() - tt:.2f}s')
                     tt = time.time()
                     mu, logvar = self.raw_model.encode(params_padded, surface_type)
                     if self.use_logvar:
@@ -205,7 +218,11 @@ class Trainer_vae_v1(BaseTrainer):
                     loss_cls = self.loss_cls(class_logits, surface_type).mean()
                     loss_l2norm = torch.norm(z, p=2, dim=-1).mean() 
                     if self.pred_is_closed:
-                        loss_is_closed = self.loss_is_closed(is_closed_logits.reshape(-1), is_closed_gt.float()).mean()
+                        # is_closed_logits shape: [batch, 2], is_closed_gt shape: [batch, 2]
+                        # pos_weight is applied element-wise per position (u=0, v=1)
+                        loss_is_closed = self.loss_is_closed(is_closed_logits, is_closed_gt.float())
+                        
+
                     else:
                         loss_is_closed = 0.0
                     # Compute KL loss with free bits strategy
@@ -255,7 +272,7 @@ class Trainer_vae_v1(BaseTrainer):
                     kl_per_dim_mean = kl_per_dim.mean(dim=0)  # Average over batch
                     active_dims = (kl_per_dim_mean > 0).float().sum().item()
                                                         
-                self.log_loss(total_loss, total_accuracy, loss_recon.item(), loss_cls.item(), loss_kl.item(), loss_l2norm.item(), loss_is_closed.item(), cur_lr, total_norm, step, kl_beta, active_dims)
+                self.log_loss(total_loss, total_accuracy, accuracy_is_closed, loss_recon.item(), loss_cls.item(), loss_kl.item(), loss_l2norm.item(), loss_is_closed.item(), cur_lr, total_norm, step, kl_beta, active_dims)
                 
             step += 1
             self.step.add_(1)
@@ -294,12 +311,16 @@ class Trainer_vae_v1(BaseTrainer):
                         shifts_padded = shifts_padded[masks.bool()]
                         rotations_padded = rotations_padded[masks.bool()]
                         scales_padded = scales_padded[masks.bool()]
+
                         if self.pred_is_closed:
                             is_u_closed = is_u_closed[masks.bool()]
                             is_v_closed = is_v_closed[masks.bool()]
-                            is_closed_gt = torch.cat([is_u_closed, is_v_closed], dim=-1)
+                            is_closed_gt = torch.stack([is_u_closed, is_v_closed], dim=-1)
+                            is_closed_gt = is_closed_gt.to(device)
+
                         params_padded = params_padded.to(device)
                         surface_type = surface_type.to(device)
+
                         if surface_type.shape[0] == 0:
                             continue
                         # print(params_padded.abs().max())
@@ -321,7 +342,9 @@ class Trainer_vae_v1(BaseTrainer):
                         loss_cls = self.loss_cls(class_logits, surface_type).mean()
                         loss_l2norm = torch.norm(z, p=2, dim=-1).mean()
                         if self.pred_is_closed:
-                            loss_is_closed = self.loss_is_closed(is_closed_logits.reshape(-1), is_closed_gt.float()).mean()
+                            # is_closed_logits shape: [batch, 2], is_closed_gt shape: [batch, 2]
+                            # pos_weight is applied element-wise per position (u=0, v=1)
+                            loss_is_closed = self.loss_is_closed(is_closed_logits, is_closed_gt.float()).mean()
                         else:
                             loss_is_closed = 0.0
                         # Compute KL loss with free bits (same as training)
