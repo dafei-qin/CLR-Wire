@@ -21,12 +21,12 @@ wandb_project_name: BSPLINE_VAE_V1
 wandb_run_name: train_1202_bspline_7_knots_32x16
 
 data:
-    train_file: ./assets/all_bspline_paths.txt
+    train_file: ./assets/ram_all_bspline_surfaces.txt
     train_data_dir_override: ""
-    train_num: 10000
-    val_file: ./assets/all_bspline_paths_test.txt
+    train_num: -1
+    val_file: ./assets/ram_all_bspline_test_surfaces.txt
     val_data_dir_override: ""
-    val_num: 10000
+    val_num: -1
 
 trainer:
     use_logvar: true
