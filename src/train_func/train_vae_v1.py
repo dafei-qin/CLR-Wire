@@ -39,7 +39,7 @@ use_cache = getattr(args.data, 'use_cache', False)
 if use_cache:
     print('load cache from ', args.data.cache_path)
     assert args.data.cache_path != ''
-    train_dataset = dataset_compound_cache(cache_path=args.data.cache_path)
+    train_dataset = dataset_compound_cache(cache_path=args.data.cache_path, detect_closed=args.model.pred_is_closed)
 else:
     train_dataset = dataset_compound(json_dir=args.data.train_json_dir, max_num_surfaces=args.data.max_num_surfaces, canonical=args.data.canonical, detect_closed=args.model.pred_is_closed)
 
@@ -83,6 +83,8 @@ trainer = Trainer_vae_v1(
     pred_is_closed=args.model.pred_is_closed,
     kl_annealing_steps=getattr(args.loss, 'kl_annealing_steps', 0),
     kl_free_bits=getattr(args.loss, 'kl_free_bits', 0.0),
+    u_closed_pos_weight=getattr(args.trainer, 'u_closed_pos_weight', 1.0),
+    v_closed_pos_weight=getattr(args.trainer, 'v_closed_pos_weight', 1.0),
     grad_accum_every=args.grad_accum_every,
     ema_update_every=args.ema_update_every,
     learning_rate=initial_lr,

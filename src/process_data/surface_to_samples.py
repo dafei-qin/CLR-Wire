@@ -639,15 +639,6 @@ def main():
         # Save points
         np.save(output_path, sampled_points)
 
-        # # pc = o3d.geometry.PointCloud(points=o3d.utility.Vector3dVector()
-        # point_cloud = o3d.geometry.PointCloud()
-
-        # point_cloud.points = o3d.utility.Vector3dVector(sampled_points[:, :3])
-
-        # if sampled_points.shape[1] == 6:
-        #     point_cloud.normals = o3d.utility.Vector3dVector(sampled_points[:, 3:])
-
-        # o3d.io.write_point_cloud(output_path.with_suffix('.ply'), point_cloud)
         total_points_saved += 1
         
         # Optionally save labels
@@ -655,10 +646,6 @@ def main():
             label_path = output_path.with_suffix('.labels.npy')
             np.save(label_path, surface_labels)
             
-        # except Exception as e:
-        #     print(f"\nError processing {json_path}: {e}")
-        #     failed_samples.append((idx, json_path, str(e)))
-        #     continue
     
     print("\n" + "="*80)
     print("Processing complete!")

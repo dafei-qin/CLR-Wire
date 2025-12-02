@@ -287,7 +287,7 @@ def normalize_cone_with_center(P, D, X, u_min, u_max, v_min, v_max, semi_angle, 
 
 
 class dataset_compound_cache(Dataset):
-    def __init__(self, cache_path: str):
+    def __init__(self, cache_path: str, detect_closed: bool = False):
         super().__init__()
         self.cache_path = cache_path
         self.data = np.load(cache_path)
@@ -298,11 +298,39 @@ class dataset_compound_cache(Dataset):
         self.scales = self.data['scales']
         self.replica = 1
         
+        # Try to load is_closed data if available
+        self.detect_closed = detect_closed
+        if detect_closed:
+            if 'is_u_closed' in self.data and 'is_v_closed' in self.data:
+                self.is_u_closed = self.data['is_u_closed']
+                self.is_v_closed = self.data['is_v_closed']
+                self.has_closed_data = True
+            else:
+                print(f"Warning: detect_closed=True but cache file does not contain is_u_closed/is_v_closed data")
+                self.has_closed_data = False
+        else:
+            self.has_closed_data = False
+        
     def __len__(self):
         return len(self.params)
     
     def __getitem__(self, idx):
-        return torch.from_numpy(self.params[idx]), torch.from_numpy(np.array(self.types[idx])), 1, torch.from_numpy(self.shifts[idx]), torch.from_numpy(self.rotations[idx]), torch.from_numpy(np.array(self.scales[idx]))
+        if self.detect_closed and self.has_closed_data:
+            return (torch.from_numpy(self.params[idx]), 
+                   torch.from_numpy(np.array(self.types[idx])), 
+                   1, 
+                   torch.from_numpy(self.shifts[idx]), 
+                   torch.from_numpy(self.rotations[idx]), 
+                   torch.from_numpy(np.array(self.scales[idx])),
+                   torch.from_numpy(np.array(self.is_u_closed[idx])),
+                   torch.from_numpy(np.array(self.is_v_closed[idx])))
+        else:
+            return (torch.from_numpy(self.params[idx]), 
+                   torch.from_numpy(np.array(self.types[idx])), 
+                   1, 
+                   torch.from_numpy(self.shifts[idx]), 
+                   torch.from_numpy(self.rotations[idx]), 
+                   torch.from_numpy(np.array(self.scales[idx])))
     
 class dataset_compound(Dataset):
     """
@@ -523,7 +551,10 @@ class dataset_compound(Dataset):
                 else:
                     return None, -1
             if not (1e-6 < semi_angle < np.pi/2 - 1e-6):
-                return None, -1
+                if self.detect_closed:
+                    return None, -1, None, None
+                else:
+                    return None, -1
                 # raise ValueError(f"Invalid semi-angle: {semi_angle}, should be in (0, pi/2)")
 
 
@@ -977,9 +1008,23 @@ def get_surface_type(surf_type):
 if __name__ == '__main__':
     from tqdm import tqdm
     import time
-    dataset = dataset_compound(sys.argv[1], canonical=True)
+    dataset = dataset_compound(sys.argv[1], canonical=True, detect_closed=True)
     
-
+    total_u_closed = 0
+    total_v_closed = 0
+    total_surfaces = 0
     
     for i in tqdm(range(len(dataset))):
-        _ = dataset[i]
+        params_tensor, types_tensor, mask_tensor, all_shifts, all_rotations, all_scales, is_u_closed_tensor, is_v_closed_tensor = dataset[i]
+        
+        # Only count valid surfaces (where mask == 1)
+        valid_mask = mask_tensor.bool()
+        total_u_closed += is_u_closed_tensor[valid_mask].sum().item()
+        total_v_closed += is_v_closed_tensor[valid_mask].sum().item()
+        total_surfaces += valid_mask.sum().item()
+    
+    print(f"\n{'='*50}")
+    print(f"Total surfaces: {total_surfaces}")
+    print(f"U-closed surfaces: {total_u_closed} ({100 * total_u_closed / total_surfaces:.2f}%)")
+    print(f"V-closed surfaces: {total_v_closed} ({100 * total_v_closed / total_surfaces:.2f}%)")
+    print(f"{'='*50}")

@@ -56,6 +56,8 @@ class Trainer_vae_bspline(BaseTrainer):
         ws_refresh_every: int = 1,
         enable_profiler: bool = False,
         profiler_output_dir: str = './profiler_logs',
+        recon_loss_type: str = 'mse',  # 'mse', 'l1', or 'smooth_l1'
+        smooth_l1_beta: float = 1.0,
         **kwargs
     ):
         super().__init__(
@@ -89,9 +91,22 @@ class Trainer_vae_bspline(BaseTrainer):
         )
         
         self.mse_loss = torch.nn.MSELoss(reduction='none')
+        self.l1_loss = torch.nn.L1Loss(reduction='none')
+        self.smooth_l1_loss = torch.nn.SmoothL1Loss(reduction='none', beta=smooth_l1_beta)
         self.ce_loss = torch.nn.CrossEntropyLoss(reduction='none')
         self.bce_logits_loss = torch.nn.BCEWithLogitsLoss(reduction='none')
         self.kl_loss = torch.nn.KLDivLoss(reduction='batchmean')
+        
+        # Reconstruction loss type configuration
+        self.recon_loss_type = recon_loss_type.lower()
+        assert self.recon_loss_type in ['mse', 'l1', 'smooth_l1'], f"recon_loss_type must be 'mse', 'l1', or 'smooth_l1', got {recon_loss_type}"
+        print(f'Using {self.recon_loss_type} as reconstruction loss function')
+        if self.recon_loss_type == 'smooth_l1':
+            self.recon_loss_fn = self.smooth_l1_loss
+        elif self.recon_loss_type == 'l1':
+            self.recon_loss_fn = self.l1_loss
+        else:
+            self.recon_loss_fn = self.mse_loss
 
 
         self.loss_recon_weight = loss_recon_weight
@@ -264,9 +279,9 @@ class Trainer_vae_bspline(BaseTrainer):
                     mask_u_knots = torch.arange(self.raw_model.max_num_u_knots, device=num_knots_u.device).unsqueeze(0).repeat(num_knots_u.shape[0], 1) < num_knots_u # 1 for valid pos, 0 for invalid
                     mask_v_knots = torch.arange(self.raw_model.max_num_v_knots, device=num_knots_v.device).unsqueeze(0).repeat(num_knots_v.shape[0], 1) < num_knots_v # 1 for valid pos, 0 for invalid
                     
-                    # Knots loss
-                    loss_knots_u = self.mse_loss(pred_knots_u, u_knots_list) # Mean Squared Error Loss for knots
-                    loss_knots_v = self.mse_loss(pred_knots_v, v_knots_list) # Mean Squared Error Loss for knots
+                    # Knots loss (using configured reconstruction loss)
+                    loss_knots_u = self.recon_loss_fn(pred_knots_u, u_knots_list)
+                    loss_knots_v = self.recon_loss_fn(pred_knots_v, v_knots_list)
                     
                     loss_knots_u = (loss_knots_u * mask_u_knots / num_knots_u).sum(dim=-1).mean() # Average over the valid positions
                     loss_knots_v = (loss_knots_v * mask_v_knots / num_knots_v).sum(dim=-1).mean()
@@ -286,8 +301,8 @@ class Trainer_vae_bspline(BaseTrainer):
 
 
 
-                    # Need poles mask
-                    loss_poles = self.mse_loss(pred_poles, poles) # Mean Squared Error Loss for poles
+                    # Need poles mask (using configured reconstruction loss)
+                    loss_poles = self.recon_loss_fn(pred_poles, poles)
                     mask_poles_u = torch.arange(self.raw_model.max_num_u_poles, device=num_poles_u.device).unsqueeze(0).repeat(num_poles_u.shape[0], 1) < num_poles_u # 1 for valid pos, 0 for invalid
                     mask_poles_v = torch.arange(self.raw_model.max_num_v_poles, device=num_poles_v.device).unsqueeze(0).repeat(num_poles_v.shape[0], 1) < num_poles_v # 1 for valid pos, 0 for invalid
                     
@@ -301,9 +316,9 @@ class Trainer_vae_bspline(BaseTrainer):
                     if self.ws_enabled:
                         Bv = mask_poles_4d.shape[0]
                         mask_flat = mask_poles_4d.view(Bv, -1, 1)
-                        mse_all = self.mse_loss(pred_poles, poles)
-                        xyz_flat = mse_all[..., :3].view(Bv, -1, 3)
-                        w_flat = mse_all[..., 3:].view(Bv, -1, 1)
+                        recon_all = self.recon_loss_fn(pred_poles, poles)
+                        xyz_flat = recon_all[..., :3].view(Bv, -1, 3)
+                        w_flat = recon_all[..., 3:].view(Bv, -1, 1)
                         sum_xyz = (xyz_flat * mask_flat).sum(dim=(1, 2))
                         sum_w = (w_flat * mask_flat).sum(dim=(1, 2))
                         den = mask_poles_4d.view(Bv, -1).sum(dim=1).clamp(min=1)
@@ -443,9 +458,9 @@ class Trainer_vae_bspline(BaseTrainer):
                         mask_u_knots = torch.arange(self.raw_model.max_num_u_knots, device=num_knots_u.device).unsqueeze(0).repeat(num_knots_u.shape[0], 1) < num_knots_u # 1 for valid pos, 0 for invalid
                         mask_v_knots = torch.arange(self.raw_model.max_num_v_knots, device=num_knots_v.device).unsqueeze(0).repeat(num_knots_v.shape[0], 1) < num_knots_v # 1 for valid pos, 0 for invalid
                         
-                        # Knots loss
-                        loss_knots_u = self.mse_loss(pred_knots_u, u_knots_list) # Mean Squared Error Loss for knots
-                        loss_knots_v = self.mse_loss(pred_knots_v, v_knots_list) # Mean Squared Error Loss for knots
+                        # Knots loss (using configured reconstruction loss)
+                        loss_knots_u = self.recon_loss_fn(pred_knots_u, u_knots_list)
+                        loss_knots_v = self.recon_loss_fn(pred_knots_v, v_knots_list)
                         
                         loss_knots_u = (loss_knots_u * mask_u_knots / num_knots_u).sum(dim=-1).mean() # Average over the valid positions
                         loss_knots_v = (loss_knots_v * mask_v_knots / num_knots_v).sum(dim=-1).mean()
@@ -465,8 +480,8 @@ class Trainer_vae_bspline(BaseTrainer):
 
 
 
-                        # Need poles mask
-                        loss_poles = self.mse_loss(pred_poles, poles) # Mean Squared Error Loss for poles
+                        # Need poles mask (using configured reconstruction loss)
+                        loss_poles = self.recon_loss_fn(pred_poles, poles)
                         mask_poles_u = torch.arange(self.raw_model.max_num_u_poles, device=num_poles_u.device).unsqueeze(0).repeat(num_poles_u.shape[0], 1) < num_poles_u # 1 for valid pos, 0 for invalid
                         mask_poles_v = torch.arange(self.raw_model.max_num_v_poles, device=num_poles_v.device).unsqueeze(0).repeat(num_poles_v.shape[0], 1) < num_poles_v # 1 for valid pos, 0 for invalid
                         

@@ -40,6 +40,9 @@ elif model_name == "vae_bspline_v5":
 elif model_name == "vae_bspline_v6":
     from src.vae.vae_bspline_v6 import BSplineVAE as BSplineVAE
     print('Use the model: vae_bspline_v6')
+elif model_name == 'vae_bspline_v7':
+    from src.vae.vae_bspline_v7 import BSplineVAE as BSplineVAE
+    print('Use the model: vae_bspline_v7')
 else:
     print('Use the default model: vae_bspline_v1')
     from src.vae.vae_bspline import BSplineVAE as BSplineVAE
@@ -129,6 +132,7 @@ num_train_steps = epochs * num_step_per_epoch
 
 initial_lr = cli_args.resume_lr if args.resume_training and cli_args.resume_lr is not None else args.lr
 
+recon_loss_fn = getattr(args.loss, 'recon_loss_fn', 'mse')
 trainer = Trainer_vae_bspline(
     model,
     dataset=train_dataset,
@@ -168,7 +172,8 @@ trainer = Trainer_vae_bspline(
     ws_eps=getattr(ws_cfg, 'eps', 1e-6) if ws_cfg is not None else 1e-6,
     ws_refresh_every=getattr(ws_cfg, 'refresh_every', 1) if ws_cfg is not None else 1,
     enable_profiler=args.profiler.enable,
-    profiler_output_dir=args.profiler.save_dir
+    profiler_output_dir=args.profiler.save_dir,
+    recon_loss_type=recon_loss_fn,
 )
 
 if args.resume_training and cli_args.resume_lr is not None:
