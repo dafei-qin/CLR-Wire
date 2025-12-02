@@ -92,9 +92,7 @@ class dataset_bspline(Dataset):
         if num_knots_v >= self.max_num_v_knots:
             valid = False
         if self.only_periodic:
-            if not is_u_periodic:
-                valid = False
-            if not is_v_periodic:
+            if not (is_u_periodic or is_v_periodic):
                 valid = False
         return u_degree, v_degree, num_poles_u, num_poles_v, num_knots_u, num_knots_v, is_u_periodic, is_v_periodic, u_knots_list, v_knots_list, u_mults_list, v_mults_list, poles, valid
 

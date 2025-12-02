@@ -21,11 +21,11 @@ wandb_project_name: BSPLINE_VAE_V1
 wandb_run_name: train_1201_bspline_6_only_periodic
 
 data:
-    train_file: ./assets/ram_all_bspline_surfaces.txt
-    train_data_dir_override: "../data/logan_bspline"
+    train_file: ./assets/logan_bspline_only_periodic.txt
+    train_data_dir_override: ""
     train_num: -1
-    val_file: ./assets/ram_all_bspline_test_surfaces.txt
-    val_data_dir_override: "../data/logan_bspline_test"
+    val_file: ./assets/logan_bspline_test_only_periodic.txt
+    val_data_dir_override: ""
     val_num: -1
     only_periodic: true
 
