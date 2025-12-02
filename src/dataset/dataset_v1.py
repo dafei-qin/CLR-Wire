@@ -326,7 +326,7 @@ class dataset_compound(Dataset):
     # Surface type to index mapping
     
     
-    def __init__(self, json_dir: str, max_num_surfaces: int = 500, canonical: bool = False):
+    def __init__(self, json_dir: str, max_num_surfaces: int = 500, canonical: bool = False, detect_closed: bool = False):
         """
         Args:
             json_dir: Path to directory containing JSON files
@@ -355,7 +355,7 @@ class dataset_compound(Dataset):
         
         self.replica = 1
 
-        
+        self.detect_closed = detect_closed
         
         self.postprocess_funcs = {k: build_surface_postpreprocess(v) for k, v in SURFACE_PARAM_SCHEMAS.items()}
         self.preprocess_funcs = {k: build_surface_process(v) for k, v in SURFACE_PARAM_SCHEMAS.items()}
@@ -436,7 +436,7 @@ class dataset_compound(Dataset):
             return torch.from_numpy(mask)
         return mask
     
-    def _parse_surface(self, surface_dict: Dict) -> Tuple[np.ndarray, int]:
+    def _parse_surface(self, surface_dict: Dict, closed_threshold=1e-3) -> Tuple[np.ndarray, int]:
         """
         Parse a single surface from JSON format to parameter vector.
         
@@ -465,6 +465,8 @@ class dataset_compound(Dataset):
         # Extract scalar parameters based on surface type
         scalar_params = []
         u_min, u_max, v_min, v_max = UV
+        is_u_closed = False
+        is_v_closed = False
 
         if surface_type == 'plane':
             # No scalar parameters
@@ -484,7 +486,10 @@ class dataset_compound(Dataset):
             # scalar[0] = radius
             scalar_params = [surface_dict['scalar'][0]]
             if scalar_params[0] < 1e-5: # Radius is too small
-                return None, -1
+                if self.detect_closed:
+                    return None, -1, None, None
+                else:
+                    return None, -1
             P = P + D * v_min
             v_max = v_max - v_min
             v_min = 0
@@ -506,12 +511,17 @@ class dataset_compound(Dataset):
 
             sin_u_center, cos_u_center = np.sin(u_center), np.cos(u_center)
             UV = np.array([sin_u_center, cos_u_center, u_half, v_max, 0, 0, 0, 0], dtype=np.float64) # (8, )
+            if u_diff > 2 * np.pi - closed_threshold:
+                is_u_closed = True
 
         elif surface_type == 'cone':
 
             semi_angle, radius = surface_dict['scalar'][0], surface_dict['scalar'][1]
             if radius < 1e-5:
-                return None, -1
+                if self.detect_closed:
+                    return None, -1, None, None
+                else:
+                    return None, -1
             if not (1e-6 < semi_angle < np.pi/2 - 1e-6):
                 return None, -1
                 # raise ValueError(f"Invalid semi-angle: {semi_angle}, should be in (0, pi/2)")
@@ -531,14 +541,8 @@ class dataset_compound(Dataset):
                 v_max = v_max + delta_v
                 P_min = P + v_min_new * np.cos(semi_angle) * D
                 r_min = radius + v_min_new * np.sin(semi_angle)
-            else:
-                # v_min_new = v_min
-                # v_min_new = 0
-                pass
 
-            # v_min = v_min_new    
-            # v_max = v_max - v_min
-
+    
             P = P_min
             radius = max(r_min, r_min_thresh)
 
@@ -564,6 +568,9 @@ class dataset_compound(Dataset):
 
             UV = [sin_u_center, cos_u_center, u_half, v_center, v_half, 0, 0, 0] # (8, )
             scalar_params = [semi_angle / (np.pi/2), radius]
+
+            if u_diff > 2 * np.pi - closed_threshold:
+                is_u_closed = True
             
 
         elif surface_type == 'sphere':
@@ -585,7 +592,10 @@ class dataset_compound(Dataset):
 
             scalar_params = [surface_dict['scalar'][0]]
             if scalar_params[0] < 1e-5:
-                return None, -1
+                if self.detect_closed:
+                    return None, -1, None, None
+                else:
+                    return None, -1
 
             u_center = 0.5 * (u_min + u_max)
             v_center = 0.5 * (v_min + v_max)
@@ -606,12 +616,21 @@ class dataset_compound(Dataset):
 
             UV = np.concatenate([dir_vec, [u_h_norm, v_h_norm, 0, 0, 0]])
 
+            if u_diff > 2 * np.pi - closed_threshold:
+                is_u_closed = True
+
+            if v_diff > np.pi - closed_threshold:
+                is_v_closed = True
+
 
         elif surface_type == 'torus':
             # scalar[0] = major_radius, scalar[1] = minor_radius
             scalar_params = [surface_dict['scalar'][0], surface_dict['scalar'][1]]
             if scalar_params[0] < 1e-5 or scalar_params[1] < 1e-5:
-                return None, -1
+                if self.detect_closed:
+                    return None, -1, None, None
+                else:
+                    return None, -1
 
             # 1. guarantee u_min is positive
             if u_min < 0 - 1e-6:
@@ -640,21 +659,19 @@ class dataset_compound(Dataset):
             v_diff = v_max - v_min
             v_half = 0.5 * (v_diff)
 
-            ic('u_center: ', u_center, 'v_center: ', v_center, 'u_diff: ', u_diff, 'v_diff: ', v_diff)
+            # ic('u_center: ', u_center, 'v_center: ', v_center, 'u_diff: ', u_diff, 'v_diff: ', v_diff)
             sin_u_center, cos_u_center = np.sin(u_center), np.cos(u_center)
             sin_v_center, cos_v_center = np.sin(v_center), np.cos(v_center)
 
             c, s = np.cos(-u_center), np.sin(-u_center)
 
-            # Rz = np.array([[c, -s, 0],
-            #             [s,  c, 0],
-            #             [0,  0, 1]], dtype=np.float64)
-
-            # X_new = Rz @ (X / np.linalg.norm(X))
-            # X = X_new
-
 
             UV = np.array([sin_u_center, cos_u_center, u_half / np.pi, sin_v_center, cos_v_center, v_half / np.pi, 0, 0], dtype=np.float64)
+
+            if u_diff > 2 * np.pi - closed_threshold:
+                is_u_closed = True
+            if v_diff > np.pi - closed_threshold:
+                is_v_closed = True
 
 
         elif surface_type == 'bspline_surface':
@@ -672,12 +689,19 @@ class dataset_compound(Dataset):
         params = np.concatenate([P, D, X, UV, scalar_params])
         # Just control the max value of params to be 10
         if np.max(np.abs(params)) > 10:
-            return None, -1
+            if self.detect_closed:
+                return None, -1, None, None
+            else:
+                return None, -1
         assert np.allclose(params, self.postprocess_funcs[surface_type](self.preprocess_funcs[surface_type](params))), f"type: {surface_type}, params: {params}, postprocess: {self.postprocess_funcs[surface_type](self.preprocess_funcs[surface_type](params))}"
         # Do the log processing of radius
         params = self.preprocess_funcs[surface_type](params)
         assert len(params) == self.base_dim + SCALAR_DIM_MAP[surface_type], f"surface {surface_type} params length {len(params)} != base_dim {self.base_dim}"
-        return params.astype(np.float32), surface_type_idx
+
+        if self.detect_closed:
+            return params.astype(np.float32), surface_type_idx, is_u_closed, is_v_closed
+        else:
+            return params.astype(np.float32), surface_type_idx
     
 
     def _recover_surface(self, params, surface_type_idx):
@@ -823,6 +847,8 @@ class dataset_compound(Dataset):
         all_shifts = np.zeros((self.max_num_surfaces, 3), dtype=np.float64)
         all_rotations = np.zeros((self.max_num_surfaces, 3, 3), dtype=np.float64)
         all_scales = np.zeros(self.max_num_surfaces, dtype=np.float64)
+        all_is_u_closed = np.zeros(self.max_num_surfaces, dtype=bool)
+        all_is_v_closed = np.zeros(self.max_num_surfaces, dtype=bool)
         mask = np.zeros(self.max_num_surfaces, dtype=np.float64)
 
 
@@ -842,8 +868,7 @@ class dataset_compound(Dataset):
             # print(i)
             if i >= self.max_num_surfaces:
                 break
-            if i == 35:
-                print()
+
             try:
                 # Catch RuntimeWarnings (overflow, invalid value) and convert to exceptions
                 with warnings.catch_warnings():
@@ -851,7 +876,10 @@ class dataset_compound(Dataset):
                     # print(surface_dict)
                     # if i == 6:
                     #     print()
-                    params, surface_type_idx = self._parse_surface(surface_dict)
+                    if self.detect_closed:
+                        params, surface_type_idx, is_u_closed, is_v_closed = self._parse_surface(surface_dict)
+                    else:
+                        params, surface_type_idx = self._parse_surface(surface_dict)
 
                     # Transform to canonical space.
 
@@ -859,7 +887,10 @@ class dataset_compound(Dataset):
                         surface_str = self._recover_surface(params, surface_type_idx)
                         # print(i, params[9:])
                         surface_canonical, shift, rotation, scale = to_canonical(surface_str)
-                        params, surface_type_idx = self._parse_surface(surface_canonical)
+                        if self.detect_closed:
+                            params, surface_type_idx, is_u_closed, is_v_closed = self._parse_surface(surface_canonical)
+                        else:
+                            params, surface_type_idx = self._parse_surface(surface_canonical)
  
                     else:
                         shift = np.zeros(3, dtype=np.float64)
@@ -877,6 +908,9 @@ class dataset_compound(Dataset):
                         all_shifts[i, :] = shift
                         all_rotations[i, :, :] = rotation
                         all_scales[i] = scale
+                        if self.detect_closed:
+                            all_is_u_closed[i] = is_u_closed
+                            all_is_v_closed[i] = is_v_closed
                         mask[i] = 1.0
             except (KeyError, IndexError, NotImplementedError, RuntimeWarning) as e:
                 # Skip invalid surfaces (leave as zeros with mask=0)
@@ -888,6 +922,9 @@ class dataset_compound(Dataset):
         params_tensor = torch.from_numpy(all_params).float() 
         types_tensor = torch.from_numpy(all_types).long()
         mask_tensor = torch.from_numpy(mask).float()
+        if self.detect_closed:
+            is_u_closed_tensor = torch.from_numpy(all_is_u_closed).bool()
+            is_v_closed_tensor = torch.from_numpy(all_is_v_closed).bool()
         
         if params_tensor.abs().max() > 10:
             pos = torch.argmax(params_tensor.abs())
@@ -900,7 +937,11 @@ class dataset_compound(Dataset):
                 f.write(','.join(to_save) + '\n')
         
             mask_tensor[torch.where(params_tensor.abs() > 10)[0].unique()] = 0
-        return params_tensor, types_tensor, mask_tensor, all_shifts, all_rotations, all_scales
+
+        if self.detect_closed:
+            return params_tensor, types_tensor, mask_tensor, all_shifts, all_rotations, all_scales, is_u_closed_tensor, is_v_closed_tensor
+        else:
+            return params_tensor, types_tensor, mask_tensor, all_shifts, all_rotations, all_scales
     
     def get_file_info(self, idx: int) -> Dict:
         """

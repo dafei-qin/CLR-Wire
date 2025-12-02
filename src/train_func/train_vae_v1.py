@@ -6,7 +6,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from argparse import ArgumentParser
 from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 
-from src.vae.vae_v1 import SurfaceVAE 
 from src.dataset.dataset_v1 import  dataset_compound, dataset_compound_cache
 from src.trainer.trainer_vae_v1 import Trainer_vae_v1 
 from src.utils.config import NestedDictToClass, load_config
@@ -34,25 +33,27 @@ if transform is None:
     transform = None
 
 
-if args.data.use_weighted_sampling:
-    print('use weighted sampling')
-    assert args.data.use_cache == True
-    weight_list = np.load(args.data.weight_path)
-    train_sampler = WeightedRandomSampler(
-        weights=weight_list,
-        num_samples=len(weight_list),   # 每 epoch 采样次数
-        replacement=True                   # 必须为 True 才能根据 weight 抽样
-    )
-else:
-    train_sampler = None
-if args.data.use_cache:
+
+train_sampler = None
+use_cache = getattr(args.data, 'use_cache', False)
+if use_cache:
     print('load cache from ', args.data.cache_path)
     assert args.data.cache_path != ''
     train_dataset = dataset_compound_cache(cache_path=args.data.cache_path)
 else:
-    train_dataset = dataset_compound(json_dir=args.data.train_json_dir, max_num_surfaces=args.data.max_num_surfaces, canonical=args.data.canonical)
+    train_dataset = dataset_compound(json_dir=args.data.train_json_dir, max_num_surfaces=args.data.max_num_surfaces, canonical=args.data.canonical, detect_closed=args.model.pred_is_closed)
 
-val_dataset = dataset_compound(json_dir=args.data.val_json_dir, max_num_surfaces=args.data.max_num_surfaces, canonical=args.data.canonical)
+val_dataset = dataset_compound(json_dir=args.data.val_json_dir, max_num_surfaces=args.data.max_num_surfaces, canonical=args.data.canonical, detect_closed=args.model.pred_is_closed)
+
+model_name = getattr(args.model, 'name', 'vae_v1')
+
+if model_name == 'vae_v2':
+    from src.vae.vae_v2 import SurfaceVAE 
+    print('Use the model: vae_v2')
+else:
+    from src.vae.vae_v1 import SurfaceVAE 
+    print('Use the model: vae_v1')
+
 
 model = SurfaceVAE(
     param_raw_dim=args.model.param_raw_dim,
@@ -78,6 +79,8 @@ trainer = Trainer_vae_v1(
     loss_cls_weight=args.loss.cls_weight,
     loss_kl_weight=args.loss.kl_weight,
     loss_l2norm_weight=args.loss.l2norm_weight,
+    loss_is_closed_weight=args.loss.is_closed_weight,
+    pred_is_closed=args.model.pred_is_closed,
     kl_annealing_steps=getattr(args.loss, 'kl_annealing_steps', 0),
     kl_free_bits=getattr(args.loss, 'kl_free_bits', 0.0),
     grad_accum_every=args.grad_accum_every,

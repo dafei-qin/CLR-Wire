@@ -89,14 +89,19 @@ class IndexedDataset(torch.utils.data.Dataset):
         return (*sample[:-1], torch.tensor(base_idx, dtype=torch.long), sample[-1])
 
 
+only_periodic = getattr(args.data, 'only_periodic', False)
+
+
 train_dataset_raw = dataset_bspline(
     path_file=args.data.train_file, data_dir_override=args.data.train_data_dir_override, num_surfaces=args.data.train_num,
-    max_num_u_knots=args.model.max_num_u_knots, max_num_v_knots=args.model.max_num_v_knots, max_num_u_poles=args.model.max_num_u_poles, max_num_v_poles=args.model.max_num_v_poles
+    max_num_u_knots=args.model.max_num_u_knots, max_num_v_knots=args.model.max_num_v_knots, max_num_u_poles=args.model.max_num_u_poles, max_num_v_poles=args.model.max_num_v_poles,
+    only_periodic=only_periodic
     )
 
 val_dataset = dataset_bspline(
     path_file=args.data.val_file, data_dir_override=args.data.val_data_dir_override, num_surfaces=args.data.val_num,
-    max_num_u_knots=args.model.max_num_u_knots, max_num_v_knots=args.model.max_num_v_knots, max_num_u_poles=args.model.max_num_u_poles, max_num_v_poles=args.model.max_num_v_poles
+    max_num_u_knots=args.model.max_num_u_knots, max_num_v_knots=args.model.max_num_v_knots, max_num_u_poles=args.model.max_num_u_poles, max_num_v_poles=args.model.max_num_v_poles,
+    only_periodic=only_periodic
     )
 
 # weighted sampling config (optional)
