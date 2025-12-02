@@ -18,7 +18,7 @@ log_every_step: 50
 
 use_wandb_tracking: true
 wandb_project_name: BSPLINE_VAE_V1
-wandb_run_name: train_1201_bspline_6_only_periodic
+wandb_run_name: train_1201_bspline_6_enable_logvar
 
 data:
     train_file: ./assets/ram_all_bspline_surfaces.txt
@@ -27,14 +27,14 @@ data:
     val_file: ./assets/ram_all_bspline_test_surfaces.txt
     val_data_dir_override: ""
     val_num: -1
-    only_periodic: true
+    only_periodic: false
 
 trainer:
     use_logvar: true
 
 profiler:
     enable: true
-    save_dir: checkpoints/train_1201_bspline_6_only_periodic/profiler
+    save_dir: checkpoints/train_1201_bspline_6_enable_logvar/profiler
 model:
     name: vae_bspline_v6
     trainer_name: vae_bspline_v2
@@ -44,7 +44,7 @@ model:
     max_num_v_knots: 32
     max_num_u_poles: 64
     max_num_v_poles: 32
-    checkpoint_folder: checkpoints/train_1201_bspline_6_only_periodic
+    checkpoint_folder: checkpoints/train_1201_bspline_6_enable_logvar
     checkpoint_file_name: model-20.pt
 
 
