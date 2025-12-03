@@ -164,6 +164,10 @@ _gen_surfaces = {}
 _pred_is_closed = False
 _show_closed_colors = True  # Toggle for showing is_closed coloring
 _vae_model_name = 'vae_v1'  # VAE model name
+# Custom surface count control
+_use_custom_num_surfaces = False  # Whether to use custom surface count
+_custom_num_surfaces = 20  # User-specified surface count (15-32)
+_default_num_surfaces = 20  # Default value from GT mask
 
 # Surface type mapping
 SURFACE_TYPE_MAP_INV = {
@@ -456,7 +460,7 @@ def decode_sample(sample: torch.Tensor):
 
 def process_index(idx: int, num_inference_steps: int, use_gt_mask=False):
     """Process a single index: load GT, sample point cloud, run inference."""
-    global _dataset, _pipe, _gt_pc, _vae, _pred_is_closed
+    global _dataset, _pipe, _gt_pc, _vae, _pred_is_closed, _use_custom_num_surfaces, _custom_num_surfaces
     
     device = next(_pipe.denoiser.parameters()).device
     
@@ -467,6 +471,14 @@ def process_index(idx: int, num_inference_steps: int, use_gt_mask=False):
 
     params_padded, rotations_padded, scales_padded, shifts_padded, surface_type, bbox_mins, bbox_maxs, masks, pc_cond = forward_args
 
+    # Build custom mask if enabled
+    if _use_custom_num_surfaces:
+        batch_size = masks.shape[0]
+        max_num_surfaces = masks.shape[1]
+        custom_mask = torch.zeros(batch_size, max_num_surfaces, device=device, dtype=masks.dtype)
+        num_surfaces = min(_custom_num_surfaces, max_num_surfaces)
+        custom_mask[:, :num_surfaces] = 1
+        masks = custom_mask
     
     masks = masks.unsqueeze(-1)
     # print(scales_padded)
@@ -576,10 +588,24 @@ def update_visualization():
     """Update the visualization with current index"""
     global _current_idx, _gen_group, _gt_group, _gen_pc, _num_inference_steps
     global _gt_surfaces, _gen_surfaces, _show_gt, _show_gen
-    global _pred_is_closed, _show_closed_colors
+    global _pred_is_closed, _show_closed_colors, _default_num_surfaces, _dataset
+    global _use_custom_num_surfaces, _custom_num_surfaces
     
     if not _ps_initialized:
         return
+    
+    # Update default num_surfaces from GT mask
+    if _dataset is not None:
+        try:
+            forward_args = _dataset[_current_idx]
+            masks = forward_args[7]  # masks is the 8th element (0-indexed)
+            gt_mask_count = int(masks.sum().item())
+            _default_num_surfaces = gt_mask_count
+            # If not using custom, update custom_num_surfaces to match default
+            if not _use_custom_num_surfaces:
+                _custom_num_surfaces = _default_num_surfaces
+        except Exception as e:
+            print(f"Warning: Could not get GT mask count: {e}")
     
     # Clear existing structures
     reset_scene()
@@ -656,6 +682,7 @@ def callback():
     global _current_idx, _max_idx, _num_inference_steps
     global _show_gt, _show_gen, _gt_group, _gen_group
     global _use_train_dataset, _dataset_train, _dataset_val
+    global _show_closed_colors, _use_custom_num_surfaces, _custom_num_surfaces, _default_num_surfaces
     
     psim.Text("DiT Simple Surface Inference")
     psim.Separator()
@@ -709,6 +736,26 @@ def callback():
     
     psim.Separator()
     psim.Text(f"Inference Steps: {_num_inference_steps}")
+    
+    # Surface count control
+    psim.Separator()
+    psim.Text("Surface Count Control:")
+    psim.Text(f"Default (GT): {_default_num_surfaces}")
+    
+    changed_use_custom, _use_custom_num_surfaces = psim.Checkbox("Use Custom Surface Count", _use_custom_num_surfaces)
+    
+    if _use_custom_num_surfaces:
+        input_changed, new_count = psim.InputInt("Surface Count (15-32)", _custom_num_surfaces)
+        if input_changed:
+            # Clamp to valid range
+            _custom_num_surfaces = max(15, min(32, new_count))
+        if input_changed or changed_use_custom:
+            update_visualization()
+    else:
+        if changed_use_custom:
+            # Reset to default when disabling custom
+            _custom_num_surfaces = _default_num_surfaces
+            update_visualization()
     
     # Group visibility controls
     if _gt_group is not None and _gen_group is not None:

@@ -232,7 +232,3 @@ if __name__ == '__main__':
         print("\nTesting first sample:")
         for i in tqdm(range(len(dataset))):
             latent_params, rotations, scales, shifts, classes, bbox_mins, bbox_maxs, mask, pc = dataset[i]
-
-
-        
-    # Test LatentDatasetFlat
