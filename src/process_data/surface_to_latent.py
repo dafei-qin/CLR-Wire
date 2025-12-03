@@ -25,13 +25,34 @@ ic.disable()
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from src.dataset.dataset_v1 import dataset_compound, SURFACE_TYPE_MAP
-from src.vae.vae_v1 import SurfaceVAE
 from src.tools.sample_simple_surface import sample_surface_uniform
 from src.utils.json_tools import check_contain_surface
+from src.utils.config import NestedDictToClass, load_config
 
 
-def load_model(checkpoint_path, device='cpu'):
-    """Load the VAE model from checkpoint"""
+def load_model(checkpoint_path, model_name='vae_v1', pred_is_closed=False, device='cpu'):
+    """Load the VAE model from checkpoint
+    
+    Args:
+        checkpoint_path: Path to the model checkpoint
+        model_name: Name of the model ('vae_v1' or 'vae_v2')
+        pred_is_closed: Whether the model predicts is_closed (only for vae_v2)
+        device: Device to load model on
+        
+    Returns:
+        Loaded model in eval mode
+    """
+    # Import the correct model class
+    if model_name == 'vae_v2':
+        from src.vae.vae_v2 import SurfaceVAE
+        print(f"Loading model: vae_v2 (pred_is_closed={pred_is_closed})")
+    else:
+        from src.vae.vae_v1 import SurfaceVAE
+        print(f"Loading model: vae_v1")
+        if pred_is_closed:
+            print("Warning: vae_v1 does not support pred_is_closed, ignoring this setting")
+            pred_is_closed = False
+    
     # Initialize model with the correct parameter dimensions
     model = SurfaceVAE(param_raw_dim=[17, 18, 19, 18, 19])
     
@@ -53,7 +74,7 @@ def load_model(checkpoint_path, device='cpu'):
     
     model.to(device)
     model.eval()
-    return model
+    return model, pred_is_closed
 
 
 def compute_bounding_box(points):
@@ -106,7 +127,8 @@ def sample_and_compute_bbox(params, surface_type_idx, num_u=8, num_v=8):
         return np.zeros(3), np.zeros(3)
 
 
-def sort_by_bbox(latent_params, rotations, scales, shifts, classes, bbox_mins, bbox_maxs):
+def sort_by_bbox(latent_params, rotations, scales, shifts, classes, bbox_mins, bbox_maxs, 
+                 is_u_closed=None, is_v_closed=None):
     """
     Sort all data by bounding box minimum coordinates.
     Priority: x > y > z (first sort by x, then by y, then by z)
@@ -119,6 +141,8 @@ def sort_by_bbox(latent_params, rotations, scales, shifts, classes, bbox_mins, b
         classes: (N, 1) array
         bbox_mins: (N, 3) array of bbox minimum coordinates
         bbox_maxs: (N, 3) array of bbox maximum coordinates
+        is_u_closed: (N,) array of U-direction closure flags (optional)
+        is_v_closed: (N,) array of V-direction closure flags (optional)
         
     Returns:
         All arrays sorted by bbox_mins with priority x > y > z
@@ -136,6 +160,14 @@ def sort_by_bbox(latent_params, rotations, scales, shifts, classes, bbox_mins, b
     bbox_mins_sorted = bbox_mins[sort_indices]
     bbox_maxs_sorted = bbox_maxs[sort_indices]
     
+    # Sort is_closed arrays if provided
+    is_u_closed_sorted = None
+    is_v_closed_sorted = None
+    if is_u_closed is not None:
+        is_u_closed_sorted = is_u_closed[sort_indices]
+    if is_v_closed is not None:
+        is_v_closed_sorted = is_v_closed[sort_indices]
+    
     return (
         latent_params_sorted,
         rotations_sorted,
@@ -143,13 +175,16 @@ def sort_by_bbox(latent_params, rotations, scales, shifts, classes, bbox_mins, b
         shifts_sorted,
         classes_sorted,
         bbox_mins_sorted,
-        bbox_maxs_sorted
+        bbox_maxs_sorted,
+        is_u_closed_sorted,
+        is_v_closed_sorted
     )
 
 
 def process_sample(model, dataset, params_tensor, types_tensor, mask_tensor, 
                    all_shifts, all_rotations, all_scales, 
-                   params_tensor_original=None, device='cpu'):
+                   is_u_closed_tensor=None, is_v_closed_tensor=None,
+                   params_tensor_original=None, pred_is_closed=False, device='cpu'):
     """
     Process a single sample and extract latent representations.
     Also decode to check reconstruction accuracy.
@@ -165,7 +200,10 @@ def process_sample(model, dataset, params_tensor, types_tensor, mask_tensor,
         all_shifts: Shift vectors (max_num_surfaces, 3)
         all_rotations: Rotation matrices (max_num_surfaces, 3, 3)
         all_scales: Scale values (max_num_surfaces,)
+        is_u_closed_tensor: U-direction closure flags (max_num_surfaces,) or None
+        is_v_closed_tensor: V-direction closure flags (max_num_surfaces,) or None
         params_tensor_original: Original space parameters for bbox computation (if None, use params_tensor)
+        pred_is_closed: Whether model predicts is_closed
         device: Device to run inference on
         
     Returns:
@@ -175,10 +213,13 @@ def process_sample(model, dataset, params_tensor, types_tensor, mask_tensor,
         - scales: (num_valid_surfaces, 1)
         - shifts: (num_valid_surfaces, 3)
         - classes: (num_valid_surfaces, 1)
+        - is_u_closed: (num_valid_surfaces,) - U-direction closure flags (if pred_is_closed)
+        - is_v_closed: (num_valid_surfaces,) - V-direction closure flags (if pred_is_closed)
         - bbox_mins: (num_valid_surfaces, 3) - minimum coordinates of bounding boxes (in original space)
         - bbox_maxs: (num_valid_surfaces, 3) - maximum coordinates of bounding boxes (in original space)
         - cls_acc: classification accuracy (float)
         - params_mse: mean squared error of reconstructed parameters (float)
+        - is_closed_acc: is_closed accuracy (float, if pred_is_closed)
     """
     # Get valid surfaces based on mask
     valid_mask = mask_tensor.bool()
@@ -187,6 +228,13 @@ def process_sample(model, dataset, params_tensor, types_tensor, mask_tensor,
     valid_shifts = all_shifts[valid_mask]
     valid_rotations = all_rotations[valid_mask]
     valid_scales = all_scales[valid_mask]
+    
+    # Handle is_closed tensors if present
+    valid_is_u_closed = None
+    valid_is_v_closed = None
+    if pred_is_closed and is_u_closed_tensor is not None and is_v_closed_tensor is not None:
+        valid_is_u_closed = is_u_closed_tensor[valid_mask]
+        valid_is_v_closed = is_v_closed_tensor[valid_mask]
     
     # Ensure all tensors are torch tensors (in case they are numpy arrays)
     if not isinstance(valid_shifts, torch.Tensor):
@@ -201,13 +249,30 @@ def process_sample(model, dataset, params_tensor, types_tensor, mask_tensor,
     valid_types = valid_types.to(device)
     
     # Encode to latent space
+    is_closed_acc = None
+    pred_is_u_closed_np = None
+    pred_is_v_closed_np = None
+    
     with torch.no_grad():
         mu, logvar = model.encode(valid_params, valid_types)
         # Use mean (mu) as the latent representation for deterministic encoding
         latent = mu
         
         # Classify and decode to check reconstruction accuracy
-        type_logits_pred, types_pred = model.classify(latent)
+        if pred_is_closed:
+            type_logits_pred, types_pred, is_closed_logits, is_closed_pred = model.classify(latent)
+            # is_closed_pred shape: [batch, 2], where [:, 0] is u_closed, [:, 1] is v_closed
+            pred_is_u_closed_np = is_closed_pred[:, 0].cpu().numpy()
+            pred_is_v_closed_np = is_closed_pred[:, 1].cpu().numpy()
+            
+            # Calculate is_closed accuracy if ground truth is available
+            if valid_is_u_closed is not None:
+                is_closed_gt = torch.stack([valid_is_u_closed, valid_is_v_closed], dim=-1).bool().to(device)
+                is_closed_correct = (is_closed_pred.cpu() == is_closed_gt.cpu()).float()
+                is_closed_acc = is_closed_correct.mean().item()
+        else:
+            type_logits_pred, types_pred = model.classify(latent)
+        
         params_recon, recon_mask = model.decode(latent, valid_types)
         
         # Calculate classification accuracy
@@ -276,7 +341,9 @@ def process_sample(model, dataset, params_tensor, types_tensor, mask_tensor,
         shifts_sorted,
         classes_sorted,
         bbox_mins_sorted,
-        bbox_maxs_sorted
+        bbox_maxs_sorted,
+        is_u_closed_sorted,
+        is_v_closed_sorted
     ) = sort_by_bbox(
         latent_params_np,
         rotations_np,
@@ -284,11 +351,13 @@ def process_sample(model, dataset, params_tensor, types_tensor, mask_tensor,
         shifts_np,
         classes_np,
         bbox_mins,
-        bbox_maxs
+        bbox_maxs,
+        is_u_closed=pred_is_u_closed_np,
+        is_v_closed=pred_is_v_closed_np
     )
     
-    # Return sorted data
-    return {
+    # Build return dictionary
+    result = {
         'latent_params': latent_params_sorted,
         'rotations': rotations_sorted,
         'scales': scales_sorted,
@@ -299,6 +368,15 @@ def process_sample(model, dataset, params_tensor, types_tensor, mask_tensor,
         'cls_acc': cls_acc,
         'params_mse': params_mse
     }
+    
+    # Add is_closed data if present
+    if pred_is_closed and is_u_closed_sorted is not None:
+        result['is_u_closed'] = is_u_closed_sorted
+        result['is_v_closed'] = is_v_closed_sorted
+        if is_closed_acc is not None:
+            result['is_closed_acc'] = is_closed_acc
+    
+    return result
 
 
 def get_output_path(input_json_path, input_root, output_root):
@@ -349,6 +427,12 @@ def main():
         help='Output directory for npz files (will maintain same subdirectory structure)'
     )
     parser.add_argument(
+        '--config',
+        type=str,
+        default='',
+        help='Path to config file (optional, to read model settings)'
+    )
+    parser.add_argument(
         '--device',
         type=str,
         default='cpu',
@@ -385,6 +469,22 @@ def main():
     )
     
     args = parser.parse_args()
+    
+    # Load model settings from config file if provided
+    model_name = 'vae_v1'
+    pred_is_closed = False
+    if args.config:
+        try:
+            cfg = load_config(args.config)
+            config_args = NestedDictToClass(cfg)
+            model_name = getattr(config_args.model, 'name', 'vae_v1')
+            pred_is_closed = getattr(config_args.model, 'pred_is_closed', False)
+            print(f"Loaded from config: model_name={model_name}, pred_is_closed={pred_is_closed}")
+        except Exception as e:
+            print(f"Warning: Could not load config file: {e}")
+            print("Using default settings: model_name=vae_v1, pred_is_closed=False")
+    else:
+        print("No config file provided, using default settings: model_name=vae_v1, pred_is_closed=False")
     
     # Check if CUDA is available and validate device
     if args.device.startswith('cuda'):
@@ -425,7 +525,7 @@ def main():
     
     # Load dataset
     print(f"Loading dataset from: {args.input_dir}")
-    dataset = dataset_compound(args.input_dir, canonical=args.canonical)
+    dataset = dataset_compound(args.input_dir, canonical=args.canonical, detect_closed=pred_is_closed)
     print(f"Found {len(dataset)} samples")
     
     # If using canonical space, also create a dataset for original space (for bbox computation)
@@ -437,7 +537,7 @@ def main():
         print("  - Bbox computation: using original space (actual positions)")
         print("  Loading original (non-canonical) dataset for bbox computation...")
         print("="*80 + "\n")
-        dataset_original = dataset_compound(args.input_dir, canonical=False)
+        dataset_original = dataset_compound(args.input_dir, canonical=False, detect_closed=pred_is_closed)
     else:
         print("\n" + "="*80)
         print("NON-CANONICAL MODE:")
@@ -446,7 +546,8 @@ def main():
     
     # Load model
     print(f"Loading model from: {args.checkpoint_path}")
-    model = load_model(args.checkpoint_path, device=args.device)
+    model, pred_is_closed = load_model(args.checkpoint_path, model_name=model_name, 
+                                       pred_is_closed=pred_is_closed, device=args.device)
     
     # Create output directory
     output_root = Path(args.output_dir)
@@ -468,6 +569,7 @@ def main():
     # Statistics tracking
     all_cls_acc = []
     all_params_mse = []
+    all_is_closed_acc = []
     
     for idx in tqdm(range(len(dataset)), desc="Converting to latent"):
         json_path = dataset.json_names[idx]
@@ -504,7 +606,12 @@ def main():
         
         try:
             # Get data from dataset (canonical space if args.canonical=True)
-            params_tensor, types_tensor, mask_tensor, all_shifts, all_rotations, all_scales = dataset[idx]
+            if pred_is_closed:
+                params_tensor, types_tensor, mask_tensor, all_shifts, all_rotations, all_scales, is_u_closed_tensor, is_v_closed_tensor = dataset[idx]
+            else:
+                params_tensor, types_tensor, mask_tensor, all_shifts, all_rotations, all_scales = dataset[idx]
+                is_u_closed_tensor = None
+                is_v_closed_tensor = None
             
             # Check if there are any valid surfaces
             num_valid = mask_tensor.sum().item()
@@ -514,20 +621,30 @@ def main():
             
             # If using canonical space, also load original space parameters for bbox computation
             params_tensor_original = None
+            is_u_closed_original = None
+            is_v_closed_original = None
             if dataset_original is not None:
-                params_tensor_original, _, _, _, _, _ = dataset_original[idx]
+                if pred_is_closed:
+                    params_tensor_original, _, _, _, _, _, is_u_closed_original, is_v_closed_original = dataset_original[idx]
+                else:
+                    params_tensor_original, _, _, _, _, _ = dataset_original[idx]
             
             # Process sample
             result = process_sample(
                 model, dataset, params_tensor, types_tensor, mask_tensor,
                 all_shifts, all_rotations, all_scales,
+                is_u_closed_tensor=is_u_closed_tensor,
+                is_v_closed_tensor=is_v_closed_tensor,
                 params_tensor_original=params_tensor_original,
+                pred_is_closed=pred_is_closed,
                 device=args.device
             )
             
             # Track reconstruction metrics
             all_cls_acc.append(result['cls_acc'])
             all_params_mse.append(result['params_mse'])
+            if 'is_closed_acc' in result:
+                all_is_closed_acc.append(result['is_closed_acc'])
             
             # Get output path
             input_json_path = dataset.json_names[idx]
@@ -536,17 +653,24 @@ def main():
             # Create output directory if it doesn't exist
             output_path.parent.mkdir(parents=True, exist_ok=True)
             
-            # Save to npz file (excluding metrics, including bounding boxes)
-            np.savez_compressed(
-                output_path,
-                latent_params=result['latent_params'],
-                rotations=result['rotations'],
-                scales=result['scales'],
-                shifts=result['shifts'],
-                classes=result['classes'],
-                bbox_mins=result['bbox_mins'],
-                bbox_maxs=result['bbox_maxs']
-            )
+            # Prepare data for saving
+            save_data = {
+                'latent_params': result['latent_params'],
+                'rotations': result['rotations'],
+                'scales': result['scales'],
+                'shifts': result['shifts'],
+                'classes': result['classes'],
+                'bbox_mins': result['bbox_mins'],
+                'bbox_maxs': result['bbox_maxs']
+            }
+            
+            # Add is_closed data if present
+            if pred_is_closed and 'is_u_closed' in result:
+                save_data['is_u_closed'] = result['is_u_closed']
+                save_data['is_v_closed'] = result['is_v_closed']
+            
+            # Save to npz file
+            np.savez_compressed(output_path, **save_data)
             
         except Exception as e:
             print(f"\nError processing sample {idx} ({dataset.json_names[idx]}): {e}")
@@ -576,6 +700,9 @@ def main():
         print(f"  Average Parameters MSE: {np.mean(all_params_mse):.6f} (±{np.std(all_params_mse):.6f})")
         print(f"  Min/Max Classification Accuracy: {np.min(all_cls_acc):.4f} / {np.max(all_cls_acc):.4f}")
         print(f"  Min/Max Parameters MSE: {np.min(all_params_mse):.6f} / {np.max(all_params_mse):.6f}")
+        if all_is_closed_acc:
+            print(f"  Average is_closed Accuracy: {np.mean(all_is_closed_acc):.4f} (±{np.std(all_is_closed_acc):.4f})")
+            print(f"  Min/Max is_closed Accuracy: {np.min(all_is_closed_acc):.4f} / {np.max(all_is_closed_acc):.4f}")
         print("-"*80)
     
     if failed_samples:
