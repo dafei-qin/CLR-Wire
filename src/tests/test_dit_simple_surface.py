@@ -461,6 +461,7 @@ def process_index(idx: int, num_inference_steps: int, use_gt_mask=False):
     device = next(_pipe.denoiser.parameters()).device
     
     forward_args = _dataset[idx]
+    print('processing data: ', _dataset.latent_files[idx])
     forward_args = [_.to(device).unsqueeze(0) for _ in forward_args]
     
     # Check if dataset returns is_closed data
