@@ -27,9 +27,10 @@ print(f"Use logvar: {use_logvar}")
 
 model_name = args.model.name
 
-if model_name == 'dit_simple':
-    from src.dit.simple_surface_decoder import SimpleSurfaceDecoder as Model
-    print('Use the model: dit_simple')
+
+if model_name == 'dit_v2':
+    from src.dit.simple_surface_decoder_v2 import SimpleSurfaceDecoder as Model
+    print('Use the model: dit_v2')
 else:
     print('Use the default model: dit_simple')
     from src.dit.simple_surface_decoder import SimpleSurfaceDecoder as Model
@@ -93,6 +94,8 @@ val_dataset = LatentDataset(
     replica=args.data.replica_val
     )
 
+if len(train_dataset_raw.latent_files) == 1:
+    print(f'Overfitting with {len(train_dataset_raw.latent_files)} data:\n {train_dataset_raw.latent_files[0]}')
 # weighted sampling config (optional)
 ws_cfg = getattr(args.data, 'weighted_sampling', None)
 ws_enabled = False

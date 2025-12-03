@@ -1,0 +1,59 @@
+resume_training: false
+from_start: false
+
+epochs: 11000
+batch_size: 64
+lr: 0.0001
+num_workers: 4
+num_gpus: 8
+
+grad_accum_every: 1
+ema_update_every: 10
+max_grad_norm: 1.0
+
+val_every_epoch: 1000
+save_every_epoch: 2500
+log_every_step: 50
+
+use_wandb_tracking: true
+wandb_project_name: DIT_SIMPLE
+wandb_run_name: train_1203_dit_v2_overfit
+
+data:
+    train_latent_dir: ../data/logan_jsons_latent_1126/abc
+    train_pc_dir: ../data/logan_jsons_michel_latent/abc
+    val_latent_dir: ../data/logan_jsons_latent_1126/abc
+    val_pc_dir: ../data/logan_jsons_michel_latent/abc
+    surface_latent_dim: 128
+    max_num_surfaces: 32
+    train_num: 1
+    val_num: 1
+    replica: 640
+    replica_val: 64
+    log_scale: true
+
+trainer:
+    use_logvar: false
+    prediction_type: v_prediction
+    num_inference_timesteps: 50
+
+
+model:
+    name: dit_v2
+    trainer_name: dit_v1
+    input_dim: 139
+    cond_dim: 768
+    output_dim: 139
+    latent_dim: 512
+    num_layers: 12
+    num_heads: 16
+    checkpoint_folder: checkpoints/train_1203_dit_v2_overfit
+    checkpoint_file_name: model-04.pt
+
+vae:
+    param_raw_dim: [17, 18, 19, 18, 19]
+    checkpoint_file_name: checkpoints/train_1126_vae_1_canonical_logvar/model-02.pt
+
+loss:
+    weight_valid: 0.01
+    weight_params: 1.0
