@@ -109,7 +109,7 @@ def register_unit_cube():
             cube_faces,
             color=(0.9, 0.9, 0.9),
             smooth_shade=False,
-            transparency=0.7,
+            transparency=0.2,
         )
         if hasattr(cube, "set_edge_color"):
             cube.set_edge_color((0.2, 0.2, 0.2))
@@ -469,7 +469,7 @@ def process_index(idx: int, num_inference_steps: int, use_gt_mask=False):
 
     
     masks = masks.unsqueeze(-1)
-    print(scales_padded)
+    # print(scales_padded)
     gt_sample = torch.cat([masks.float(), shifts_padded, rotations_padded, scales_padded, params_padded], dim=-1)
 
     # gt_sample = gt_sample.unsqueeze(0)
@@ -481,7 +481,7 @@ def process_index(idx: int, num_inference_steps: int, use_gt_mask=False):
     loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params = _compute_loss(sample, gt_sample, masks)
     # sample = torch.cat([gt_sample[..., :1], sample[..., 1:1+3+6], gt_sample[..., 1+3+6:1+3+6+1], sample[..., -128:]], dim=-1)
 
-    print("Using GT RTS now...")
+    # print("Using GT RTS now...")
     # sample = torch.cat([gt_sample[..., :-128], sample[..., -128:]], dim=-1)
     valid, shifts, rotations, scales, params = decode_sample(sample)
 
@@ -602,52 +602,53 @@ def update_visualization():
           f"Params: {loss_params.item():.6f}")
     
     # Visualize generated surfaces
-    try:
-        print(f"Visualizing {len(surface_jsons)} generated surfaces and {len(surface_jsons_gt)} GT surfaces")
-        
-        # Visualize generated surfaces
-        _gen_surfaces = visualize_json_interset(surface_jsons, plot=True, plot_gui=False, tol=1e-5, ps_header=f'sample_{_current_idx}')
-        for surface_key, surface_data in _gen_surfaces.items():
-            if 'surface' in surface_data and surface_data['surface'] is not None and 'ps_handler' in surface_data:
-                surface_data['ps_handler'].add_to_group(_gen_group)
-        
-        # Apply is_closed colors to generated surfaces
-        if _pred_is_closed and _show_closed_colors and is_closed_data and is_closed_data['pred_is_u_closed'] is not None:
-            apply_closed_colors_to_surfaces(_gen_surfaces, 
-                                            is_closed_data['pred_is_u_closed'], 
-                                            is_closed_data['pred_is_v_closed'])
-        
-        # Visualize GT surfaces
-        _gt_surfaces = visualize_json_interset(surface_jsons_gt, plot=True, plot_gui=False, tol=1e-5, ps_header=f'gt_{_current_idx}')
-        for surface_key, surface_data in _gt_surfaces.items():
-            if 'surface' in surface_data and surface_data['surface'] is not None and 'ps_handler' in surface_data:
-                surface_data['ps_handler'].add_to_group(_gt_group)
-        
-        # Apply is_closed colors to GT surfaces
-        if _pred_is_closed and _show_closed_colors and is_closed_data and is_closed_data['gt_is_u_closed'] is not None:
-            apply_closed_colors_to_surfaces(_gt_surfaces, 
-                                            is_closed_data['gt_is_u_closed'], 
-                                            is_closed_data['gt_is_v_closed'])
-        
-        # Configure groups with current visibility settings
-        _gen_group.set_enabled(_show_gen)
-        _gt_group.set_enabled(_show_gt)
-        
-        print(f"Visualized {len(_gen_surfaces)} generated surfaces and {len(_gt_surfaces)} GT surfaces")
-        
-        # Print is_closed statistics if enabled
-        if _pred_is_closed and is_closed_data:
-            if is_closed_data['pred_is_u_closed'] is not None:
-                pred_u_closed_count = sum(is_closed_data['pred_is_u_closed'])
-                pred_v_closed_count = sum(is_closed_data['pred_is_v_closed'])
-                print(f"Pred is_closed: u={pred_u_closed_count}/{len(is_closed_data['pred_is_u_closed'])}, v={pred_v_closed_count}/{len(is_closed_data['pred_is_v_closed'])}")
-            if is_closed_data['gt_is_u_closed'] is not None:
-                gt_u_closed_count = sum(is_closed_data['gt_is_u_closed'])
-                gt_v_closed_count = sum(is_closed_data['gt_is_v_closed'])
-                print(f"GT is_closed: u={gt_u_closed_count}/{len(is_closed_data['gt_is_u_closed'])}, v={gt_v_closed_count}/{len(is_closed_data['gt_is_v_closed'])}")
 
-    except Exception as e:
-        print(f'Error visualizing surfaces: {e}')
+    # try:
+    print(f"Visualizing {len(surface_jsons)} generated surfaces and {len(surface_jsons_gt)} GT surfaces")
+    
+    # Visualize generated surfaces
+    _gen_surfaces = visualize_json_interset(surface_jsons, plot=True, plot_gui=False, tol=1e-5, ps_header=f'sample_{_current_idx}')
+    for surface_key, surface_data in _gen_surfaces.items():
+        if 'surface' in surface_data and surface_data['surface'] is not None and 'ps_handler' in surface_data:
+            surface_data['ps_handler'].add_to_group(_gen_group)
+    
+    # Apply is_closed colors to generated surfaces
+    if _pred_is_closed and _show_closed_colors and is_closed_data and is_closed_data['pred_is_u_closed'] is not None:
+        apply_closed_colors_to_surfaces(_gen_surfaces, 
+                                        is_closed_data['pred_is_u_closed'], 
+                                        is_closed_data['pred_is_v_closed'])
+    
+    # Visualize GT surfaces
+    _gt_surfaces = visualize_json_interset(surface_jsons_gt, plot=True, plot_gui=False, tol=1e-5, ps_header=f'gt_{_current_idx}')
+    for surface_key, surface_data in _gt_surfaces.items():
+        if 'surface' in surface_data and surface_data['surface'] is not None and 'ps_handler' in surface_data:
+            surface_data['ps_handler'].add_to_group(_gt_group)
+    
+    # Apply is_closed colors to GT surfaces
+    if _pred_is_closed and _show_closed_colors and is_closed_data and is_closed_data['gt_is_u_closed'] is not None:
+        apply_closed_colors_to_surfaces(_gt_surfaces, 
+                                        is_closed_data['gt_is_u_closed'], 
+                                        is_closed_data['gt_is_v_closed'])
+    
+    # Configure groups with current visibility settings
+    _gen_group.set_enabled(_show_gen)
+    _gt_group.set_enabled(_show_gt)
+    
+    print(f"Visualized {len(_gen_surfaces)} generated surfaces and {len(_gt_surfaces)} GT surfaces")
+    
+    # Print is_closed statistics if enabled
+    if _pred_is_closed and is_closed_data:
+        if is_closed_data['pred_is_u_closed'] is not None:
+            pred_u_closed_count = sum(is_closed_data['pred_is_u_closed'])
+            pred_v_closed_count = sum(is_closed_data['pred_is_v_closed'])
+            print(f"Pred is_closed: u={pred_u_closed_count}/{len(is_closed_data['pred_is_u_closed'])}, v={pred_v_closed_count}/{len(is_closed_data['pred_is_v_closed'])}")
+        if is_closed_data['gt_is_u_closed'] is not None:
+            gt_u_closed_count = sum(is_closed_data['gt_is_u_closed'])
+            gt_v_closed_count = sum(is_closed_data['gt_is_v_closed'])
+            print(f"GT is_closed: u={gt_u_closed_count}/{len(is_closed_data['gt_is_u_closed'])}, v={gt_v_closed_count}/{len(is_closed_data['gt_is_v_closed'])}")
+
+    # except Exception as e:
+    #     print(f'Error visualizing surfaces: {e}')
 
 
 def callback():

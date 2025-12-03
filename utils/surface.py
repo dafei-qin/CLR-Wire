@@ -462,13 +462,13 @@ def visualize_json_interset(cad_data, plot=True, plot_gui=True,tol=1e-2, ps_head
 
         surface_type = face['type']
         surface_index = face['idx'][0]
-        if hasattr(face, 'uv'):
+        if 'uv' in face.keys():
             if len(face['uv']) > 0:
                 for i in range(len(face['uv'])):
                     if type(face['uv'][i]) == np.float32 or type(face['uv'][i]) == np.float64:
                         face['uv'][i] = face['uv'][i].item()
 
-        if hasattr(face, 'scalar'):
+        if 'scalar' in face.keys():
             if len(face['scalar']) > 0:
                 for i in range(len(face['scalar'])):
                     if type(face['scalar'][i]) == np.float32 or type(face['scalar'][i]) == np.float64:

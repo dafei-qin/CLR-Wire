@@ -4,14 +4,16 @@ import polyscope as ps
 import polyscope.imgui as psim
 import sys
 import json
+import argparse
 sys.path.append('/home/qindafei/CAD/CLR-Wire')
 sys.path.append(r'C:\drivers\CAD\CLR-Wire')
 sys.path.append(r'F:\WORK\CAD\CLR-Wire')
 
 from src.dataset.dataset_v1 import dataset_compound, SURFACE_TYPE_MAP, SCALAR_DIM_MAP
+from src.tools.surface_to_canonical_space import to_canonical, from_canonical
 from utils.surface import visualize_json_interset
 
-def to_json_original(params_tensor, types_tensor, mask_tensor, dataset):
+def to_json_original(params_tensor, types_tensor, mask_tensor, dataset, shifts=None, rotations=None, scales=None, apply_from_canonical=False):
     """Convert processed parameters back to original JSON format for comparison"""
     json_data = []
     SURFACE_TYPE_MAP_INVERSE = {value: key for key, value in SURFACE_TYPE_MAP.items()}
@@ -25,6 +27,10 @@ def to_json_original(params_tensor, types_tensor, mask_tensor, dataset):
         
         print(f'Converting surface {i} of type {surface_type}')
         recovered_surface = dataset._recover_surface(params.numpy(), types_tensor[i].item())
+        
+        # Apply from_canonical if requested and canonical data is provided
+        if apply_from_canonical and shifts is not None and rotations is not None and scales is not None:
+            recovered_surface = from_canonical(recovered_surface, shifts[i], rotations[i], scales[i])
         
         recovered_surface['idx'] = [i, i]
         recovered_surface['orientation'] = 'Forward'
@@ -88,24 +94,39 @@ processed_surfaces = {}
 show_original = True
 show_processed = True
 current_metrics = {}
+detect_closed = False
+current_is_u_closed = None
+current_is_v_closed = None
 
 def load_dataset():
-    global dataset, max_idx
+    global dataset, max_idx, detect_closed
     
-    if len(sys.argv) < 2:
-        print("Usage: python test_dataset_v1.py <dataset_path>")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description='Test Dataset V1 with geometry preservation')
+    parser.add_argument('dataset_path', type=str, help='Path to dataset directory')
+    parser.add_argument('--detect_closed', action='store_true', help='Enable closed surface detection')
     
-    dataset = dataset_compound(sys.argv[1], canonical=True)
+    args = parser.parse_args()
+    detect_closed = args.detect_closed
+    
+    dataset = dataset_compound(args.dataset_path, canonical=True, detect_closed=detect_closed)
     max_idx = len(dataset) - 1
     print(f"Loaded dataset with {len(dataset)} samples")
+    print(f"Detect closed: {detect_closed}")
 
 def process_sample(idx):
     """Process a single sample and return both original and processed data"""
-    global dataset, current_metrics
+    global dataset, current_metrics, detect_closed, current_is_u_closed, current_is_v_closed
     
     # Get processed data from dataset
-    params_tensor, types_tensor, mask_tensor = dataset[idx]
+    if detect_closed:
+        params_tensor, types_tensor, mask_tensor, shifts, rotations, scales, is_u_closed_tensor, is_v_closed_tensor = dataset[idx]
+        current_is_u_closed = is_u_closed_tensor
+        current_is_v_closed = is_v_closed_tensor
+    else:
+        params_tensor, types_tensor, mask_tensor, shifts, rotations, scales = dataset[idx]
+        current_is_u_closed = None
+        current_is_v_closed = None
+    
     print(f'Processing file: {dataset.json_names[idx]}')
     json_path = dataset.json_names[idx]
     
@@ -113,7 +134,26 @@ def process_sample(idx):
     original_data = load_original_json(json_path)
     
     # Convert processed data back to JSON format
-    processed_data = to_json_original(params_tensor, types_tensor, mask_tensor, dataset)
+    # Apply from_canonical to transform back from canonical space
+
+    mask_bool = mask_tensor.bool()
+    mask_np = mask_bool.cpu().numpy().astype(bool)
+    params_tensor_valid = params_tensor[mask_np]
+    types_tensor_valid = types_tensor[mask_np]
+    shifts_valid = shifts[mask_np]
+    rotations_valid = rotations[mask_np]
+    scales_valid = scales[mask_np]
+    
+    processed_data = to_json_original(
+        params_tensor_valid, 
+        types_tensor_valid, 
+        mask_tensor, 
+        dataset, 
+        shifts=shifts_valid,
+        rotations=rotations_valid,
+        scales=scales_valid,
+        apply_from_canonical=True  # Apply from_canonical transformation
+    )
     
     # Calculate geometry preservation metrics
     current_metrics = calculate_geometry_metrics(original_data, processed_data)
@@ -125,14 +165,51 @@ def process_sample(idx):
     print(f"  UV difference: {current_metrics.get('uv_difference', 'N/A')}")
     print(f"  Scalar difference: {current_metrics.get('scalar_difference', 'N/A')}")
     
+    if detect_closed:
+        # Count closed surfaces (only for valid surfaces)
+        valid_is_u_closed = current_is_u_closed[mask_bool]
+        valid_is_v_closed = current_is_v_closed[mask_bool]
+        u_closed_count = valid_is_u_closed.sum().item()
+        v_closed_count = valid_is_v_closed.sum().item()
+        both_closed_count = (valid_is_u_closed & valid_is_v_closed).sum().item()
+        print(f"  U-closed surfaces: {u_closed_count}")
+        print(f"  V-closed surfaces: {v_closed_count}")
+        print(f"  Both closed: {both_closed_count}")
+    
     return original_data, processed_data
+
+def get_closed_color(is_u_closed, is_v_closed):
+    """
+    Determine color based on closed status.
+    
+    Returns:
+        RGB tuple (values in [0, 1])
+    """
+    if is_u_closed and is_v_closed:
+        return (1.0, 1.0, 0.0)  # Yellow - both closed
+    elif is_u_closed:
+        return (1.0, 0.0, 0.0)  # Red - u closed
+    elif is_v_closed:
+        return (0.0, 0.0, 1.0)  # Blue - v closed
+    else:
+        return (0.5, 0.5, 0.5)  # Gray - none closed
 
 def update_visualization():
     """Update the visualization with current index"""
     global current_idx, original_group, processed_group, original_surfaces, processed_surfaces
+    global detect_closed, current_is_u_closed, current_is_v_closed, dataset
     
     # Clear existing structures
     ps.remove_all_structures()
+    
+    # Get mask to know which surfaces are valid
+    if detect_closed:
+        params_tensor, types_tensor, mask_tensor, shifts, rotations, scales, is_u_closed_tensor, is_v_closed_tensor = dataset[current_idx]
+    else:
+        params_tensor, types_tensor, mask_tensor, shifts, rotations, scales = dataset[current_idx]
+    
+    mask_bool = mask_tensor.bool()
+    valid_indices = torch.where(mask_bool)[0].numpy()
     
     # Process current sample
     original_data, processed_data = process_sample(current_idx)
@@ -144,10 +221,19 @@ def update_visualization():
         print(f'Error visualizing original data: {e}')
         return
     
-    # Add original surfaces to group
+    # Add original surfaces to group and apply colors
     for i, (surface_key, surface_data) in enumerate(original_surfaces.items()):
         if 'surface' in surface_data and surface_data['surface'] is not None:
             surface_data['ps_handler'].add_to_group(original_group)
+            
+            # Apply color based on closed status if detect_closed is enabled
+            if detect_closed and current_is_u_closed is not None and current_is_v_closed is not None:
+                if i < len(valid_indices):
+                    valid_idx = valid_indices[i]
+                    is_u = current_is_u_closed[valid_idx].item()
+                    is_v = current_is_v_closed[valid_idx].item()
+                    color = get_closed_color(is_u, is_v)
+                    surface_data['ps_handler'].set_color(color)
     
     # Visualize processed surfaces
     try:
@@ -156,10 +242,19 @@ def update_visualization():
         print(f'Error visualizing processed data: {e}')
         return
     
-    # Add processed surfaces to group
+    # Add processed surfaces to group and apply colors based on closed status
     for i, (surface_key, surface_data) in enumerate(processed_surfaces.items()):
         if 'surface' in surface_data and surface_data['surface'] is not None:
             surface_data['ps_handler'].add_to_group(processed_group)
+            
+            # Apply color based on closed status if detect_closed is enabled
+            if detect_closed and current_is_u_closed is not None and current_is_v_closed is not None:
+                if i < len(valid_indices):
+                    valid_idx = valid_indices[i]
+                    is_u = current_is_u_closed[valid_idx].item()
+                    is_v = current_is_v_closed[valid_idx].item()
+                    color = get_closed_color(is_u, is_v)
+                    surface_data['ps_handler'].set_color(color)
     
     # Configure groups with current visibility settings
     original_group.set_enabled(show_original)
@@ -170,6 +265,7 @@ def update_visualization():
 def callback():
     """Polyscope callback function for UI controls"""
     global current_idx, max_idx, show_original, show_processed, current_metrics
+    global detect_closed, current_is_u_closed, current_is_v_closed
     
     psim.Text("Dataset V1 Geometry Preservation Test")
     psim.Separator()
@@ -195,6 +291,32 @@ def callback():
             psim.Text(f"UV difference: {current_metrics['uv_difference']:.6f}")
         if 'scalar_difference' in current_metrics:
             psim.Text(f"Scalar difference: {current_metrics['scalar_difference']:.6f}")
+    
+    # Display closed surface statistics if enabled
+    if detect_closed and current_is_u_closed is not None and current_is_v_closed is not None:
+        psim.Separator()
+        psim.Text("Closed Surface Detection:")
+        
+        # Get mask to count only valid surfaces
+        if detect_closed:
+            result = dataset[current_idx]
+            mask_tensor = result[2]
+            mask_bool = mask_tensor.bool()
+            valid_is_u_closed = current_is_u_closed[mask_bool]
+            valid_is_v_closed = current_is_v_closed[mask_bool]
+        else:
+            valid_is_u_closed = current_is_u_closed
+            valid_is_v_closed = current_is_v_closed
+        
+        u_closed_count = valid_is_u_closed.sum().item()
+        v_closed_count = valid_is_v_closed.sum().item()
+        both_closed_count = (valid_is_u_closed & valid_is_v_closed).sum().item()
+        none_closed_count = (~valid_is_u_closed & ~valid_is_v_closed).sum().item()
+        
+        psim.TextColored((1.0, 0.0, 0.0, 1.0), f"Red: U-closed only ({u_closed_count - both_closed_count})")
+        psim.TextColored((0.0, 0.0, 1.0, 1.0), f"Blue: V-closed only ({v_closed_count - both_closed_count})")
+        psim.TextColored((1.0, 1.0, 0.0, 1.0), f"Yellow: Both closed ({both_closed_count})")
+        psim.TextColored((0.5, 0.5, 0.5, 1.0), f"Gray: None closed ({none_closed_count})")
     
     # Group controls
     if original_group is not None:
@@ -225,6 +347,9 @@ def test_all_samples():
     type_matches = 0
     uv_differences = []
     scalar_differences = []
+    u_closed_total = 0
+    v_closed_total = 0
+    both_closed_total = 0
     
     for i in range(min(10, total_samples)):  # Test first 10 samples
         try:
@@ -238,6 +363,22 @@ def test_all_samples():
                 uv_differences.append(metrics['uv_difference'])
             if 'scalar_difference' in metrics:
                 scalar_differences.append(metrics['scalar_difference'])
+            
+            # Collect closed surface statistics
+            if detect_closed and current_is_u_closed is not None and current_is_v_closed is not None:
+                if detect_closed:
+                    result = dataset[i]
+                    mask_tensor = result[2]
+                    mask_bool = mask_tensor.bool()
+                    valid_is_u_closed = current_is_u_closed[mask_bool]
+                    valid_is_v_closed = current_is_v_closed[mask_bool]
+                else:
+                    valid_is_u_closed = current_is_u_closed
+                    valid_is_v_closed = current_is_v_closed
+                    
+                u_closed_total += valid_is_u_closed.sum().item()
+                v_closed_total += valid_is_v_closed.sum().item()
+                both_closed_total += (valid_is_u_closed & valid_is_v_closed).sum().item()
                 
         except Exception as e:
             print(f"Error testing sample {i}: {e}")
@@ -250,6 +391,13 @@ def test_all_samples():
     if scalar_differences:
         print(f"Average scalar difference: {np.mean(scalar_differences):.6f}")
         print(f"Max scalar difference: {np.max(scalar_differences):.6f}")
+    
+    if detect_closed:
+        print(f"\nClosed Surface Statistics:")
+        print(f"Total U-closed: {u_closed_total}")
+        print(f"Total V-closed: {v_closed_total}")
+        print(f"Total Both-closed: {both_closed_total}")
+    
     print("="*50)
 
 if __name__ == '__main__':

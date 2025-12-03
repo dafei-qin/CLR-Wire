@@ -379,7 +379,7 @@ class ZLDMPipeline:
                 generator=generator,
             ).prev_sample.permute(0, 2, 3, 1)[:, 0, :, :]
 
-            print('t: ', t.item(), 'update_diff: ', (sample - prev_sample).abs().mean())
+            # print('t: ', t.item(), 'update_diff: ', (sample - prev_sample).abs().mean())
             if gt_sample is not None:
                 loss = torch.nn.functional.mse_loss(prev_sample, gt_sample, reduction='none') * (1 - tgt_key_padding_mask.float()).unsqueeze(-1)
                 loss = loss.sum(dim=(0, 1)) / (1 - tgt_key_padding_mask.float()).sum()
@@ -388,7 +388,7 @@ class ZLDMPipeline:
                 loss_rotations = loss[4:10].mean()
                 loss_scales = loss[10:11].mean()
                 loss_params = loss[11:].mean()
-                print('loss_valid: ', f'{loss_valid:.4f}', 'loss_shifts: ', f'{loss_shifts:.4f}', 'loss_rotations: ', f'{loss_rotations:.4f}', 'loss_scales: ', f'{loss_scales:.4f}', 'loss_params: ', f'{loss_params:.4f}')
+                # print('loss_valid: ', f'{loss_valid:.4f}', 'loss_shifts: ', f'{loss_shifts:.4f}', 'loss_rotations: ', f'{loss_rotations:.4f}', 'loss_scales: ', f'{loss_scales:.4f}', 'loss_params: ', f'{loss_params:.4f}')
             sample = prev_sample
 
 
