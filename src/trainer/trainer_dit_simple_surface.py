@@ -168,7 +168,7 @@ class TrainerFlowSurface(BaseTrainer):
                     gt_sample = torch.cat([masks.float(), shifts_padded, rotations_padded, scales_padded, params_padded], dim=-1)
                     
                     noise = torch.randn_like(gt_sample)
-                    timesteps = torch.randint(0, self.scheduler.num_train_timesteps, (gt_sample.shape[0],), device=gt_sample.device).long()
+                    timesteps = torch.randint(0, self.scheduler.config.num_train_timesteps, (gt_sample.shape[0],), device=gt_sample.device).long()
 
                     noisy_sample = self.scheduler.add_noise(gt_sample, noise, timesteps)
 
@@ -190,6 +190,20 @@ class TrainerFlowSurface(BaseTrainer):
                 
                     loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params = self.compute_loss(output, target, masks)
                     
+                    # Here we try to recover the x0
+                    if self.scheduler.config.prediction_type == 'v_prediction':
+                        alpha_prod_t = self.scheduler.alphas_cumprod.to(timesteps.device)[timesteps]
+                        beta_prod_t = 1 - alpha_prod_t
+                        
+                        pred_original_sample = (alpha_prod_t**0.5).unsqueeze(1).unsqueeze(1) * noisy_sample - (beta_prod_t**0.5).unsqueeze(1).unsqueeze(1) * output
+                    elif self.scheduler.config.prediction_type == 'sample':
+                        pred_original_sample = output
+                    else:
+                        raise ValueError(f'Unsupported prediction type: {self.scheduler.config.prediction_type}')
+
+                    loss_original_sample = torch.nn.functional.mse_loss(pred_original_sample, gt_sample, reduction='none') * masks.float()
+                    loss_original_sample = loss_original_sample.mean()
+
                     # from tqdm import tqdm
                     # loss_all = []
                     # for _t in tqdm(range(1000)):
@@ -210,6 +224,7 @@ class TrainerFlowSurface(BaseTrainer):
                         'loss_rotations': loss_rotations.item(),
                         'loss_scales': loss_scales.item(),
                         'loss_params': loss_params.item(),
+                        'loss_orig_sample': loss_original_sample.item()
                     }
                 
                 self.accelerator.backward(loss)
