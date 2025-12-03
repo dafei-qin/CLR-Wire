@@ -332,15 +332,19 @@ _max_idx = 0
 _gt_group = None
 _rec_group = None
 _resampled_group = None
+_random_group = None
 _gt_surfaces = {}
 _rec_surfaces = {}
 _resampled_surfaces = {}
+_random_surfaces = {}
 _show_gt = True
 _show_rec = True
 _show_resampled = False
+_show_random = False
 _gt_face = None
 _rec_face = None
 _resampled_face = None
+_random_face = None
 _filtered_indices = []
 _index_metadata = []
 _filters = {}
@@ -673,9 +677,9 @@ def process_index(idx: int):
             num_poles_u.squeeze(-1),
             num_poles_v.squeeze(-1),
         )
-        # z = _model.reparameterize(mu, logvar)
+        z = _model.reparameterize(mu, logvar)
         # print('We use the logvar now')
-        z = mu
+        # z = mu
         (
             pred_degree_u,
             pred_degree_v,
@@ -748,48 +752,46 @@ def process_index(idx: int):
     return [gt_face], [rec_face]
 
 
-def visualize_generated_face(face_data, header: str = "resampled"):
+def visualize_generated_face(face_data, header: str = "resampled", target_group=None, show_enabled=False):
     """
     Helper to visualize generated faces (either resampled-from-data or random latent).
+    Returns (json_data_list, surfaces_dict).
     """
-    global _resampled_face, _resampled_surfaces, _resampled_group, _show_resampled
-
     if face_data is None:
         return [], {}
 
-    _resampled_face = face_data
-    resampled_json_data = [face_data]
+    json_data = [face_data]
 
     try:
-        _resampled_surfaces = visualize_json_interset(
-            resampled_json_data, plot=True, plot_gui=False, tol=1e-5, ps_header=header
+        surfaces = visualize_json_interset(
+            json_data, plot=True, plot_gui=False, tol=1e-5, ps_header=header
         )
     except ValueError:
         print(f"{header.capitalize()} visualization failed.")
         return [], {}
 
-    if _resampled_group is not None:
-        for _, surface in _resampled_surfaces.items():
+    if target_group is not None:
+        for _, surface in surfaces.items():
             if "surface" in surface and surface["surface"] is not None and surface["ps_handler"] is not None:
-                surface["ps_handler"].add_to_group(_resampled_group)
+                surface["ps_handler"].add_to_group(target_group)
 
     # Visualize poles
-    if _resampled_face is not None:
-        poles = np.array(_resampled_face["poles"])[..., :3]
+    if face_data is not None:
+        poles = np.array(face_data["poles"])[..., :3]
         poles_flat = poles.reshape(-1, 3)
-        poles_cloud = ps.register_point_cloud(f"{header}_poles", poles_flat, radius=0.005)
-        if _resampled_group is not None:
-            poles_cloud.add_to_group(_resampled_group)
+        poles_cloud = ps.register_point_cloud(f"{header}_poles", poles_flat, radius=0.005, enabled=True)
+        if target_group is not None:
+            poles_cloud.add_to_group(target_group)
         poles_cloud.set_color((0.0, 0.0, 1.0))
 
-    if _resampled_group is not None:
-        _resampled_group.set_enabled(_show_resampled)
+    if target_group is not None:
+        target_group.set_enabled(show_enabled)
 
-    return resampled_json_data, _resampled_surfaces
+    return json_data, surfaces
 
 
 def resample_model():
-    """Generate new samples from the VAE's latent space"""
+    """Generate new samples from the VAE's latent space (conditioned on current data)"""
     global _model, _resampled_surfaces, _current_idx, _dataset, _resampled_face, _resampled_group, _show_resampled
     
     if _model is None:
@@ -863,15 +865,6 @@ def resample_model():
         ) = _model.inference(z_random)
     
     # Build resampled JSON
-    pred_u_deg = to_python_int(pred_degree_u[0])
-    pred_v_deg = to_python_int(pred_degree_v[0])
-    pred_u_per = to_python_bool(pred_periodic_u[0])
-    pred_v_per = to_python_bool(pred_periodic_v[0])
-    pred_u_kn_n = to_python_int(pred_knots_num_u[0])
-    pred_v_kn_n = to_python_int(pred_knots_num_v[0])
-    pred_u_np_n = to_python_int(pred_num_poles_u[0])
-    pred_v_np_n = to_python_int(pred_num_poles_v[0])
-    
     resampled_face = build_face_from_prediction(
         _current_idx,
         pred_degree_u,
@@ -888,13 +881,21 @@ def resample_model():
         pred_knots_v,
         pred_poles,
     )
-
-    return visualize_generated_face(resampled_face, header="resampled")
+    
+    _resampled_face = resampled_face
+    json_data, surfaces = visualize_generated_face(
+        resampled_face, 
+        header="resampled", 
+        target_group=_resampled_group, 
+        show_enabled=_show_resampled
+    )
+    _resampled_surfaces = surfaces
+    return json_data, surfaces
 
 
 def random_sample_model():
     """Sample a fresh latent vector z ~ N(0, 1) and decode without conditioning on data."""
-    global _model
+    global _model, _random_face, _random_surfaces, _random_group, _show_random
 
     if _model is None:
         print("Model not loaded yet!")
@@ -946,8 +947,16 @@ def random_sample_model():
         pred_knots_v,
         pred_poles,
     )
-
-    return visualize_generated_face(random_face, header="random")
+    
+    _random_face = random_face
+    json_data, surfaces = visualize_generated_face(
+        random_face, 
+        header="random", 
+        target_group=_random_group, 
+        show_enabled=_show_random
+    )
+    _random_surfaces = surfaces
+    return json_data, surfaces
 
 
 def update_visualization():
@@ -1097,10 +1106,54 @@ def render_filter_controls() -> bool:
     return filters_changed
 
 
+def clear_resampled_structures():
+    """Remove resampled generated structures."""
+    global _resampled_surfaces
+    
+    # Try to remove poles point cloud
+    try:
+        ps.remove_point_cloud("resampled_poles")
+    except:
+        pass
+    
+    # Try to remove surface meshes from previous resampled operations
+    for key, surf_dict in _resampled_surfaces.items():
+        if "ps_handler" in surf_dict and surf_dict["ps_handler"] is not None:
+            try:
+                surf_name = surf_dict["ps_handler"].name
+                ps.remove_surface_mesh(surf_name)
+            except:
+                pass
+    
+    _resampled_surfaces = {}
+
+
+def clear_random_structures():
+    """Remove random generated structures."""
+    global _random_surfaces
+    
+    # Try to remove poles point cloud
+    try:
+        ps.remove_point_cloud("random_poles")
+    except:
+        pass
+    
+    # Try to remove surface meshes from previous random operations
+    for key, surf_dict in _random_surfaces.items():
+        if "ps_handler" in surf_dict and surf_dict["ps_handler"] is not None:
+            try:
+                surf_name = surf_dict["ps_handler"].name
+                ps.remove_surface_mesh(surf_name)
+            except:
+                pass
+    
+    _random_surfaces = {}
+
+
 def callback():
     global _current_idx, _current_filtered_idx, _filtered_indices, _max_idx
-    global _show_gt, _show_rec, _show_resampled
-    global _gt_face, _rec_face, _resampled_surfaces
+    global _show_gt, _show_rec, _show_resampled, _show_random
+    global _gt_face, _rec_face, _resampled_surfaces, _random_surfaces
     global _rotation_euler, _apply_rotation
     global _shift_xyz, _apply_shift
     global _scale_factor, _apply_scale
@@ -1220,21 +1273,20 @@ def callback():
     # Resample button
     psim.Separator()
     psim.Text("Model Controls:")
-    if psim.Button("Resample Model"):
+    if psim.Button("Resample Model (from current data)"):
         if _current_idx < 0:
             print("No valid sample selected for resampling.")
         else:
-            # Remove all structures before resampling
-            reset_scene()
-            _resampled_surfaces = {}
-            resampled_json_data, _resampled_surfaces = resample_model()
-    if psim.Button("Randomly Sample"):
+            # Remove only resampled structures, keep GT and Rec
+            clear_resampled_structures()
+            resample_model()
+    if psim.Button("Randomly Sample (from N(0,1))"):
         if _model is None:
             print("Model not loaded yet!")
         else:
-            reset_scene()
-            _resampled_surfaces = {}
-            random_json_data, _resampled_surfaces = random_sample_model()
+            # Remove only random structures, keep GT, Rec, and Resampled
+            clear_random_structures()
+            random_sample_model()
 
     if _gt_group is not None:
         psim.Separator()
@@ -1249,6 +1301,10 @@ def callback():
         if changed:
             if _resampled_group is not None:
                 _resampled_group.set_enabled(_show_resampled)
+        changed, _show_random = psim.Checkbox("Show Random", _show_random)
+        if changed:
+            if _random_group is not None:
+                _random_group.set_enabled(_show_random)
     
     # Display surface details
     if _gt_face is not None and _rec_face is not None:
@@ -1521,6 +1577,7 @@ if __name__ == "__main__":
     _gt_group = ps.create_group("GT Surfaces")
     _rec_group = ps.create_group("Reconstructed Surfaces")
     _resampled_group = ps.create_group("Resampled Surfaces")
+    _random_group = ps.create_group("Random Surfaces")
     ps.set_user_callback(callback)
     update_visualization()
     ps.show()
