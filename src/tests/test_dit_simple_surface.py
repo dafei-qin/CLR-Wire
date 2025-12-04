@@ -164,6 +164,7 @@ _gen_surfaces = {}
 _pred_is_closed = False
 _show_closed_colors = True  # Toggle for showing is_closed coloring
 _vae_model_name = 'vae_v1'  # VAE model name
+_dit_model_name = 'dit_v1'
 # Custom surface count control
 _use_custom_num_surfaces = False  # Whether to use custom surface count
 _custom_num_surfaces = 20  # User-specified surface count (15-32)
@@ -304,7 +305,7 @@ def load_model_and_dataset(
 ):
     """Load dataset and corresponding model weights."""
     global _dataset, _dataset_train, _dataset_val, _model, _pipe, _max_idx, _vae, _dataset_compound
-    global _pred_is_closed, _vae_model_name
+    global _pred_is_closed, _vae_model_name, _dit_model_name
 
     _dataset_val = LatentDataset(
     latent_dir=args.data.val_latent_dir, pc_dir=args.data.val_pc_dir, max_num_surfaces=args.data.max_num_surfaces, 
@@ -344,9 +345,13 @@ def load_model_and_dataset(
     initialize_filters()
     refresh_filtered_indices(preserve_current=False)
 
+    _dit_model_name = getattr(args.model, 'name', 'dit_v1')
     # Import and create model
-    from src.dit.simple_surface_decoder import SimpleSurfaceDecoder
-    
+    if _dit_model_name == 'dit_v2':
+        from src.dit.simple_surface_decoder_v2 import SimpleSurfaceDecoder
+    else:
+        from src.dit.simple_surface_decoder import SimpleSurfaceDecoder
+    print(f"Using DiT model: {_dit_model_name}")
     _model = SimpleSurfaceDecoder(
         input_dim=args.model.input_dim,
         cond_dim=args.model.cond_dim,
