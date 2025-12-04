@@ -150,6 +150,9 @@ trainer = TrainerFlowSurface(
     ws_refresh_every=getattr(ws_cfg, 'refresh_every', 1) if ws_cfg is not None else 1,
     weight_valid=args.loss.weight_valid,
     weight_params=args.loss.weight_params,
+    weight_rotations=args.loss.weight_rotations,
+    weight_scales=args.loss.weight_scales,
+    weight_shifts=args.loss.weight_shifts,
     num_inference_timesteps=args.trainer.num_inference_timesteps,
 )
 
