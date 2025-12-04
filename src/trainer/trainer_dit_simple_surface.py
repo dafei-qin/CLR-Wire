@@ -62,6 +62,9 @@ class TrainerFlowSurface(BaseTrainer):
         num_inference_timesteps: int = 50,
         weight_valid = 1.0,
         weight_params = 1.0,
+        weight_rotations = 1.0,
+        weight_scales = 1.0,
+        weight_shifts = 1.0,
         **kwargs
     ):
         super().__init__(
@@ -104,7 +107,9 @@ class TrainerFlowSurface(BaseTrainer):
 
         self.weight_valid = weight_valid
         self.weight_params = weight_params
-
+        self.weight_rotations = weight_rotations
+        self.weight_scales = weight_scales
+        self.weight_shifts = weight_shifts  
     
     def log_loss(self, total_loss, lr, total_norm, step, loss_dict={}):
         """Enhanced loss logging for B-spline model"""
@@ -216,7 +221,7 @@ class TrainerFlowSurface(BaseTrainer):
                     # loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params = self.compute_loss(output, gt_sample, masks)
 
                 
-                    loss = loss_valid * self.weight_valid + loss_shifts + loss_rotations + loss_scales + loss_params * self.weight_params
+                    loss = loss_valid * self.weight_valid + loss_shifts * self.weight_shifts + loss_rotations * self.weight_rotations + loss_scales * self.weight_scales + loss_params * self.weight_params
                     total_loss += loss.item()
                     loss_dict = {
                         'loss_valid': loss_valid.item(),
