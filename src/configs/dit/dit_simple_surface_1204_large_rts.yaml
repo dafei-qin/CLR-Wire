@@ -20,17 +20,29 @@ wandb_project_name: DIT_SIMPLE
 wandb_run_name: 1204_dit_v2_simple_vae_pred_closed_large_rts
 
 data:
-    train_latent_dir: ../data/logan_jsons_latent_pred_closed/abc
-    train_pc_dir: ../data/logan_jsons_michel_latent/abc
-    val_latent_dir: ../data/logan_jsons_latent_pred_closed/abc_test
-    val_pc_dir: ../data/logan_jsons_michel_latent/abc_test
-    surface_latent_dim: 128
-    max_num_surfaces: 32
-    train_num: -1
-    val_num: -1
-    replica: 1
-    replica_val: 1
-    log_scale: true
+    name: src.dataset.dataset_latent.LatentDataset
+    params:
+        latent_dir: ../data/logan_jsons_latent_pred_closed/abc
+        pc_dir: ../data/logan_jsons_michel_latent/abc
+        latent_dim: 128
+        num_data: -1
+        log_scale: true
+        replica: 1
+        max_num_surfaces: 32
+        val_latent_dir: ../data/logan_jsons_latent_pred_closed/abc_test
+        val_pc_dir: ../data/logan_jsons_michel_latent/abc_test
+
+data_val:
+    name: src.dataset.dataset_latent.LatentDataset
+    params:
+        latent_dir: ../data/logan_jsons_latent_pred_closed/abc_test
+        pc_dir: ../data/logan_jsons_michel_latent/abc_test
+        latent_dim: 128
+        num_data: -1
+        log_scale: true
+        replica: 1
+        max_num_surfaces: 32
+
 
 trainer:
     use_logvar: false
@@ -39,16 +51,18 @@ trainer:
 
 
 model:
-    name: dit_v2
+    # name: dit_v2
+    name: src.dit.simple_surface_decoder_v2.SimpleSurfaceDecoder
     trainer_name: dit_v1
-    input_dim: 139
-    cond_dim: 768
-    output_dim: 139
-    latent_dim: 384
-    num_layers: 12
-    num_heads: 6
     checkpoint_folder: checkpoints/1204_dit_v2_simple_vae_pred_closed_large_rts
-    checkpoint_file_name: model-92.pt
+    checkpoint_file_name: model-22.pt
+    params:
+        input_dim: 139
+        cond_dim: 768
+        output_dim: 139
+        latent_dim: 384
+        num_layers: 12
+        num_heads: 6
 
 vae:
     param_raw_dim: [17, 18, 19, 18, 19]

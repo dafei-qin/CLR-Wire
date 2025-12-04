@@ -26,18 +26,30 @@ trainer:
     v_closed_pos_weight: 50.0
 
 data:
-    name: src.dataset.dataset_v1.dataset_compound_cache
+    name: src.dataset.dataset_v1.dataset_compound
     params:
-        cache_path: ../data/logan_jsons_cache/abc_cache_w_closed.npz
+        
+        json_dir: ../data/logan_jsons/abc/
+        max_num_surfaces: 500
+        canonical: true
         detect_closed: true
-    train_json_dir: ../data/logan_jsons/abc/
-    val_json_dir: ../data/logan_jsons/abc_test
-    max_num_surfaces: 500
-    canonical: true
+
     use_weighted_sampling: false
-    use_cache: true
+    use_cache: false
     weight_path: assets/logan_jsons_weights.npy
-    
+    cache_path: ../data/logan_jsons_cache/abc_cache_w_closed.npz
+
+
+data_val:
+    name: src.dataset.dataset_v1.dataset_compound
+    params:
+        
+        json_dir: ../data/logan_jsons/abc_test/0009
+        max_num_surfaces: 500
+        canonical: true
+        detect_closed: true
+
+
 
 
 model:
@@ -51,6 +63,7 @@ model:
     # surface_enc_block_out_channels: [16, 32, 64, 128]
     name: src.vae.vae_v2.SurfaceVAE
     pred_is_closed: true
+
     params:
         param_raw_dim: [17, 18, 19, 18, 19]
     checkpoint_folder: checkpoints/train_1201_vae_1_canonical_var_l2norm_pred_closed

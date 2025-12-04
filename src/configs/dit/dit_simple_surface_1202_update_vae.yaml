@@ -17,7 +17,7 @@ log_every_step: 50
 
 use_wandb_tracking: true
 wandb_project_name: DIT_SIMPLE
-wandb_run_name: 1204_dit_simple_update_vae_rotations_scales_shifts
+wandb_run_name: 1202_dit_simple_update_vae
 
 data:
     train_latent_dir: ../data/logan_jsons_latent_pred_closed/abc
@@ -47,7 +47,7 @@ model:
     latent_dim: 384
     num_layers: 12
     num_heads: 6
-    checkpoint_folder: checkpoints/1204_dit_simple_update_vae_rotations_scales_shifts
+    checkpoint_folder: checkpoints/1202_dit_simple_update_vae
     checkpoint_file_name: model-92.pt
 
 vae:
@@ -56,7 +56,7 @@ vae:
 
 loss:
     weight_valid: 0.01
-    weight_params: 2.0
-    weight_rotations: 5.0
-    weight_scales: 5.0
-    weight_shifts: 5.0
+    weight_params: 1.0
+    weight_rotations: 1.0
+    weight_scales: 1.0
+    weight_shifts: 1.0

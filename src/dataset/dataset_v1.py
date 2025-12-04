@@ -761,10 +761,13 @@ class dataset_compound(Dataset):
             u_center = np.arctan2(sin_u_center, cos_u_center)
             u_half = np.clip((u_half + 0.5), 0, 1 - 1e-5) * np.pi
             
+            if np.abs(u_half - np.pi) < 1e-4:
+                u_half = np.pi
             u_min, u_max = u_center - u_half, u_center + u_half
-            if np.abs(np.abs(u_max - u_min) - 2 * np.pi) < 1e-4:
-                # A full loop, make sure distance less than 2pi
-                u_max = u_min + 2 * np.pi - 1e-4
+
+            # if np.abs(np.abs(u_max - u_min) - 2 * np.pi) < 1e-4:
+            #     # A full loop, make sure distance less than 2pi
+            #     u_max = u_min + 2 * np.pi - 1e-4
 
             v_min = 0.0
             v_max = height
@@ -776,6 +779,10 @@ class dataset_compound(Dataset):
             sin_u_center, cos_u_center, u_half, v_center, v_half = UV[:5]
             uc = np.arctan2(sin_u_center, cos_u_center)
             u_half = np.clip(u_half, 0, 1 - 1e-5) * np.pi
+
+            if np.abs(u_half - np.pi) < 1e-4:
+                u_half = np.pi
+
             u_min, u_max = uc - u_half, uc + u_half
    
 
@@ -795,10 +802,14 @@ class dataset_compound(Dataset):
 
             u_center = np.arctan2(sin_u_center, cos_u_center)
             u_half = np.clip(u_half, 0, 1 - 1e-5) * np.pi
+            if np.abs(u_half - np.pi) < 1e-4:
+                u_half = np.pi
             u_min, u_max = u_center - u_half, u_center + u_half
 
             v_center = np.arctan2(sin_v_center, cos_v_center)
             v_half = np.clip(v_half, 0, 1 - 1e-5) * np.pi
+            if np.abs(v_half - np.pi) < 1e-4:
+                v_half = np.pi
             v_min, v_max = v_center - v_half, v_center + v_half
 
             assert len(scalar_params) == 2, f"Wrong scalar number of torus, should be 2 but got {len(scalar_params)}"
@@ -825,6 +836,11 @@ class dataset_compound(Dataset):
             u_h = np.clip(u_h_norm, 0.0, 1.0 - 1e-5) * np.pi
             v_h = np.clip(v_h_norm, 0.0, 1.0 - 1e-5) * (np.pi/2)
 
+            if np.abs(u_h - np.pi) < 1e-4:
+                u_h = np.pi
+            if np.abs(v_h - np.pi/2) < 1e-4:
+                v_h = np.pi/2
+                
             u_min, u_max = u_c - u_h, u_c + u_h
             v_min, v_max = v_c - v_h, v_c + v_h
 
