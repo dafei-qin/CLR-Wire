@@ -53,6 +53,7 @@ class BaseTrainer(Module):
         dataset: Dataset,
         *,
         val_dataset: Optional[Dataset] = None,
+        other_models = [],
         accelerator_kwargs: dict = dict(),
         amp = False,
         adam_betas = (0.9, 0.99),
@@ -124,6 +125,7 @@ class BaseTrainer(Module):
         # model
 
         self.model = model
+        self.other_models = other_models
 
         if self.is_main: self.print_params_num()
 
@@ -222,7 +224,7 @@ class BaseTrainer(Module):
             self.model, 
             self.optimizer
         )
-        
+        self.other_models = [self.accelerator.prepare(model) for model in self.other_models]
         if self.accelerator.is_main_process:
             self.ema = EMA(model, beta = ema_decay, update_every = ema_update_every)
             self.ema.to(self.device)

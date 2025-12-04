@@ -55,6 +55,7 @@ def recover_surface_from_params(params, surface_type_idx):
         u_min, u_max = u_center - u_half, u_center + u_half
         v_min, v_max = torch.zeros_like(height), height
         scalar = scalar_params[..., 0:1]
+        scalar = torch.exp(scalar)
 
     elif surface_type == 'cone':
         sin_u_center, cos_u_center, u_half, v_center, v_half = UV[..., 0], UV[..., 1], UV[..., 2], UV[..., 3], UV[..., 4]
@@ -63,7 +64,7 @@ def recover_surface_from_params(params, surface_type_idx):
         u_min, u_max = u_center - u_half, u_center + u_half
         v_min, v_max = v_center - v_half, v_center + v_half
         semi_angle = scalar_params[..., 0] * (torch.pi / 2)
-        scalar = torch.stack([semi_angle, scalar_params[..., 1]], dim=-1)
+        scalar = torch.stack([semi_angle, torch.exp(scalar_params[..., 1])], dim=-1)
 
     elif surface_type == 'torus':
         sin_u_center, cos_u_center, u_half, sin_v_center, cos_v_center, v_half = UV[..., 0], UV[..., 1], UV[..., 2], UV[..., 3], UV[..., 4], UV[..., 5]
@@ -73,7 +74,7 @@ def recover_surface_from_params(params, surface_type_idx):
         v_center = torch.atan2(sin_v_center, cos_v_center)
         v_half = torch.clamp(v_half, 0, 1 - 1e-5) * torch.pi
         v_min, v_max = v_center - v_half, v_center + v_half
-        scalar = scalar_params[..., :2]
+        scalar = torch.exp(scalar_params[..., :2])
         
     elif surface_type == 'sphere':
         dir_vec = UV[..., :3]
@@ -86,7 +87,7 @@ def recover_surface_from_params(params, surface_type_idx):
         v_half = torch.clamp(v_h_norm, 0.0, 1.0 - 1e-5) * (torch.pi / 2)
         u_min, u_max = u_center - u_half, u_center + u_half
         v_min, v_max = v_center - v_half, v_center + v_half
-        scalar = scalar_params[..., 0:1]
+        scalar = torch.exp(scalar_params[..., 0:1])
     
     return {
         'location': P,
@@ -104,6 +105,8 @@ def params_to_samples(params, surface_type_idx, num_samples_u, num_samples_v):
     D, X, Y = surface_params['direction'][..., 0, :], surface_params['direction'][..., 1, :], surface_params['direction'][..., 2, :]
     u_min, u_max, v_min, v_max = surface_params['uv'][..., 0], surface_params['uv'][..., 1], surface_params['uv'][..., 2], surface_params['uv'][..., 3]
     scalar = surface_params['scalar']
+    # Note, perform exp on all scalars to follow the pre-process function in dataset_v1 L36: SURFACE_PARAM_SCHEMAS
+    # scalar = torch.exp(scalar)
     surface_type = surface_params['type']
     
     device = params.device
