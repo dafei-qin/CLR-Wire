@@ -16,8 +16,8 @@ save_every_epoch: 50
 log_every_step: 50
 
 use_wandb_tracking: true
-wandb_project_name: DIT_SIMPLE
-wandb_run_name: 1204_dit_v2_simple_vae_pred_closed_large_rts
+wandb_project_name: DIT_SIMPLE_SEGMENT
+wandb_run_name: 1205_dit_segment_init
 
 data_train:
     name: src.dataset.dataset_latent_segment.LatentDataset
@@ -33,7 +33,6 @@ data_val:
     name: src.dataset.dataset_latent_segment.LatentDataset
     params:
         latent_dir: ../data/logan_jsons_latent_pred_closed/abc_test
-        pc_dir: ../data/logan_jsons_michel_latent/abc_test
         latent_dim: 128
         num_data: -1
         log_scale: true
@@ -51,15 +50,19 @@ model:
     # name: dit_v2
     name: src.dit.simple_surface_decoder_segment.SimpleSurfaceDecoder
     trainer_name: dit_v1
-    checkpoint_folder: checkpoints/1204_dit_v2_simple_vae_pred_closed_large_rts
-    checkpoint_file_name: model-22.pt
+    checkpoint_folder: checkpoints/1205_dit_segment_init
+    checkpoint_file_name: --
+    load_ckpt: False
     params:
         input_dim: 139
-        cond_dim: 3
+        cond_dim: 192
+        mem_dim: 384
         output_dim: 139
         latent_dim: 384
         num_layers: 12
         num_heads: 6
+        max_num_surfaces: 32
+        use_diag_memory_mask: True
 
 vae:
     config_file: src/configs/train_vae_v1_canonical_logvar_l2norm_pred_closed.yaml
@@ -71,3 +74,4 @@ loss:
     weight_scales: 1.0
     weight_shifts: 1.0
     weight_original_sample: 1.0
+    original_sample_start_step: 50000

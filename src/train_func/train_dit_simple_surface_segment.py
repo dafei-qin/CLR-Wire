@@ -60,9 +60,9 @@ else:
     shutil.copytree(code_folder, Path(args.model.checkpoint_folder) / 'code', dirs_exist_ok=True)
     shutil.copyfile(cli_args.config, Path(args.model.checkpoint_folder) / 'config.yaml')
 
-transform = getattr(args.data, 'transform', None)
-if transform is None:
-    transform = None
+# transform = getattr(args.data, 'transform', None)
+# if transform is None:
+#     transform = None
 
 
 # class IndexedDataset(torch.utils.data.Dataset):
@@ -81,16 +81,16 @@ if transform is None:
 #         base_idx = i % self._base_len
 #         return (*sample[:-1], torch.tensor(base_idx, dtype=torch.long), sample[-1])
 
-config = OmegaConf.load(args.config)
+config = OmegaConf.load(cli_args.config)
 
 vae_config = OmegaConf.load(config.vae.config_file)
 vae = load_model_from_config(vae_config)
 
-model = load_model_from_config(config.model)
+model = load_model_from_config(config)
 
-train_dataset_raw = load_dataset_from_config(config.data_train)
+train_dataset_raw = load_dataset_from_config(config, section='data_train')
 
-val_dataset = load_dataset_from_config(config.data_val)
+val_dataset = load_dataset_from_config(config, section='data_val')
 
 
 # train_dataset_raw = LatentDataset(
@@ -110,10 +110,10 @@ val_dataset = load_dataset_from_config(config.data_val)
 if len(train_dataset_raw.latent_files) == 1:
     print(f'Overfitting with {len(train_dataset_raw.latent_files)} data:\n {train_dataset_raw.latent_files[0]}')
 # weighted sampling config (optional)
-ws_cfg = getattr(args.data, 'weighted_sampling', None)
-ws_enabled = False
-if ws_cfg is not None:
-    ws_enabled = getattr(ws_cfg, 'enabled', False)
+# ws_cfg = getattr(args.data, 'weighted_sampling', None)
+# ws_enabled = False
+# if ws_cfg is not None:
+#     ws_enabled = getattr(ws_cfg, 'enabled', False)
 
 # train_dataset = IndexedDataset(train_dataset_raw) if ws_enabled else train_dataset_raw
 train_dataset = train_dataset_raw
@@ -157,17 +157,19 @@ trainer = TrainerFlowSurface(
     checkpoint_file_name=args.model.checkpoint_file_name,
     val_every_step=int(args.val_every_epoch * num_step_per_epoch),
     # weighted sampling options
-    weighted_sampling_enabled=ws_enabled,
-    ws_warmup_epochs=getattr(ws_cfg, 'warmup_epochs', 5) if ws_cfg is not None else 5,
-    ws_alpha=getattr(ws_cfg, 'alpha', 1.0) if ws_cfg is not None else 1.0,
-    ws_beta=getattr(ws_cfg, 'beta', 0.9) if ws_cfg is not None else 0.9,
-    ws_eps=getattr(ws_cfg, 'eps', 1e-6) if ws_cfg is not None else 1e-6,
-    ws_refresh_every=getattr(ws_cfg, 'refresh_every', 1) if ws_cfg is not None else 1,
+    # weighted_sampling_enabled=ws_enabled,
+    # ws_warmup_epochs=getattr(ws_cfg, 'warmup_epochs', 5) if ws_cfg is not None else 5,
+    # ws_alpha=getattr(ws_cfg, 'alpha', 1.0) if ws_cfg is not None else 1.0,
+    # ws_beta=getattr(ws_cfg, 'beta', 0.9) if ws_cfg is not None else 0.9,
+    # ws_eps=getattr(ws_cfg, 'eps', 1e-6) if ws_cfg is not None else 1e-6,
+    # ws_refresh_every=getattr(ws_cfg, 'refresh_every', 1) if ws_cfg is not None else 1,
     weight_valid=args.loss.weight_valid,
     weight_params=args.loss.weight_params,
     weight_rotations=args.loss.weight_rotations,
     weight_scales=args.loss.weight_scales,
     weight_shifts=args.loss.weight_shifts,
+    weight_original_sample=args.loss.weight_original_sample,
+    original_sample_start_step=args.loss.original_sample_start_step,
     num_inference_timesteps=args.trainer.num_inference_timesteps,
     log_scale=config.data_train.params.log_scale
 )

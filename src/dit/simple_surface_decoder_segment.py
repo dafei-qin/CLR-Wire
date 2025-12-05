@@ -57,16 +57,16 @@ class AdaLNTransformerDecoderLayer(nn.Module):
         self.norm2 = AdaLayerNorm(latent_dim, latent_dim)
         self.norm3 = AdaLayerNorm(latent_dim, latent_dim)
 
-    def forward(self, x, mem, t_emb, tgt_key_padding_mask=None):
+    def forward(self, x, mem, t_emb, tgt_mask=None, memory_mask=None, tgt_key_padding_mask=None, memory_key_padding_mask=None):
 
         # Self-attention
         h = self.norm1(x, t_emb)
-        sa, _ = self.self_attn(h, h, h, key_padding_mask=tgt_key_padding_mask)
+        sa, _ = self.self_attn(h, h, h, key_padding_mask=tgt_key_padding_mask, attn_mask=tgt_mask)
         x = x + sa
 
         # Cross-attention
         h = self.norm2(x, t_emb)
-        ca, _ = self.cross_attn(h, mem, mem)
+        ca, _ = self.cross_attn(h, mem, mem, attn_mask=memory_mask, key_padding_mask=memory_key_padding_mask)
         x = x + ca
 
         # Feedforward
@@ -80,17 +80,25 @@ class SimpleSurfaceDecoder(nn.Module):
         self,
         input_dim=128,
         cond_dim=768,
+        mem_dim=4096,
         output_dim=128,
         latent_dim=256,
         num_layers=4,
         num_heads=8,
+        use_diag_memory_mask=False,
+        max_num_surfaces=32,
     ):
         super().__init__()
 
         self.input_proj = nn.Linear(input_dim, latent_dim)
-        self.cond_proj = nn.Linear(cond_dim, latent_dim)
+        self.cond_proj = nn.Linear(cond_dim, mem_dim)
         self.output_proj = nn.Linear(latent_dim, output_dim)
-
+        self.use_diag_memory_mask = use_diag_memory_mask
+        self.max_num_surfaces=max_num_surfaces
+        if use_diag_memory_mask:
+            self.register_buffer('memory_mask', torch.eye(self.max_num_surfaces, dtype=torch.bool))
+        else:
+            self.memory_mask = None
         self.layers = nn.ModuleList([
             AdaLNTransformerDecoderLayer(
                 latent_dim=latent_dim,
@@ -112,7 +120,7 @@ class SimpleSurfaceDecoder(nn.Module):
             post_act_fn="silu",
         )
 
-    def forward(self, sample, timestep, cond, tgt_key_padding_mask=None):
+    def forward(self, sample, timestep, cond, tgt_key_padding_mask=None, memory_key_padding_mask=None):
 
         # Project tokens
         x = self.input_proj(sample)
@@ -128,6 +136,8 @@ class SimpleSurfaceDecoder(nn.Module):
                 mem=mem,
                 t_emb=t_emb,
                 tgt_key_padding_mask=tgt_key_padding_mask,
+                memory_key_padding_mask=memory_key_padding_mask,
+                memory_mask=self.memory_mask,
             )
 
         x = self.output_proj(x)

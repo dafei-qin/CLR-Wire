@@ -36,7 +36,7 @@ def _clean_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Te
 def load_model_from_config(
     cfg: Union[Dict[str, Any], Any],
     device: Union[str, torch.device, None] = None,
-    strict: bool = True,
+    strict: bool = True
 ) -> Tuple[torch.nn.Module, Dict[str, Any]]:
     """
     Instantiate model from config and load checkpoint.
@@ -75,8 +75,9 @@ def load_model_from_config(
     ckpt_folder = model_cfg.get("checkpoint_folder", None)
     ckpt_name = model_cfg.get("checkpoint_file_name", None)
     if ckpt_folder is None or ckpt_name is None:
-        return model, {}
-
+        return model
+    if model_cfg.get('load_ckpt', True) == False:
+        return model
     ckpt_path = os.path.join(ckpt_folder, ckpt_name)
     ckpt = torch.load(ckpt_path, map_location=device or "cpu", weights_only=True)
     print('Loading checkpoint from: ', ckpt_path)
@@ -88,7 +89,8 @@ def load_model_from_config(
     state_dict = _clean_state_dict(state_dict)
     model.load_state_dict(state_dict, strict=strict)
 
-    return model, ckpt if isinstance(ckpt, dict) else {}
+    # return model, ckpt if isinstance(ckpt, dict) else {}
+    return model
 
 
 def load_dataset_from_config(
