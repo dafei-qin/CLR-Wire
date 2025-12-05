@@ -24,6 +24,11 @@ from src.trainer.trainer_base import BaseTrainer
 from src.utils.helpers import divisible_by, get_current_time, get_lr
 from src.utils.surface_latent_tools import decode_and_sample_with_rts, decode_latent
 
+
+def has_nan_or_inf(t):
+    return not torch.isfinite(t).all()
+
+
 # B-spline enhanced trainer class
 class TrainerFlowSurface(BaseTrainer):
     @beartype
@@ -232,7 +237,9 @@ class TrainerFlowSurface(BaseTrainer):
                             )
                     
                     gt_sampled_points = gt_sampled_points.reshape(B, num_max_pad, -1)
-                    
+                    # print(gt_sampled_points.shape, gt_sampled_points.abs().max().item())
+                    assert gt_sampled_points.abs().max().item() < 15.0, f'gt_sampled_points is out of range: {gt_sampled_points.abs().max().item()}'
+
                     gt_sample = torch.cat([masks.unsqueeze(-1).float(), shifts_padded, rotations_padded, scales_padded, params_padded], dim=-1)
                     
                     noise = torch.randn_like(gt_sample)
@@ -254,6 +261,9 @@ class TrainerFlowSurface(BaseTrainer):
 
                     # forward pass
                     masks = masks.unsqueeze(-1)
+                    assert not torch.isnan(noisy_sample).any(), "noisy_sample contains inf/nan" + str(noisy_sample)
+                    assert not torch.isnan(gt_sampled_points).any(), "gt_sampled_points contains inf/nan" + str(gt_sampled_points)
+                    # assert not torch.isnan(masks).any(), "masks contains inf/nan" + str(masks)
                     output = self.model(sample=noisy_sample, timestep = timesteps, cond=gt_sampled_points, tgt_key_padding_mask=~masks.bool().squeeze(-1), memory_key_padding_mask=~masks.bool().squeeze(-1))
 
 
@@ -265,8 +275,12 @@ class TrainerFlowSurface(BaseTrainer):
                     if self.scheduler.config.prediction_type == 'v_prediction':
                         alpha_prod_t = self.scheduler.alphas_cumprod.to(timesteps.device)[timesteps]
                         beta_prod_t = 1 - alpha_prod_t
-                        
+                        assert not torch.isnan(alpha_prod_t).any(), "alpha_prod_t contains inf/nan" + str(alpha_prod_t)
+                        assert not torch.isnan(beta_prod_t).any(), "beta_prod_t contains inf/nan" + str(beta_prod_t)
+                        assert not torch.isnan(noisy_sample).any(), "noisy_sample contains inf/nan" + str(noisy_sample)
+                        assert not torch.isnan(output).any(), "output contains inf/nan" + str(output)
                         pred_original_sample = (alpha_prod_t**0.5).unsqueeze(1).unsqueeze(1) * noisy_sample - (beta_prod_t**0.5).unsqueeze(1).unsqueeze(1) * output
+                        assert not torch.isnan(pred_original_sample).any(), "pred_original_sample contains inf/nan" + str(pred_original_sample)
                     elif self.scheduler.config.prediction_type == 'sample':
                         pred_original_sample = output
                     else:
@@ -276,9 +290,10 @@ class TrainerFlowSurface(BaseTrainer):
                         # Here we get the x0
                         pred_original_sample = pred_original_sample[masks.squeeze(-1).bool()]
                         valid, shifts, rotations, scales, params = decode_latent(pred_original_sample, log_scale=self.log_scale)
-
+                        # print(f'max(scales): {scales.abs().max().item()}')
                         # Then we get the sampled points
-                        pred_sampled_points = decode_and_sample_with_rts(self.vae, params, shifts, rotations, scales, log_scale=self.log_scale)
+                        # Because we already exp-ed the scale by the decode_latent function, here we don't exp it again.
+                        pred_sampled_points = decode_and_sample_with_rts(self.vae, params, shifts, rotations, scales, log_scale=False)
 
                         loss_original_sample = torch.nn.functional.mse_loss(pred_sampled_points.reshape(pred_sampled_points.shape[0], -1), gt_sampled_points[masks.squeeze(-1).bool()])
                     else:
@@ -300,7 +315,26 @@ class TrainerFlowSurface(BaseTrainer):
                 self.accelerator.backward(loss)
             
 
+
+            for name, p in self.raw_model.named_parameters():
+                if p.grad is None:
+                    continue
+                if has_nan_or_inf(p.grad):
+                    print(f"[NaN/Inf grad] {name}")
+                    # 定位用
+                    print(p.grad)
+                    print('loss: ', loss)
+                    raise RuntimeError("Invalid grad detected")
+
+
             self.optimizer.step()
+
+            for name, p in self.raw_model.named_parameters():
+                if has_nan_or_inf(p.data):
+                    print(f"[NaN/Inf param after step] {name}")
+                    raise RuntimeError("Invalid parameter update")
+            
+
             self.optimizer.zero_grad()
 
 
@@ -394,6 +428,7 @@ class TrainerFlowSurface(BaseTrainer):
                             )
                         
                         gt_sampled_points = gt_sampled_points.reshape(B, num_max_pad, -1)
+                        # assert gt_sampled_points.abs().max().item() < 15.0, f'val_gt_sampled_points is out of range: {gt_sampled_points.abs().max().item()}'
 
                         masks = masks.unsqueeze(-1)
                         gt_sample = torch.cat([masks.float(), shifts_padded, rotations_padded, scales_padded, params_padded], dim=-1)
@@ -411,9 +446,11 @@ class TrainerFlowSurface(BaseTrainer):
                         
                         pred_original_sample = sample[masks.squeeze(-1).bool()]
                         valid, shifts, rotations, scales, params = decode_latent(pred_original_sample, log_scale=self.log_scale)
-
+                         
+                        if scales.abs().max().item() > 15.0:
+                            print('Warning:', f'val_scales is out of range: {scales.abs().max().item()}')
                         # Then we get the sampled points
-                        pred_sampled_points = decode_and_sample_with_rts(self.vae, params, shifts, rotations, scales, log_scale=self.log_scale)
+                        pred_sampled_points = decode_and_sample_with_rts(self.vae, params, shifts, rotations, scales, log_scale=False)
 
                         loss_original_sample = torch.nn.functional.mse_loss(pred_sampled_points.reshape(pred_sampled_points.shape[0], -1), gt_sampled_points[masks.squeeze(-1).bool()])
 

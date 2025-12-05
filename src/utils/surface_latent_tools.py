@@ -27,14 +27,16 @@ def decode_and_sample(model, latent_params):
     Decode latent parameters, sample surfaces per surface type, and return samples in
     the same order as `latent_params`. Per-type processing keeps gradients intact.
     """
+    assert not torch.isnan(latent_params).any(), "latent_params contains inf/nan" + str(latent_params)
     class_logits, surface_type_pred, is_closed_logits, is_closed = model.classify(latent_params)
 
     params_raw_recon, mask = model.decode(latent_params, surface_type_pred)
-
+    assert not torch.isnan(params_raw_recon).any(), "params_raw_recon contains inf/nan" + str(params_raw_recon)
     ordered_samples = None
     for surface_type in surface_type_pred.unique():
         type_mask = surface_type_pred == surface_type
         params_raw_recon_per_type = params_raw_recon[type_mask]
+        
         samples = params_to_samples(params_raw_recon_per_type, surface_type, 8, 8)
 
         if ordered_samples is None:
@@ -51,6 +53,7 @@ def decode_and_sample(model, latent_params):
 def decode_and_sample_with_rts(model, latent_params, shifts, rotations, scales, log_scale=False):
     
     samples = decode_and_sample(model, latent_params)
+    assert not torch.isnan(samples).any(), 'samples is nan'
     if log_scale:
         scales = torch.exp(scales)
     # Could be here's problem?
@@ -58,9 +61,13 @@ def decode_and_sample_with_rts(model, latent_params, shifts, rotations, scales, 
     X = rotations[..., :3] / (torch.norm(rotations[..., :3], dim=-1, keepdim=True) + 1e-8)
     Y = rotations[..., 3:6] / (torch.norm(rotations[..., 3:6], dim=-1, keepdim=True) + 1e-8)
     Z = torch.cross(X, Y, dim=-1)
+    assert not torch.isnan(X).any(), 'X is nan'
+    assert not torch.isnan(Y).any(), 'Y is nan'
+    assert not torch.isnan(Z).any(), 'Z is nan'
     rotation_matrix = torch.stack([X, Y, Z], dim=-1)[:, None, None] # (B, 1, 1, 3, 3)
     # samples = (samples[:, :, :, None] @ rotation_matrix )[:, :, :, 0] * scales[:, None, None] + shifts[:, None, None]
     samples = (rotation_matrix @ samples[..., None]  )[..., 0] * scales[:, None, None] + shifts[:, None, None]
+    assert not torch.isnan(samples).any(), 'samples after RTS is nan'
 
     return samples
 

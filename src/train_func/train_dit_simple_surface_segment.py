@@ -47,10 +47,14 @@ else:
 
 isDebug = True if sys.gettrace() else False
 
+
+# torch.autograd.set_detect_anomaly(True)
+# print('WARNING: set detect anomaly')
+
 if isDebug:
-    args.use_wandb_tracking = True
-    args.batch_size = 2
-    args.num_workers = 1
+    args.use_wandb_tracking = False
+    # args.batch_size = 512
+    # args.num_workers = 1
 
 else:
     # Here we back-up the code to the ckpt folder.

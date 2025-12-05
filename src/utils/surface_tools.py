@@ -33,13 +33,22 @@ def torus_d0(u, v, location, X, Y, Z, major_radius, minor_radius):
 SURFACE_TYPE_MAP = {'plane': 0, 'cylinder': 1, 'cone': 2, 'sphere': 3, 'torus': 4}
 SURFACE_TYPE_MAP_INV = {v: k for k, v in SURFACE_TYPE_MAP.items()}
 
+
+def safe_atan2(y, x, eps=1e-6):
+    denom = x**2 + y**2
+    scale = torch.sqrt(denom + eps)
+    return torch.atan2(y / scale, x / scale)
+
+def safe_asin(x, eps=1e-6):
+    return torch.asin(x.clamp(-1 + eps, 1 - eps))
+
 def recover_surface_from_params(params, surface_type_idx):
     """Recover surface parameters from parameter vector (torch, differentiable)"""
     surface_type = SURFACE_TYPE_MAP_INV.get(surface_type_idx.item() if isinstance(surface_type_idx, torch.Tensor) else surface_type_idx, 'plane')
     
     P = params[..., :3]
-    D = params[..., 3:6] / (torch.norm(params[..., 3:6], dim=-1, keepdim=True) + 1e-8)
-    X = params[..., 6:9] / (torch.norm(params[..., 6:9], dim=-1, keepdim=True) + 1e-8)
+    D = params[..., 3:6] / (torch.norm(params[..., 3:6], dim=-1, keepdim=True) + 1e-6)
+    X = params[..., 6:9] / (torch.norm(params[..., 6:9], dim=-1, keepdim=True) + 1e-6)
     Y = torch.cross(D, X, dim=-1)
     UV = params[..., 9:17]
     scalar_params = params[..., 17:]
@@ -50,7 +59,8 @@ def recover_surface_from_params(params, surface_type_idx):
 
     elif surface_type == 'cylinder':
         sin_u_center, cos_u_center, u_half, height = UV[..., 0], UV[..., 1], UV[..., 2], UV[..., 3]
-        u_center = torch.atan2(sin_u_center, cos_u_center)
+        # u_center = torch.atan2(sin_u_center, cos_u_center)
+        u_center = safe_atan2(sin_u_center, cos_u_center)
         u_half = torch.clamp(u_half + 0.5, 0, 1 - 1e-5) * torch.pi
         u_min, u_max = u_center - u_half, u_center + u_half
         v_min, v_max = torch.zeros_like(height), height
@@ -59,7 +69,8 @@ def recover_surface_from_params(params, surface_type_idx):
 
     elif surface_type == 'cone':
         sin_u_center, cos_u_center, u_half, v_center, v_half = UV[..., 0], UV[..., 1], UV[..., 2], UV[..., 3], UV[..., 4]
-        u_center = torch.atan2(sin_u_center, cos_u_center)
+        # u_center = torch.atan2(sin_u_center, cos_u_center)
+        u_center = safe_atan2(sin_u_center, cos_u_center)
         u_half = torch.clamp(u_half, 0, 1 - 1e-5) * torch.pi
         u_min, u_max = u_center - u_half, u_center + u_half
         v_min, v_max = v_center - v_half, v_center + v_half
@@ -68,10 +79,12 @@ def recover_surface_from_params(params, surface_type_idx):
 
     elif surface_type == 'torus':
         sin_u_center, cos_u_center, u_half, sin_v_center, cos_v_center, v_half = UV[..., 0], UV[..., 1], UV[..., 2], UV[..., 3], UV[..., 4], UV[..., 5]
-        u_center = torch.atan2(sin_u_center, cos_u_center)
+        # u_center = torch.atan2(sin_u_center, cos_u_center)
+        u_center = safe_atan2(sin_u_center, cos_u_center)
         u_half = torch.clamp(u_half, 0, 1 - 1e-5) * torch.pi
         u_min, u_max = u_center - u_half, u_center + u_half
-        v_center = torch.atan2(sin_v_center, cos_v_center)
+        # v_center = torch.atan2(sin_v_center, cos_v_center)
+        v_center = safe_atan2(sin_v_center, cos_v_center)
         v_half = torch.clamp(v_half, 0, 1 - 1e-5) * torch.pi
         v_min, v_max = v_center - v_half, v_center + v_half
         scalar = torch.exp(scalar_params[..., :2])
@@ -81,13 +94,21 @@ def recover_surface_from_params(params, surface_type_idx):
         u_h_norm, v_h_norm = UV[..., 3], UV[..., 4]
         dir_vec = dir_vec / (torch.norm(dir_vec, dim=-1, keepdim=True) + 1e-8)
         x, y, z = dir_vec[..., 0], dir_vec[..., 1], dir_vec[..., 2]
-        u_center = torch.atan2(y, x)
-        v_center = torch.asin(torch.clamp(z, -1.0, 1.0))
+        # u_center = torch.atan2(y, x)
+        u_center = safe_atan2(y, x)
+        # v_center = torch.asin(torch.clamp(z, -1.0, 1.0))
+        v_center = safe_asin(torch.clamp(z, -1.0, 1.0))
         u_half = torch.clamp(u_h_norm, 0.0, 1.0 - 1e-5) * torch.pi
         v_half = torch.clamp(v_h_norm, 0.0, 1.0 - 1e-5) * (torch.pi / 2)
         u_min, u_max = u_center - u_half, u_center + u_half
         v_min, v_max = v_center - v_half, v_center + v_half
         scalar = torch.exp(scalar_params[..., 0:1])
+        assert torch.isfinite(UV).all(), "UV contains inf/nan" + str(UV)
+        assert torch.isfinite(u_min).all(), "u_min contains inf/nan" + str(u_min)
+        assert torch.isfinite(u_max).all(), "u_max contains inf/nan" + str(u_max)
+        assert torch.isfinite(v_min).all(), "v_min contains inf/nan" + str(v_min)
+        assert torch.isfinite(v_max).all(), "v_max contains inf/nan" + str(v_max)
+        assert torch.isfinite(scalar).all(), "scalar contains inf/nan" + str(scalar)
     
     return {
         'location': P,
@@ -99,6 +120,7 @@ def recover_surface_from_params(params, surface_type_idx):
 
 def params_to_samples(params, surface_type_idx, num_samples_u, num_samples_v):
     """Sample points from surface parameters"""
+    assert torch.isfinite(params).all(), "params contains inf/nan" + str(params)
     surface_params = recover_surface_from_params(params, surface_type_idx)
     
     location = surface_params['location']
@@ -109,6 +131,7 @@ def params_to_samples(params, surface_type_idx, num_samples_u, num_samples_v):
     # scalar = torch.exp(scalar)
     surface_type = surface_params['type']
     
+    assert torch.isfinite(surface_params['uv']).all(), "uv contains inf/nan" + str(surface_params['uv'])
     device = params.device
     u_lin = torch.linspace(0, 1, num_samples_u, device=device)
     v_lin = torch.linspace(0, 1, num_samples_v, device=device)
@@ -121,6 +144,15 @@ def params_to_samples(params, surface_type_idx, num_samples_u, num_samples_v):
     X_exp = X[..., None, None, :]
     Y_exp = Y[..., None, None, :]
     D_exp = D[..., None, None, :]
+
+    assert torch.isfinite(u).all(), "u contains inf/nan"
+    assert torch.isfinite(v).all(), "v contains inf/nan"
+    assert torch.isfinite(scalar).all(), "scalar contains inf/nan"
+    # assert torch.isfinite(radius).all(), "radius contains inf/nan"
+    assert torch.isfinite(loc_exp).all(), "loc_exp contains inf/nan"
+    assert torch.isfinite(X_exp).all(), "X_exp contains inf/nan"
+    assert torch.isfinite(Y_exp).all(), "Y_exp contains inf/nan"
+    assert torch.isfinite(D_exp).all(), "D_exp contains inf/nan"
     
     if surface_type == 'plane':
         points = plane_d0(u, v, loc_exp, X_exp, Y_exp, D_exp)
@@ -136,6 +168,6 @@ def params_to_samples(params, surface_type_idx, num_samples_u, num_samples_v):
     elif surface_type == 'torus':
         major_radius, minor_radius = scalar[..., 0:1, None], scalar[..., 1:2, None]
         points = torus_d0(u, v, loc_exp, X_exp, Y_exp, D_exp, major_radius, minor_radius)
-    
+    assert not torch.isnan(points).any(), "points contains inf/nan, surface_type: " + surface_type + str(surface_params)
     return points
 
