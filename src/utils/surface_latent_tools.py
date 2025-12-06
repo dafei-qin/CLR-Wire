@@ -50,6 +50,11 @@ def decode_and_sample(model, latent_params):
 
     return ordered_samples
 
+def safe_normalize(v, dim=-1, eps=1e-6):
+    norm = torch.norm(v, dim=dim, keepdim=True)
+    norm = torch.maximum(norm, torch.ones_like(norm) * eps)
+    return v / norm
+
 def decode_and_sample_with_rts(model, latent_params, shifts, rotations, scales, log_scale=False):
     
     samples = decode_and_sample(model, latent_params)
@@ -58,9 +63,10 @@ def decode_and_sample_with_rts(model, latent_params, shifts, rotations, scales, 
         scales = torch.exp(scales)
     # Could be here's problem?
 
-    X = rotations[..., :3] / (torch.norm(rotations[..., :3], dim=-1, keepdim=True) + 1e-8)
-    Y = rotations[..., 3:6] / (torch.norm(rotations[..., 3:6], dim=-1, keepdim=True) + 1e-8)
+    X = safe_normalize(rotations[..., :3])
+    Y = safe_normalize(rotations[..., 3:6])
     Z = torch.cross(X, Y, dim=-1)
+    Z = safe_normalize(Z)
     assert not torch.isnan(X).any(), 'X is nan'
     assert not torch.isnan(Y).any(), 'Y is nan'
     assert not torch.isnan(Z).any(), 'Z is nan'
