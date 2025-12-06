@@ -62,6 +62,9 @@ class TrainerFlowSurface(BaseTrainer):
         num_inference_timesteps: int = 50,
         weight_valid = 1.0,
         weight_params = 1.0,
+        weight_rotations = 1.0,
+        weight_scales = 1.0,
+        weight_shifts = 1.0,
         **kwargs
     ):
         super().__init__(
@@ -104,7 +107,9 @@ class TrainerFlowSurface(BaseTrainer):
 
         self.weight_valid = weight_valid
         self.weight_params = weight_params
-
+        self.weight_rotations = weight_rotations
+        self.weight_scales = weight_scales
+        self.weight_shifts = weight_shifts  
     
     def log_loss(self, total_loss, lr, total_norm, step, loss_dict={}):
         """Enhanced loss logging for B-spline model"""
@@ -168,7 +173,7 @@ class TrainerFlowSurface(BaseTrainer):
                     gt_sample = torch.cat([masks.float(), shifts_padded, rotations_padded, scales_padded, params_padded], dim=-1)
                     
                     noise = torch.randn_like(gt_sample)
-                    timesteps = torch.randint(0, self.scheduler.num_train_timesteps, (gt_sample.shape[0],), device=gt_sample.device).long()
+                    timesteps = torch.randint(0, self.scheduler.config.num_train_timesteps, (gt_sample.shape[0],), device=gt_sample.device).long()
 
                     noisy_sample = self.scheduler.add_noise(gt_sample, noise, timesteps)
 
@@ -190,6 +195,20 @@ class TrainerFlowSurface(BaseTrainer):
                 
                     loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params = self.compute_loss(output, target, masks)
                     
+                    # Here we try to recover the x0
+                    if self.scheduler.config.prediction_type == 'v_prediction':
+                        alpha_prod_t = self.scheduler.alphas_cumprod.to(timesteps.device)[timesteps]
+                        beta_prod_t = 1 - alpha_prod_t
+                        
+                        pred_original_sample = (alpha_prod_t**0.5).unsqueeze(1).unsqueeze(1) * noisy_sample - (beta_prod_t**0.5).unsqueeze(1).unsqueeze(1) * output
+                    elif self.scheduler.config.prediction_type == 'sample':
+                        pred_original_sample = output
+                    else:
+                        raise ValueError(f'Unsupported prediction type: {self.scheduler.config.prediction_type}')
+
+                    loss_original_sample = torch.nn.functional.mse_loss(pred_original_sample, gt_sample, reduction='none') * masks.float()
+                    loss_original_sample = loss_original_sample.mean()
+
                     # from tqdm import tqdm
                     # loss_all = []
                     # for _t in tqdm(range(1000)):
@@ -202,7 +221,7 @@ class TrainerFlowSurface(BaseTrainer):
                     # loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params = self.compute_loss(output, gt_sample, masks)
 
                 
-                    loss = loss_valid * self.weight_valid + loss_shifts + loss_rotations + loss_scales + loss_params * self.weight_params
+                    loss = loss_valid * self.weight_valid + loss_shifts * self.weight_shifts + loss_rotations * self.weight_rotations + loss_scales * self.weight_scales + loss_params * self.weight_params
                     total_loss += loss.item()
                     loss_dict = {
                         'loss_valid': loss_valid.item(),
@@ -210,6 +229,7 @@ class TrainerFlowSurface(BaseTrainer):
                         'loss_rotations': loss_rotations.item(),
                         'loss_scales': loss_scales.item(),
                         'loss_params': loss_params.item(),
+                        'loss_orig_sample': loss_original_sample.item()
                     }
                 
                 self.accelerator.backward(loss)

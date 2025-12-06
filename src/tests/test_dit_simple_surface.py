@@ -25,9 +25,38 @@ from src.dataset.dataset_v1 import dataset_compound
 from src.utils.config import NestedDictToClass, load_config
 from src.flow.surface_flow import ZLDMPipeline, get_new_scheduler
 from src.tests.test_vae_v1 import to_json
-from src.vae.vae_v1 import SurfaceVAE
 from src.tools.surface_to_canonical_space import from_canonical
 from utils.surface import visualize_json_interset
+
+# Colors for is_closed visualization
+# Format: [R, G, B] in range [0, 1]
+COLOR_BOTH_CLOSED = [0.2, 0.8, 0.2]      # Green - both u and v closed
+COLOR_U_CLOSED = [0.2, 0.2, 0.8]         # Blue - only u closed
+COLOR_V_CLOSED = [0.8, 0.2, 0.2]         # Red - only v closed
+COLOR_NEITHER_CLOSED = [0.7, 0.7, 0.7]   # Gray - neither closed
+
+
+def get_closed_color(is_u_closed, is_v_closed):
+    """Get color based on is_closed status"""
+    if is_u_closed and is_v_closed:
+        return COLOR_BOTH_CLOSED
+    elif is_u_closed:
+        return COLOR_U_CLOSED
+    elif is_v_closed:
+        return COLOR_V_CLOSED
+    else:
+        return COLOR_NEITHER_CLOSED
+
+
+def apply_closed_colors_to_surfaces(surfaces_dict, is_u_closed_list, is_v_closed_list):
+    """Apply colors to surfaces based on is_closed status"""
+    for i, (surface_key, surface_data) in enumerate(surfaces_dict.items()):
+        if i < len(is_u_closed_list) and 'ps_handler' in surface_data:
+            color = get_closed_color(is_u_closed_list[i], is_v_closed_list[i])
+            try:
+                surface_data['ps_handler'].set_color(color)
+            except Exception as e:
+                print(f"Warning: Could not set color for surface {i}: {e}")
 
 
 
@@ -80,7 +109,7 @@ def register_unit_cube():
             cube_faces,
             color=(0.9, 0.9, 0.9),
             smooth_shade=False,
-            transparency=0.7,
+            transparency=0.2,
         )
         if hasattr(cube, "set_edge_color"):
             cube.set_edge_color((0.2, 0.2, 0.2))
@@ -131,6 +160,15 @@ _num_inference_steps = 50
 # Surface groups
 _gt_surfaces = {}
 _gen_surfaces = {}
+# pred_is_closed related variables
+_pred_is_closed = False
+_show_closed_colors = True  # Toggle for showing is_closed coloring
+_vae_model_name = 'vae_v1'  # VAE model name
+_dit_model_name = 'dit_v1'
+# Custom surface count control
+_use_custom_num_surfaces = False  # Whether to use custom surface count
+_custom_num_surfaces = 20  # User-specified surface count (15-32)
+_default_num_surfaces = 20  # Default value from GT mask
 
 # Surface type mapping
 SURFACE_TYPE_MAP_INV = {
@@ -261,10 +299,13 @@ def switch_dataset(use_train: bool):
 
 def load_model_and_dataset(
     args,
+    vae_config_path=None,
+    vae_checkpoint_path=None,
     device = 'cuda'
 ):
     """Load dataset and corresponding model weights."""
     global _dataset, _dataset_train, _dataset_val, _model, _pipe, _max_idx, _vae, _dataset_compound
+    global _pred_is_closed, _vae_model_name, _dit_model_name
 
     _dataset_val = LatentDataset(
     latent_dir=args.data.val_latent_dir, pc_dir=args.data.val_pc_dir, max_num_surfaces=args.data.max_num_surfaces, 
@@ -281,14 +322,36 @@ def load_model_and_dataset(
     # Set initial dataset to val
     _dataset = _dataset_val
     
-    _dataset_compound = dataset_compound(json_dir='./',canonical=True)
+    # Load VAE config if provided
+    if vae_config_path:
+        try:
+            vae_cfg = load_config(vae_config_path)
+            vae_cfg_args = NestedDictToClass(vae_cfg)
+            _vae_model_name = getattr(vae_cfg_args.model, 'name', 'vae_v1')
+            _pred_is_closed = getattr(vae_cfg_args.model, 'pred_is_closed', False)
+            print(f"Loaded VAE config: model_name={_vae_model_name}, pred_is_closed={_pred_is_closed}")
+        except Exception as e:
+            print(f"Warning: Could not load VAE config file: {e}")
+            _vae_model_name = 'vae_v1'
+            _pred_is_closed = False
+    else:
+        # Try to get from args if available
+        _vae_model_name = getattr(args.vae, 'name', 'vae_v1') if hasattr(args, 'vae') else 'vae_v1'
+        _pred_is_closed = getattr(args.vae, 'pred_is_closed', False) if hasattr(args, 'vae') else False
+        print(f"Using VAE settings from args: model_name={_vae_model_name}, pred_is_closed={_pred_is_closed}")
+    
+    _dataset_compound = dataset_compound(json_dir='./', canonical=True, detect_closed=_pred_is_closed)
     build_index_metadata()
     initialize_filters()
     refresh_filtered_indices(preserve_current=False)
 
+    _dit_model_name = getattr(args.model, 'name', 'dit_v1')
     # Import and create model
-    from src.dit.simple_surface_decoder import SimpleSurfaceDecoder
-    
+    if _dit_model_name == 'dit_v2':
+        from src.dit.simple_surface_decoder_v2 import SimpleSurfaceDecoder
+    else:
+        from src.dit.simple_surface_decoder import SimpleSurfaceDecoder
+    print(f"Using DiT model: {_dit_model_name}")
     _model = SimpleSurfaceDecoder(
         input_dim=args.model.input_dim,
         cond_dim=args.model.cond_dim,
@@ -314,22 +377,46 @@ def load_model_and_dataset(
         _model.load_state_dict(checkpoint)
         print("Loaded raw model state_dict.")
 
+    # Load VAE model based on model_name
+    if _vae_model_name == 'vae_v2':
+        from src.vae.vae_v2 import SurfaceVAE
+        print(f"Loading VAE model: vae_v2 (pred_is_closed={_pred_is_closed})")
+    else:
+        from src.vae.vae_v1 import SurfaceVAE
+        print(f"Loading VAE model: vae_v1")
+        if _pred_is_closed:
+            print("Warning: vae_v1 does not support pred_is_closed, disabling it")
+            _pred_is_closed = False
     
-    _vae = SurfaceVAE(args.vae.param_raw_dim)
+    # Get param_raw_dim from args or config
+    if hasattr(args, 'vae') and hasattr(args.vae, 'param_raw_dim'):
+        param_raw_dim = args.vae.param_raw_dim
+    else:
+        param_raw_dim = [17, 18, 19, 18, 19]  # Default
+    
+    _vae = SurfaceVAE(param_raw_dim)
 
-    checkpoint = torch.load(args.vae.checkpoint_file_name, map_location=device)
+    # Use provided vae_checkpoint_path or fall back to args
+    if vae_checkpoint_path:
+        vae_ckpt_path = vae_checkpoint_path
+    elif hasattr(args, 'vae') and hasattr(args.vae, 'checkpoint_file_name'):
+        vae_ckpt_path = args.vae.checkpoint_file_name
+    else:
+        raise ValueError("VAE checkpoint path not provided. Use --vae_ckpt or ensure config has vae.checkpoint_file_name")
+    
+    checkpoint = torch.load(vae_ckpt_path, map_location=device)
     if 'ema_model' in checkpoint or 'ema' in checkpoint:
         ema_key = 'ema' if 'ema' in checkpoint else 'ema_model'
         ema_model = checkpoint[ema_key]
         ema_model = {k.replace("ema_model.", "").replace("ema.", ""): v for k, v in ema_model.items()}
         _vae.load_state_dict(ema_model, strict=False)
-        print("Loaded EMA model weights.")
+        print("Loaded VAE EMA model weights.")
     elif 'model' in checkpoint:
         _vae.load_state_dict(checkpoint['model'])
-        print("Loaded model weights.")
+        print("Loaded VAE model weights.")
     else:
         _vae.load_state_dict(checkpoint)
-        print("Loaded raw model state_dict.")
+        print("Loaded VAE raw model state_dict.")
 
     _vae.to(device)
     _vae.eval()
@@ -378,15 +465,28 @@ def decode_sample(sample: torch.Tensor):
 
 def process_index(idx: int, num_inference_steps: int, use_gt_mask=False):
     """Process a single index: load GT, sample point cloud, run inference."""
-    global _dataset, _pipe, _gt_pc, _vae
+    global _dataset, _pipe, _gt_pc, _vae, _pred_is_closed, _use_custom_num_surfaces, _custom_num_surfaces
     
     device = next(_pipe.denoiser.parameters()).device
     
     forward_args = _dataset[idx]
     forward_args = [_.to(device).unsqueeze(0) for _ in forward_args]
+    
+    # Check if dataset returns is_closed data
+
     params_padded, rotations_padded, scales_padded, shifts_padded, surface_type, bbox_mins, bbox_maxs, masks, pc_cond = forward_args
+
+    # Build custom mask if enabled
+    if _use_custom_num_surfaces:
+        batch_size = masks.shape[0]
+        max_num_surfaces = masks.shape[1]
+        custom_mask = torch.zeros(batch_size, max_num_surfaces, device=device, dtype=masks.dtype)
+        num_surfaces = min(_custom_num_surfaces, max_num_surfaces)
+        custom_mask[:, :num_surfaces] = 1
+        masks = custom_mask
+    
     masks = masks.unsqueeze(-1)
-    print(scales_padded)
+    # print(scales_padded)
     gt_sample = torch.cat([masks.float(), shifts_padded, rotations_padded, scales_padded, params_padded], dim=-1)
 
     # gt_sample = gt_sample.unsqueeze(0)
@@ -398,7 +498,7 @@ def process_index(idx: int, num_inference_steps: int, use_gt_mask=False):
     loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params = _compute_loss(sample, gt_sample, masks)
     # sample = torch.cat([gt_sample[..., :1], sample[..., 1:1+3+6], gt_sample[..., 1+3+6:1+3+6+1], sample[..., -128:]], dim=-1)
 
-    print("Using GT RTS now...")
+    # print("Using GT RTS now...")
     # sample = torch.cat([gt_sample[..., :-128], sample[..., -128:]], dim=-1)
     valid, shifts, rotations, scales, params = decode_sample(sample)
 
@@ -416,9 +516,22 @@ def process_index(idx: int, num_inference_steps: int, use_gt_mask=False):
     scales = scales[valid].squeeze()
     params = params[valid].squeeze()
 
-    type_logits_pred, types_pred = _vae.classify(params)
-
-    type_logits_pred_gt, types_pred_gt = _vae.classify(params_gt)
+    # Classify with is_closed support
+    if _pred_is_closed:
+        type_logits_pred, types_pred, is_closed_logits, is_closed_pred = _vae.classify(params)
+        pred_is_u_closed = is_closed_pred[:, 0].cpu().numpy()
+        pred_is_v_closed = is_closed_pred[:, 1].cpu().numpy()
+        
+        type_logits_pred_gt, types_pred_gt, is_closed_logits_gt, is_closed_pred_gt = _vae.classify(params_gt)
+        gt_is_u_closed = is_closed_pred_gt[:, 0].cpu().numpy()
+        gt_is_v_closed = is_closed_pred_gt[:, 1].cpu().numpy()
+    else:
+        type_logits_pred, types_pred = _vae.classify(params)
+        type_logits_pred_gt, types_pred_gt = _vae.classify(params_gt)
+        pred_is_u_closed = None
+        pred_is_v_closed = None
+        gt_is_u_closed = None
+        gt_is_v_closed = None
     
     params_decoded_gt, mask_gt = _vae.decode(params_gt, types_pred_gt)
     shifts_gt, rotations_gt, scales_gt = fix_rts(shifts_gt, rotations_gt, scales_gt)
@@ -433,7 +546,15 @@ def process_index(idx: int, num_inference_steps: int, use_gt_mask=False):
     surface_jsons = to_json(params_decoded.cpu().numpy(), types_pred.cpu().numpy(), mask.cpu().numpy())
     surface_jsons = [from_canonical(surface_jsons[i], shifts[i], rotations[i], scales[i]) for i in range(len(surface_jsons))]
 
-    return surface_jsons, surface_jsons_gt, loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params
+    # Prepare is_closed data for return
+    is_closed_data = {
+        'pred_is_u_closed': pred_is_u_closed,
+        'pred_is_v_closed': pred_is_v_closed,
+        'gt_is_u_closed': gt_is_u_closed,
+        'gt_is_v_closed': gt_is_v_closed,
+    }
+
+    return surface_jsons, surface_jsons_gt, loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params, is_closed_data
 
 def fix_rts(shifts, rotations, scales):
     shifts = shifts.cpu().numpy()
@@ -472,9 +593,24 @@ def update_visualization():
     """Update the visualization with current index"""
     global _current_idx, _gen_group, _gt_group, _gen_pc, _num_inference_steps
     global _gt_surfaces, _gen_surfaces, _show_gt, _show_gen
+    global _pred_is_closed, _show_closed_colors, _default_num_surfaces, _dataset
+    global _use_custom_num_surfaces, _custom_num_surfaces
     
     if not _ps_initialized:
         return
+    
+    # Update default num_surfaces from GT mask
+    if _dataset is not None:
+        try:
+            forward_args = _dataset[_current_idx]
+            masks = forward_args[7]  # masks is the 8th element (0-indexed)
+            gt_mask_count = int(masks.sum().item())
+            _default_num_surfaces = gt_mask_count
+            # If not using custom, update custom_num_surfaces to match default
+            if not _use_custom_num_surfaces:
+                _custom_num_surfaces = _default_num_surfaces
+        except Exception as e:
+            print(f"Warning: Could not get GT mask count: {e}")
     
     # Clear existing structures
     reset_scene()
@@ -482,9 +618,14 @@ def update_visualization():
     # Process current sample
     print(f"\nProcessing index {_current_idx}...")
     with torch.no_grad():
-        surface_jsons, surface_jsons_gt, loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params = process_index(
+        result = process_index(
             _current_idx, _num_inference_steps, use_gt_mask=True
         )
+        if len(result) == 8:  # Has is_closed_data
+            surface_jsons, surface_jsons_gt, loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params, is_closed_data = result
+        else:
+            surface_jsons, surface_jsons_gt, loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params = result
+            is_closed_data = None
     
     # Display losses
     print(f"Losses - Valid: {loss_valid.item():.6f}, Shifts: {loss_shifts.item():.6f}, "
@@ -492,29 +633,53 @@ def update_visualization():
           f"Params: {loss_params.item():.6f}")
     
     # Visualize generated surfaces
-    try:
-        print(f"Visualizing {len(surface_jsons)} generated surfaces and {len(surface_jsons_gt)} GT surfaces")
-        
-        # Visualize generated surfaces
-        _gen_surfaces = visualize_json_interset(surface_jsons, plot=True, plot_gui=False, tol=1e-5, ps_header=f'sample_{_current_idx}')
-        for surface_key, surface_data in _gen_surfaces.items():
-            if 'surface' in surface_data and surface_data['surface'] is not None and 'ps_handler' in surface_data:
-                surface_data['ps_handler'].add_to_group(_gen_group)
-        
-        # Visualize GT surfaces
-        _gt_surfaces = visualize_json_interset(surface_jsons_gt, plot=True, plot_gui=False, tol=1e-5, ps_header=f'gt_{_current_idx}')
-        for surface_key, surface_data in _gt_surfaces.items():
-            if 'surface' in surface_data and surface_data['surface'] is not None and 'ps_handler' in surface_data:
-                surface_data['ps_handler'].add_to_group(_gt_group)
-        
-        # Configure groups with current visibility settings
-        _gen_group.set_enabled(_show_gen)
-        _gt_group.set_enabled(_show_gt)
-        
-        print(f"Visualized {len(_gen_surfaces)} generated surfaces and {len(_gt_surfaces)} GT surfaces")
 
-    except Exception as e:
-        print(f'Error visualizing surfaces: {e}')
+    # try:
+    print(f"Visualizing {len(surface_jsons)} generated surfaces and {len(surface_jsons_gt)} GT surfaces")
+    
+    # Visualize generated surfaces
+    _gen_surfaces = visualize_json_interset(surface_jsons, plot=True, plot_gui=False, tol=1e-5, ps_header=f'sample_{_current_idx}')
+    for surface_key, surface_data in _gen_surfaces.items():
+        if 'surface' in surface_data and surface_data['surface'] is not None and 'ps_handler' in surface_data:
+            surface_data['ps_handler'].add_to_group(_gen_group)
+    
+    # Apply is_closed colors to generated surfaces
+    if _pred_is_closed and _show_closed_colors and is_closed_data and is_closed_data['pred_is_u_closed'] is not None:
+        apply_closed_colors_to_surfaces(_gen_surfaces, 
+                                        is_closed_data['pred_is_u_closed'], 
+                                        is_closed_data['pred_is_v_closed'])
+    
+    # Visualize GT surfaces
+    _gt_surfaces = visualize_json_interset(surface_jsons_gt, plot=True, plot_gui=False, tol=1e-5, ps_header=f'gt_{_current_idx}')
+    for surface_key, surface_data in _gt_surfaces.items():
+        if 'surface' in surface_data and surface_data['surface'] is not None and 'ps_handler' in surface_data:
+            surface_data['ps_handler'].add_to_group(_gt_group)
+    
+    # Apply is_closed colors to GT surfaces
+    if _pred_is_closed and _show_closed_colors and is_closed_data and is_closed_data['gt_is_u_closed'] is not None:
+        apply_closed_colors_to_surfaces(_gt_surfaces, 
+                                        is_closed_data['gt_is_u_closed'], 
+                                        is_closed_data['gt_is_v_closed'])
+    
+    # Configure groups with current visibility settings
+    _gen_group.set_enabled(_show_gen)
+    _gt_group.set_enabled(_show_gt)
+    
+    print(f"Visualized {len(_gen_surfaces)} generated surfaces and {len(_gt_surfaces)} GT surfaces")
+    
+    # Print is_closed statistics if enabled
+    if _pred_is_closed and is_closed_data:
+        if is_closed_data['pred_is_u_closed'] is not None:
+            pred_u_closed_count = sum(is_closed_data['pred_is_u_closed'])
+            pred_v_closed_count = sum(is_closed_data['pred_is_v_closed'])
+            print(f"Pred is_closed: u={pred_u_closed_count}/{len(is_closed_data['pred_is_u_closed'])}, v={pred_v_closed_count}/{len(is_closed_data['pred_is_v_closed'])}")
+        if is_closed_data['gt_is_u_closed'] is not None:
+            gt_u_closed_count = sum(is_closed_data['gt_is_u_closed'])
+            gt_v_closed_count = sum(is_closed_data['gt_is_v_closed'])
+            print(f"GT is_closed: u={gt_u_closed_count}/{len(is_closed_data['gt_is_u_closed'])}, v={gt_v_closed_count}/{len(is_closed_data['gt_is_v_closed'])}")
+
+    # except Exception as e:
+    #     print(f'Error visualizing surfaces: {e}')
 
 
 def callback():
@@ -522,6 +687,7 @@ def callback():
     global _current_idx, _max_idx, _num_inference_steps
     global _show_gt, _show_gen, _gt_group, _gen_group
     global _use_train_dataset, _dataset_train, _dataset_val
+    global _show_closed_colors, _use_custom_num_surfaces, _custom_num_surfaces, _default_num_surfaces
     
     psim.Text("DiT Simple Surface Inference")
     psim.Separator()
@@ -576,6 +742,26 @@ def callback():
     psim.Separator()
     psim.Text(f"Inference Steps: {_num_inference_steps}")
     
+    # Surface count control
+    psim.Separator()
+    psim.Text("Surface Count Control:")
+    psim.Text(f"Default (GT): {_default_num_surfaces}")
+    
+    changed_use_custom, _use_custom_num_surfaces = psim.Checkbox("Use Custom Surface Count", _use_custom_num_surfaces)
+    
+    if _use_custom_num_surfaces:
+        input_changed, new_count = psim.InputInt("Surface Count (15-32)", _custom_num_surfaces)
+        if input_changed:
+            # Clamp to valid range
+            _custom_num_surfaces = max(15, min(32, new_count))
+        if input_changed or changed_use_custom:
+            update_visualization()
+    else:
+        if changed_use_custom:
+            # Reset to default when disabling custom
+            _custom_num_surfaces = _default_num_surfaces
+            update_visualization()
+    
     # Group visibility controls
     if _gt_group is not None and _gen_group is not None:
         psim.Separator()
@@ -587,6 +773,25 @@ def callback():
         changed_gen, _show_gen = psim.Checkbox("Show Generated", _show_gen)
         if changed_gen:
             _gen_group.set_enabled(_show_gen)
+        
+        # is_closed color controls
+        if _pred_is_closed:
+            psim.Separator()
+            psim.Text("=== is_closed Visualization ===")
+            changed, _show_closed_colors = psim.Checkbox("Show is_closed Colors", _show_closed_colors)
+            if changed:
+                update_visualization()
+            
+            # Color legend
+            psim.Text("Color Legend:")
+            psim.TextColored([COLOR_BOTH_CLOSED[0], COLOR_BOTH_CLOSED[1], COLOR_BOTH_CLOSED[2], 1.0], 
+                           "  Green: Both U and V closed")
+            psim.TextColored([COLOR_U_CLOSED[0], COLOR_U_CLOSED[1], COLOR_U_CLOSED[2], 1.0], 
+                           "  Blue: Only U closed")
+            psim.TextColored([COLOR_V_CLOSED[0], COLOR_V_CLOSED[1], COLOR_V_CLOSED[2], 1.0], 
+                           "  Red: Only V closed")
+            psim.TextColored([COLOR_NEITHER_CLOSED[0], COLOR_NEITHER_CLOSED[1], COLOR_NEITHER_CLOSED[2], 1.0], 
+                           "  Gray: Neither closed")
 
 
 
@@ -602,7 +807,20 @@ if __name__ == "__main__":
     parser.add_argument(
         '--ckpt_path',
         type=str,
-        default=''
+        default='',
+        help='Path to the DiT model checkpoint (overrides config)'
+    )
+    parser.add_argument(
+        '--vae_config',
+        type=str,
+        default='',
+        help='Path to the VAE YAML config file (for model version and pred_is_closed)'
+    )
+    parser.add_argument(
+        '--vae_ckpt',
+        type=str,
+        default='',
+        help='Path to the VAE checkpoint (overrides config)'
     )
     parser.add_argument(
         "--num_inference_steps",
@@ -631,9 +849,12 @@ if __name__ == "__main__":
 
     if args.ckpt_path != '':
         cfg_args.model.checkpoint_file_name = args.ckpt_path
+    
     load_model_and_dataset(
         cfg_args,
-        args.device
+        vae_config_path=args.vae_config if args.vae_config else None,
+        vae_checkpoint_path=args.vae_ckpt if args.vae_ckpt else None,
+        device=args.device
     )
     
     # Update max index based on filtered indices

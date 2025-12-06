@@ -8,6 +8,7 @@
 # In V5 we remove the fuser_output.mean(dim=1), which means the latent shape becomes R_d * embd_dim instead of embd_dim
 
 # In V6 we deepen the cross-attention fuser with a transformer decoder, and use the last token to serve as the latent code.
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F

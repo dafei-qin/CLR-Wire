@@ -16,10 +16,17 @@ sys.path.append(r'F:\WORK\CAD\CLR-Wire')
 
 from src.dataset.dataset_v1 import dataset_compound, SURFACE_TYPE_MAP, SCALAR_DIM_MAP
 from src.tools.surface_to_canonical_space import to_canonical, from_canonical
-from src.vae.vae_v1 import SurfaceVAE
 from src.utils.numpy_tools import orthonormal_basis_from_normal
+from src.utils.config import NestedDictToClass, load_config
 
 from utils.surface import visualize_json_interset
+
+# Colors for is_closed visualization
+# Format: [R, G, B] in range [0, 1]
+COLOR_BOTH_CLOSED = [0.2, 0.8, 0.2]      # Green - both u and v closed
+COLOR_U_CLOSED = [0.2, 0.2, 0.8]         # Blue - only u closed
+COLOR_V_CLOSED = [0.8, 0.2, 0.2]         # Red - only v closed
+COLOR_NEITHER_CLOSED = [0.7, 0.7, 0.7]   # Gray - neither closed
 
 def apply_transformation_to_point(point, scale, rotation_matrix, shift):
     """Apply SRT transformation to a 3D point: Scale -> Rotate -> Translate"""
@@ -203,6 +210,11 @@ show_pipeline = True
 resampled_surfaces = {}
 show_resampled = False
 
+# pred_is_closed related variables
+pred_is_closed = False
+show_closed_colors = True  # Toggle for showing is_closed coloring
+model_name = 'vae_v1'  # Default model name
+
 # Transformation variables
 _rotation_euler = [0.0, 0.0, 0.0]  # [roll, pitch, yaw] in degrees
 _apply_rotation = False
@@ -211,13 +223,47 @@ _apply_shift = False
 _scale_factor = 1.0  # uniform scale factor
 _apply_scale = False
 
+
+def get_closed_color(is_u_closed, is_v_closed):
+    """Get color based on is_closed status"""
+    if is_u_closed and is_v_closed:
+        return COLOR_BOTH_CLOSED
+    elif is_u_closed:
+        return COLOR_U_CLOSED
+    elif is_v_closed:
+        return COLOR_V_CLOSED
+    else:
+        return COLOR_NEITHER_CLOSED
+
+
+def apply_closed_colors_to_surfaces(surfaces_dict, is_u_closed_list, is_v_closed_list):
+    """Apply colors to surfaces based on is_closed status"""
+    for i, (surface_key, surface_data) in enumerate(surfaces_dict.items()):
+        if i < len(is_u_closed_list) and 'ps_handler' in surface_data:
+            color = get_closed_color(is_u_closed_list[i], is_v_closed_list[i])
+            try:
+                surface_data['ps_handler'].set_color(color)
+            except Exception as e:
+                print(f"Warning: Could not set color for surface {i}: {e}")
+
 def load_model_and_dataset():
-    global dataset, model, max_idx
+    global dataset, model, max_idx, pred_is_closed, model_name
     
-    dataset = dataset_compound(dataset_path, canonical=canonical)
+    dataset = dataset_compound(dataset_path, canonical=canonical, detect_closed=pred_is_closed)
     max_idx = len(dataset) - 1
     
-    model = SurfaceVAE(param_raw_dim=[17, 18, 19, 18, 19]) # Should be changed to [17, 18, 19, 18, 19]
+    # Load model based on model_name (vae_v1 or vae_v2)
+    if model_name == 'vae_v2':
+        from src.vae.vae_v2 import SurfaceVAE
+        print('Using model: vae_v2 (with is_closed prediction support)')
+    else:
+        from src.vae.vae_v1 import SurfaceVAE
+        print('Using model: vae_v1')
+        if pred_is_closed:
+            print("Warning: vae_v1 does not support pred_is_closed, disabling it")
+            pred_is_closed = False
+    
+    model = SurfaceVAE(param_raw_dim=[17, 18, 19, 18, 19])
     checkpoint = torch.load(checkpoint_path, map_location="cpu")
     if 'ema_model' in checkpoint:
         ema_model = checkpoint['ema']
@@ -231,13 +277,22 @@ def load_model_and_dataset():
         model.load_state_dict(checkpoint)
         print("Loaded raw model state_dict for classification.")
     
+    if pred_is_closed:
+        print("pred_is_closed is enabled - model will predict surface closure status")
+    
     model.eval()
 
 def process_sample(idx):
     """Process a single sample and return both GT and recovered data"""
-    global dataset, model
+    global dataset, model, pred_is_closed
     
-    params_tensor, types_tensor, mask_tensor, shift, rotation, scale = dataset[idx]
+    if pred_is_closed:
+        params_tensor, types_tensor, mask_tensor, shift, rotation, scale, is_u_closed_tensor, is_v_closed_tensor = dataset[idx]
+    else:
+        params_tensor, types_tensor, mask_tensor, shift, rotation, scale = dataset[idx]
+        is_u_closed_tensor = None
+        is_v_closed_tensor = None
+    
     print('processing file: ', dataset.json_names[idx])
     json_path = dataset.json_names[idx]
     
@@ -249,6 +304,13 @@ def process_sample(idx):
     shift = shift[mask_np]
     rotation = rotation[mask_np]
     scale = scale[mask_np]
+    
+    # Handle is_closed data
+    gt_is_u_closed = None
+    gt_is_v_closed = None
+    if pred_is_closed and is_u_closed_tensor is not None:
+        gt_is_u_closed = is_u_closed_tensor[mask_bool].cpu().numpy()
+        gt_is_v_closed = is_v_closed_tensor[mask_bool].cpu().numpy()
     
     # Apply transformations if any are enabled
     if _apply_scale or _apply_rotation or _apply_shift:
@@ -291,27 +353,43 @@ def process_sample(idx):
     # print('-' * 10 + 'gt_json_data' + '-' * 10)
     # print(gt_json_data)
     # Run VAE inference
+    pred_is_u_closed = None
+    pred_is_v_closed = None
+    is_closed_accuracy = None
+    
     with torch.no_grad():
         mu, logvar = model.encode(valid_params, valid_types)
         
         z = model.reparameterize(mu, logvar)
         print('Difference between mu and z: ', (mu - z).abs().mean())
         # z = mu
-        type_logits_pred, types_pred = model.classify(z)
+        
+        if pred_is_closed:
+            type_logits_pred, types_pred, is_closed_logits, is_closed_pred = model.classify(z)
+            # is_closed_pred shape: [batch, 2], where [:, 0] is u_closed, [:, 1] is v_closed
+            pred_is_u_closed = is_closed_pred[:, 0].cpu().numpy()
+            pred_is_v_closed = is_closed_pred[:, 1].cpu().numpy()
+            
+            # Calculate is_closed accuracy if ground truth is available
+            if gt_is_u_closed is not None:
+                is_closed_gt = torch.stack([torch.from_numpy(gt_is_u_closed), 
+                                           torch.from_numpy(gt_is_v_closed)], dim=-1).bool()
+                is_closed_correct = (is_closed_pred.cpu() == is_closed_gt).float()
+                is_closed_accuracy = is_closed_correct.mean().item()
+        else:
+            type_logits_pred, types_pred = model.classify(z)
+        
         params_pred, mask = model.decode(z, types_pred)
         
         # Calculate metrics
         recon_fn = torch.nn.MSELoss()
         recon_loss = (recon_fn(params_pred, valid_params)) * mask.float().mean()
         accuracy = (types_pred == valid_types).float().mean()
-        # for i in range(valid_types.shape[0]):
-        #     print('surface index: ', i, 'type: ', valid_types[i].item())
-        #     print('input: ', valid_params[i])
-        #     print('output: ', params_pred[i])
-        #     print('diff: ', (params_pred[i] - valid_params[i]))
-        #     print('diff mean: ', (params_pred[i] - valid_params[i]).mean())
-        #     print('-' * 10)
-        print(f'Index {idx}: recon_loss: {recon_loss.item():.6f}, accuracy: {accuracy.item():.4f}')
+        
+        metrics_str = f'Index {idx}: recon_loss: {recon_loss.item():.6f}, accuracy: {accuracy.item():.4f}'
+        if is_closed_accuracy is not None:
+            metrics_str += f', is_closed_accuracy: {is_closed_accuracy:.4f}'
+        print(metrics_str)
         # print(f'Predicted types: {types_pred.cpu().numpy()}')
         # print(f'Ground truth types: {valid_types.cpu().numpy()}')
     
@@ -331,17 +409,29 @@ def process_sample(idx):
             recovered_surface = from_canonical(recovered_surface, shift[i], rotation[i], scale[i])
         pipeline_json_data.append(recovered_surface)
 
-    return gt_json_data, recovered_json_data, pipeline_json_data, recon_loss.item(), accuracy.item()
+    # Prepare is_closed data for return
+    is_closed_data = {
+        'gt_is_u_closed': gt_is_u_closed,
+        'gt_is_v_closed': gt_is_v_closed,
+        'pred_is_u_closed': pred_is_u_closed,
+        'pred_is_v_closed': pred_is_v_closed,
+    }
+
+    return gt_json_data, recovered_json_data, pipeline_json_data, recon_loss.item(), accuracy.item(), is_closed_data
 
 def resample_model(canonical):
     """Generate new samples from the VAE's latent space"""
-    global model, resampled_surfaces, current_idx
+    global model, resampled_surfaces, current_idx, pred_is_closed, show_closed_colors
     
     if model is None:
         print("Model not loaded yet!")
         return
     
-    params_tensor, types_tensor, mask_tensor, shift, rotation, scale = dataset[current_idx]
+    if pred_is_closed:
+        params_tensor, types_tensor, mask_tensor, shift, rotation, scale, is_u_closed_tensor, is_v_closed_tensor = dataset[current_idx]
+    else:
+        params_tensor, types_tensor, mask_tensor, shift, rotation, scale = dataset[current_idx]
+    
     valid_params = params_tensor[mask_tensor.bool()]
     valid_types = types_tensor[mask_tensor.bool()]
     shift = shift[mask_tensor.bool()]
@@ -370,7 +460,14 @@ def resample_model(canonical):
         z_random = model.reparameterize(mu, logvar)
         # z_random = mu
         # Classify the random latent vectors to get surface types
-        type_logits_pred, types_pred = model.classify(z_random)
+        if pred_is_closed:
+            type_logits_pred, types_pred, is_closed_logits, is_closed_pred = model.classify(z_random)
+            pred_is_u_closed = is_closed_pred[:, 0].cpu().numpy()
+            pred_is_v_closed = is_closed_pred[:, 1].cpu().numpy()
+        else:
+            type_logits_pred, types_pred = model.classify(z_random)
+            pred_is_u_closed = None
+            pred_is_v_closed = None
         
         # Decode to get surface parameters
         params_pred, mask = model.decode(z_random, types_pred)
@@ -392,18 +489,23 @@ def resample_model(canonical):
             if 'surface' in surface_data and surface_data['surface'] is not None and 'ps_handler' in surface_data:
                 surface_data['ps_handler'].add_to_group(resampled_group)
         
+        # Apply is_closed colors to resampled surfaces
+        if pred_is_closed and show_closed_colors and pred_is_u_closed is not None:
+            apply_closed_colors_to_surfaces(resampled_surfaces, pred_is_u_closed, pred_is_v_closed)
+        
         return resampled_json_data, resampled_surfaces
 
 def update_visualization():
     """Update the visualization with current index"""
     global current_idx, gt_group, recovered_group, pipeline_group
     global gt_surfaces, recovered_surfaces, pipeline_surfaces
+    global pred_is_closed, show_closed_colors
     
     # Clear existing structures
     ps.remove_all_structures()
     
     # Process current sample
-    gt_data, recovered_data, pipeline_data, recon_loss, accuracy = process_sample(current_idx)
+    gt_data, recovered_data, pipeline_data, recon_loss, accuracy, is_closed_data = process_sample(current_idx)
 
     
     # Create groups
@@ -421,6 +523,12 @@ def update_visualization():
             # Add to ground truth group
             surface_data['ps_handler'].add_to_group(gt_group)
     
+    # Apply is_closed colors to GT surfaces
+    if pred_is_closed and show_closed_colors and is_closed_data['gt_is_u_closed'] is not None:
+        apply_closed_colors_to_surfaces(gt_surfaces, 
+                                        is_closed_data['gt_is_u_closed'], 
+                                        is_closed_data['gt_is_v_closed'])
+    
     # Visualize dataset pipeline ground truth surfaces
     try:
         pipeline_surfaces = visualize_json_interset(pipeline_data, plot=True, plot_gui=False, tol=1e-5, ps_header='dataset_gt')
@@ -430,6 +538,12 @@ def update_visualization():
     for i, (surface_key, surface_data) in enumerate(pipeline_surfaces.items()):
         if 'surface' in surface_data and surface_data['surface'] is not None:
             surface_data['ps_handler'].add_to_group(pipeline_group)
+    
+    # Apply is_closed colors to pipeline surfaces (use GT is_closed)
+    if pred_is_closed and show_closed_colors and is_closed_data['gt_is_u_closed'] is not None:
+        apply_closed_colors_to_surfaces(pipeline_surfaces, 
+                                        is_closed_data['gt_is_u_closed'], 
+                                        is_closed_data['gt_is_v_closed'])
     
     # Visualize recovered surfaces  
     try:
@@ -442,17 +556,34 @@ def update_visualization():
             # Add to recovered group
             surface_data['ps_handler'].add_to_group(recovered_group)
     
+    # Apply is_closed colors to recovered surfaces (use predicted is_closed)
+    if pred_is_closed and show_closed_colors and is_closed_data['pred_is_u_closed'] is not None:
+        apply_closed_colors_to_surfaces(recovered_surfaces, 
+                                        is_closed_data['pred_is_u_closed'], 
+                                        is_closed_data['pred_is_v_closed'])
+    
     # Configure groups with current visibility settings
     gt_group.set_enabled(show_gt)
     pipeline_group.set_enabled(show_pipeline)
     recovered_group.set_enabled(show_recovered)
 
     print(f"Visualized {len(gt_surfaces)} GT surfaces, {len(pipeline_surfaces)} dataset GT surfaces and {len(recovered_surfaces)} recovered surfaces")
+    
+    # Print is_closed statistics if enabled
+    if pred_is_closed and is_closed_data['gt_is_u_closed'] is not None:
+        gt_u_closed_count = sum(is_closed_data['gt_is_u_closed'])
+        gt_v_closed_count = sum(is_closed_data['gt_is_v_closed'])
+        print(f"GT is_closed: u={gt_u_closed_count}/{len(is_closed_data['gt_is_u_closed'])}, v={gt_v_closed_count}/{len(is_closed_data['gt_is_v_closed'])}")
+    if pred_is_closed and is_closed_data['pred_is_u_closed'] is not None:
+        pred_u_closed_count = sum(is_closed_data['pred_is_u_closed'])
+        pred_v_closed_count = sum(is_closed_data['pred_is_v_closed'])
+        print(f"Pred is_closed: u={pred_u_closed_count}/{len(is_closed_data['pred_is_u_closed'])}, v={pred_v_closed_count}/{len(is_closed_data['pred_is_v_closed'])}")
 
 def callback():
     """Polyscope callback function for UI controls"""
     global current_idx, max_idx, show_gt, show_pipeline, show_recovered, show_resampled, resampled_surfaces
     global _rotation_euler, _apply_rotation, _shift_xyz, _apply_shift, _scale_factor, _apply_scale
+    global pred_is_closed, show_closed_colors
     
     psim.Text("VAE Surface Reconstruction Test")
     psim.Separator()
@@ -585,6 +716,25 @@ def callback():
         changed, show_resampled = psim.Checkbox("Show Resampled", show_resampled)
         if changed:
             resampled_group.set_enabled(show_resampled)
+        
+        # is_closed color controls
+        if pred_is_closed:
+            psim.Separator()
+            psim.Text("=== is_closed Visualization ===")
+            changed, show_closed_colors = psim.Checkbox("Show is_closed Colors", show_closed_colors)
+            if changed:
+                update_visualization()
+            
+            # Color legend
+            psim.Text("Color Legend:")
+            psim.TextColored([COLOR_BOTH_CLOSED[0], COLOR_BOTH_CLOSED[1], COLOR_BOTH_CLOSED[2], 1.0], 
+                           "  Green: Both U and V closed")
+            psim.TextColored([COLOR_U_CLOSED[0], COLOR_U_CLOSED[1], COLOR_U_CLOSED[2], 1.0], 
+                           "  Blue: Only U closed")
+            psim.TextColored([COLOR_V_CLOSED[0], COLOR_V_CLOSED[1], COLOR_V_CLOSED[2], 1.0], 
+                           "  Red: Only V closed")
+            psim.TextColored([COLOR_NEITHER_CLOSED[0], COLOR_NEITHER_CLOSED[1], COLOR_NEITHER_CLOSED[2], 1.0], 
+                           "  Gray: Neither closed")
 
 if __name__ == '__main__':
     import argparse
@@ -592,6 +742,8 @@ if __name__ == '__main__':
     parser.add_argument('--dataset_path', type=str, default='', help='Path to the dataset')
     parser.add_argument('--checkpoint_path', type=str, default='', help='Path to the checkpoint')
     parser.add_argument('--canonical', type=bool, default=False, help='Whether to use canonical dataset')
+    parser.add_argument('--config', type=str, default='', help='Path to config file (optional, to read pred_is_closed)')
+    parser.add_argument('--pred_is_closed', action='store_true', help='Enable is_closed prediction (overrides config)')
     parser.add_argument(
         '--rotation',
         type=float,
@@ -633,6 +785,24 @@ if __name__ == '__main__':
     dataset_path = args.dataset_path
     checkpoint_path = args.checkpoint_path
     canonical = args.canonical
+    
+    # Load pred_is_closed and model_name from config file if provided
+    if args.config:
+        try:
+            cfg = load_config(args.config)
+            config_args = NestedDictToClass(cfg)
+            pred_is_closed = getattr(config_args.model, 'pred_is_closed', False)
+            model_name = getattr(config_args.model, 'name', 'vae_v1')
+            print(f"Loaded from config: pred_is_closed={pred_is_closed}, model_name={model_name}")
+        except Exception as e:
+            print(f"Warning: Could not load config file: {e}")
+            pred_is_closed = False
+            model_name = 'vae_v1'
+    
+    # Command line argument overrides config
+    if args.pred_is_closed:
+        pred_is_closed = True
+        print("pred_is_closed enabled via command line argument")
     
     # Set initial transformations from command line arguments
     if args.scale is not None:

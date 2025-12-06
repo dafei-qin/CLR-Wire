@@ -26,7 +26,7 @@ class LatentDataset(Dataset):
     The data is padded to max_num_surfaces to ensure consistent batch sizes.
     """
     
-    def __init__(self, latent_dir: str, pc_dir: str, max_num_surfaces: int = 500, 
+    def __init__(self, latent_dir: str, max_num_surfaces: int = 500, 
         latent_dim: int = 128, num_data: int = -1, log_scale=False,
         replica: int = 1):
         """
@@ -38,7 +38,6 @@ class LatentDataset(Dataset):
         super().__init__()
         print('latent_dir: ', latent_dir)
         self.latent_dir = Path(latent_dir)
-        self.pc_dir = pc_dir
         self.max_num_surfaces = max_num_surfaces
         self.latent_dim = latent_dim
         self.log_scale = log_scale
@@ -81,7 +80,7 @@ class LatentDataset(Dataset):
         """
         idx = idx % len(self.latent_files)
         latent_path = self.latent_files[idx]
-        pc_path = self.latent_files[idx].replace(self.latent_dir, self.pc_dir).replace('.npz', '_latent.npy')
+
 
         # Initialize padded arrays
         all_latent_params = np.zeros((self.max_num_surfaces, self.latent_dim), dtype=np.float32)
@@ -142,7 +141,6 @@ class LatentDataset(Dataset):
                 warnings.warn(f"NPZ file {latent_path} contains {len(latent_params)} surfaces, "
                             f"but only using first {num_surfaces} (max_num_surfaces={self.max_num_surfaces})")
 
-            pc = np.load(pc_path)
 
         
         except Exception as e:
@@ -158,7 +156,7 @@ class LatentDataset(Dataset):
         bbox_mins_tensor = torch.from_numpy(all_bbox_mins).float()
         bbox_maxs_tensor = torch.from_numpy(all_bbox_maxs).float()
         mask_tensor = torch.from_numpy(mask).float()
-        pc_tensor = torch.from_numpy(pc).float()
+
         return (
             latent_params_tensor,
             rotations_tensor,
@@ -168,7 +166,6 @@ class LatentDataset(Dataset):
             bbox_mins_tensor,
             bbox_maxs_tensor,
             mask_tensor,
-            pc_tensor
         )
     
     def get_file_info(self, idx: int) -> dict:
@@ -215,7 +212,6 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--npz_dir', type=str, required=True)
-    parser.add_argument('--pc_dir', type=str, required=True)
     parser.add_argument('--max_num_surfaces', type=int, default=500)
     parser.add_argument('--latent_dim', type=int, default=128)
     args = parser.parse_args()
@@ -224,7 +220,7 @@ if __name__ == '__main__':
     print("="*80)
     print("Testing LatentDataset (grouped by file):")
     print("="*80)
-    dataset = LatentDataset(args.npz_dir, args.pc_dir, args.max_num_surfaces, args.latent_dim)
+    dataset = LatentDataset(args.npz_dir, args.max_num_surfaces, args.latent_dim)
     print(f"Dataset length: {len(dataset)}")
     
     # Test first sample
