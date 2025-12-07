@@ -42,14 +42,20 @@ def safe_atan2(y, x, eps=1e-6):
 def safe_asin(x, eps=1e-6):
     return torch.asin(x.clamp(-1 + eps, 1 - eps))
 
+def safe_normalize(v, dim=-1, eps=1e-6):
+    norm = torch.norm(v, dim=dim, keepdim=True)
+    norm = torch.maximum(norm, torch.ones_like(norm) * eps)
+    return v / norm
+
 def recover_surface_from_params(params, surface_type_idx):
     """Recover surface parameters from parameter vector (torch, differentiable)"""
     surface_type = SURFACE_TYPE_MAP_INV.get(surface_type_idx.item() if isinstance(surface_type_idx, torch.Tensor) else surface_type_idx, 'plane')
     
     P = params[..., :3]
-    D = params[..., 3:6] / (torch.norm(params[..., 3:6], dim=-1, keepdim=True) + 1e-6)
-    X = params[..., 6:9] / (torch.norm(params[..., 6:9], dim=-1, keepdim=True) + 1e-6)
+    D = safe_normalize(params[..., 3:6])
+    X = safe_normalize(params[..., 6:9])
     Y = torch.cross(D, X, dim=-1)
+    Y = safe_normalize(Y)
     UV = params[..., 9:17]
     scalar_params = params[..., 17:]
     
