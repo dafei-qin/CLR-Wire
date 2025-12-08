@@ -7,6 +7,7 @@ sys.path.insert(0, str(project_root))
 import shutil
 
 from argparse import ArgumentParser
+from omegaconf import OmegaConf
 
 
 from src.dataset.dataset_latent import LatentDataset
@@ -14,7 +15,6 @@ from src.utils.config import NestedDictToClass, load_config
 from src.utils.import_tools import load_model_from_config, load_dataset_from_config 
 from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 import torch
-from omegaconf import OmegaConf
 
 program_parser = ArgumentParser(description='Train bspline model.')
 program_parser.add_argument('--config', type=str, default='', help='Path to config file.')
@@ -40,17 +40,21 @@ model_name = args.model.name
 
 if args.model.trainer_name == 'dit_v1':
     print('Use the trainer: dit_v1')
-    from src.trainer.trainer_dit_simple_surface import TrainerFlowSurface as TrainerFlowSurface
+    from src.trainer.trainer_dit_simple_surface_segment import TrainerFlowSurface as TrainerFlowSurface
 else:
     print('Use the trainer: dit_v1')
-    from src.trainer.trainer_dit_simple_surface import TrainerFlowSurface as TrainerFlowSurface
+    from src.trainer.trainer_dit_simple_surface_segment import TrainerFlowSurface as TrainerFlowSurface
 
 isDebug = True if sys.gettrace() else False
 
+
+# torch.autograd.set_detect_anomaly(True)
+# print('WARNING: set detect anomaly')
+
 if isDebug:
-    args.use_wandb_tracking = True
-    args.batch_size = 2
-    args.num_workers = 1
+    args.use_wandb_tracking = False
+    # args.batch_size = 512
+    # args.num_workers = 1
 
 else:
     # Here we back-up the code to the ckpt folder.
@@ -65,23 +69,21 @@ else:
 #     transform = None
 
 
-class IndexedDataset(torch.utils.data.Dataset):
-    def __init__(self, base: Dataset):
-        self.base = base
-        # forward important attributes transparently
-        self.replica = getattr(base, 'replica', 1)
-        # dataset_bspline exposes data_names
-        self._base_len = len(getattr(base, 'data_names', [])) if hasattr(base, 'data_names') else max(1, len(base) // self.replica)
-    def __len__(self):
-        return len(self.base)
-    def __getitem__(self, i):
-        sample = self.base[i]
-        # original sample: (..., valid)
-        # use base index so replicas share the same id
-        base_idx = i % self._base_len
-        return (*sample[:-1], torch.tensor(base_idx, dtype=torch.long), sample[-1])
-
-
+# class IndexedDataset(torch.utils.data.Dataset):
+#     def __init__(self, base: Dataset):
+#         self.base = base
+#         # forward important attributes transparently
+#         self.replica = getattr(base, 'replica', 1)
+#         # dataset_bspline exposes data_names
+#         self._base_len = len(getattr(base, 'data_names', [])) if hasattr(base, 'data_names') else max(1, len(base) // self.replica)
+#     def __len__(self):
+#         return len(self.base)
+#     def __getitem__(self, i):
+#         sample = self.base[i]
+#         # original sample: (..., valid)
+#         # use base index so replicas share the same id
+#         base_idx = i % self._base_len
+#         return (*sample[:-1], torch.tensor(base_idx, dtype=torch.long), sample[-1])
 
 config = OmegaConf.load(cli_args.config)
 
@@ -93,8 +95,6 @@ model = load_model_from_config(config)
 train_dataset_raw = load_dataset_from_config(config, section='data_train')
 
 val_dataset = load_dataset_from_config(config, section='data_val')
-
-
 
 
 # train_dataset_raw = LatentDataset(
@@ -120,7 +120,7 @@ if len(train_dataset_raw.latent_files) == 1:
 #     ws_enabled = getattr(ws_cfg, 'enabled', False)
 
 # train_dataset = IndexedDataset(train_dataset_raw) if ws_enabled else train_dataset_raw
-train_dataset =  train_dataset_raw
+train_dataset = train_dataset_raw
 
 # model = Model(
 #     input_dim=args.model.input_dim,
@@ -141,7 +141,7 @@ initial_lr = cli_args.resume_lr if args.resume_training and cli_args.resume_lr i
 
 trainer = TrainerFlowSurface(
     model,
-    vae=vae,
+    vae,
     dataset=train_dataset,
     val_dataset=val_dataset,
     num_train_steps=num_train_steps,
@@ -161,12 +161,21 @@ trainer = TrainerFlowSurface(
     checkpoint_file_name=args.model.checkpoint_file_name,
     val_every_step=int(args.val_every_epoch * num_step_per_epoch),
     # weighted sampling options
+    # weighted_sampling_enabled=ws_enabled,
+    # ws_warmup_epochs=getattr(ws_cfg, 'warmup_epochs', 5) if ws_cfg is not None else 5,
+    # ws_alpha=getattr(ws_cfg, 'alpha', 1.0) if ws_cfg is not None else 1.0,
+    # ws_beta=getattr(ws_cfg, 'beta', 0.9) if ws_cfg is not None else 0.9,
+    # ws_eps=getattr(ws_cfg, 'eps', 1e-6) if ws_cfg is not None else 1e-6,
+    # ws_refresh_every=getattr(ws_cfg, 'refresh_every', 1) if ws_cfg is not None else 1,
     weight_valid=args.loss.weight_valid,
     weight_params=args.loss.weight_params,
     weight_rotations=args.loss.weight_rotations,
     weight_scales=args.loss.weight_scales,
     weight_shifts=args.loss.weight_shifts,
+    weight_original_sample=args.loss.weight_original_sample,
+    original_sample_start_step=args.loss.original_sample_start_step,
     num_inference_timesteps=args.trainer.num_inference_timesteps,
+    log_scale=config.data_train.params.log_scale
 )
 
 if args.resume_training and cli_args.resume_lr is not None:

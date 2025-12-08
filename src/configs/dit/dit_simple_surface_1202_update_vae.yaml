@@ -56,4 +56,7 @@ vae:
 
 loss:
     weight_valid: 0.01
-    weight_params: 10
+    weight_params: 1.0
+    weight_rotations: 1.0
+    weight_scales: 1.0
+    weight_shifts: 1.0

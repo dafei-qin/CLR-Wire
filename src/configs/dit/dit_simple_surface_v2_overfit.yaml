@@ -34,7 +34,7 @@ data:
 
 trainer:
     use_logvar: false
-    prediction_type: v_prediction
+    prediction_type: sample
     num_inference_timesteps: 50
 
 
