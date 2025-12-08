@@ -23,10 +23,12 @@ sys.path.insert(0, str(project_root))
 from src.dataset.dataset_latent import LatentDataset
 from src.dataset.dataset_v1 import dataset_compound
 from src.utils.config import NestedDictToClass, load_config
+from src.utils.import_tools import load_model_from_config, load_dataset_from_config
 from src.flow.surface_flow import ZLDMPipeline, get_new_scheduler
 from src.tests.test_vae_v1 import to_json
 from src.tools.surface_to_canonical_space import from_canonical
 from utils.surface import visualize_json_interset
+from omegaconf import OmegaConf
 
 # Colors for is_closed visualization
 # Format: [R, G, B] in range [0, 1]
@@ -298,111 +300,74 @@ def switch_dataset(use_train: bool):
 
 
 def load_model_and_dataset(
-    args,
+    config_path,
+    dit_checkpoint_path=None,
     vae_config_path=None,
     vae_checkpoint_path=None,
-    device = 'cuda'
+    device='cuda'
 ):
-    """Load dataset and corresponding model weights."""
+    """Load dataset and corresponding model weights using config-based approach."""
     global _dataset, _dataset_train, _dataset_val, _model, _pipe, _max_idx, _vae, _dataset_compound
     global _pred_is_closed, _vae_model_name, _dit_model_name
 
-    _dataset_val = LatentDataset(
-    latent_dir=args.data.val_latent_dir, pc_dir=args.data.val_pc_dir, max_num_surfaces=args.data.max_num_surfaces, 
-    latent_dim=args.data.surface_latent_dim, num_data=args.data.val_num,
-    log_scale=args.data.log_scale
-    )
-
-    _dataset_train = LatentDataset(
-    latent_dir=args.data.train_latent_dir, pc_dir=args.data.train_pc_dir, max_num_surfaces=args.data.max_num_surfaces, 
-    latent_dim=args.data.surface_latent_dim, num_data=args.data.val_num,
-    log_scale=args.data.log_scale
-    )
+    # Load main config using OmegaConf
+    config = OmegaConf.load(config_path)
+    
+    # Load datasets using load_dataset_from_config
+    _dataset_val = load_dataset_from_config(config, section='data_val')
+    _dataset_train = load_dataset_from_config(config, section='data_train')
     
     # Set initial dataset to val
     _dataset = _dataset_val
     
-    # Load VAE config if provided
-    if vae_config_path:
-        try:
-            vae_cfg = load_config(vae_config_path)
-            vae_cfg_args = NestedDictToClass(vae_cfg)
-            _vae_model_name = getattr(vae_cfg_args.model, 'name', 'vae_v1')
-            _pred_is_closed = getattr(vae_cfg_args.model, 'pred_is_closed', False)
-            print(f"Loaded VAE config: model_name={_vae_model_name}, pred_is_closed={_pred_is_closed}")
-        except Exception as e:
-            print(f"Warning: Could not load VAE config file: {e}")
-            _vae_model_name = 'vae_v1'
-            _pred_is_closed = False
-    else:
-        # Try to get from args if available
-        _vae_model_name = getattr(args.vae, 'name', 'vae_v1') if hasattr(args, 'vae') else 'vae_v1'
-        _pred_is_closed = getattr(args.vae, 'pred_is_closed', False) if hasattr(args, 'vae') else False
-        print(f"Using VAE settings from args: model_name={_vae_model_name}, pred_is_closed={_pred_is_closed}")
+    # Load VAE config
+    vae_config_file = vae_config_path if vae_config_path else config.vae.config_file
+    vae_config = OmegaConf.load(vae_config_file)
     
+    # Extract VAE metadata
+    _vae_model_name = getattr(vae_config.model, 'name', 'vae_v1')
+    _pred_is_closed = getattr(vae_config.model, 'pred_is_closed', False)
+    print(f"Loaded VAE config: model_name={_vae_model_name}, pred_is_closed={_pred_is_closed}")
+    
+    # Initialize dataset_compound with pred_is_closed setting
     _dataset_compound = dataset_compound(json_dir='./', canonical=True, detect_closed=_pred_is_closed)
     build_index_metadata()
     initialize_filters()
     refresh_filtered_indices(preserve_current=False)
 
-    _dit_model_name = getattr(args.model, 'name', 'dit_v1')
-    # Import and create model
-    if _dit_model_name == 'dit_v2':
-        from src.dit.simple_surface_decoder_v2 import SimpleSurfaceDecoder
-    else:
-        from src.dit.simple_surface_decoder import SimpleSurfaceDecoder
+    # Load DiT model using load_model_from_config
+    _dit_model_name = config.model.name
     print(f"Using DiT model: {_dit_model_name}")
-    _model = SimpleSurfaceDecoder(
-        input_dim=args.model.input_dim,
-        cond_dim=args.model.cond_dim,
-        output_dim=args.model.output_dim,
-        latent_dim=args.model.latent_dim,
-        num_layers=args.model.num_layers,
-        num_heads=args.model.num_heads
-    )
-
+    _model = load_model_from_config(config)
     _model.to(device)
-    # Load checkpoint
-    checkpoint = torch.load(args.model.checkpoint_file_name, map_location=device)
+    
+    # Load DiT checkpoint
+    dit_ckpt_path = dit_checkpoint_path if dit_checkpoint_path else config.model.checkpoint_file_name
+    checkpoint = torch.load(dit_ckpt_path, map_location=device)
     if 'ema_model' in checkpoint or 'ema' in checkpoint:
         ema_key = 'ema' if 'ema' in checkpoint else 'ema_model'
         ema_model = checkpoint[ema_key]
         ema_model = {k.replace("ema_model.", "").replace("ema.", ""): v for k, v in ema_model.items()}
         _model.load_state_dict(ema_model, strict=False)
-        print("Loaded EMA model weights.")
+        print("Loaded DiT EMA model weights.")
     elif 'model' in checkpoint:
         _model.load_state_dict(checkpoint['model'])
-        print("Loaded model weights.")
+        print("Loaded DiT model weights.")
     else:
         _model.load_state_dict(checkpoint)
-        print("Loaded raw model state_dict.")
+        print("Loaded DiT raw model state_dict.")
 
-    # Load VAE model based on model_name
-    if _vae_model_name == 'vae_v2':
-        from src.vae.vae_v2 import SurfaceVAE
-        print(f"Loading VAE model: vae_v2 (pred_is_closed={_pred_is_closed})")
-    else:
-        from src.vae.vae_v1 import SurfaceVAE
-        print(f"Loading VAE model: vae_v1")
-        if _pred_is_closed:
-            print("Warning: vae_v1 does not support pred_is_closed, disabling it")
-            _pred_is_closed = False
+    # Load VAE model using load_model_from_config
+    _vae = load_model_from_config(vae_config)
+    _vae.to(device)
     
-    # Get param_raw_dim from args or config
-    if hasattr(args, 'vae') and hasattr(args.vae, 'param_raw_dim'):
-        param_raw_dim = args.vae.param_raw_dim
-    else:
-        param_raw_dim = [17, 18, 19, 18, 19]  # Default
-    
-    _vae = SurfaceVAE(param_raw_dim)
-
-    # Use provided vae_checkpoint_path or fall back to args
+    # Load VAE checkpoint
     if vae_checkpoint_path:
         vae_ckpt_path = vae_checkpoint_path
-    elif hasattr(args, 'vae') and hasattr(args.vae, 'checkpoint_file_name'):
-        vae_ckpt_path = args.vae.checkpoint_file_name
+    elif hasattr(vae_config.model, 'checkpoint_file_name'):
+        vae_ckpt_path = vae_config.model.checkpoint_file_name
     else:
-        raise ValueError("VAE checkpoint path not provided. Use --vae_ckpt or ensure config has vae.checkpoint_file_name")
+        raise ValueError("VAE checkpoint path not provided. Use --vae_ckpt or ensure VAE config has model.checkpoint_file_name")
     
     checkpoint = torch.load(vae_ckpt_path, map_location=device)
     if 'ema_model' in checkpoint or 'ema' in checkpoint:
@@ -418,13 +383,12 @@ def load_model_and_dataset(
         _vae.load_state_dict(checkpoint)
         print("Loaded VAE raw model state_dict.")
 
-    _vae.to(device)
     _vae.eval()
 
-    # _model.eval()
-
     # Create pipeline
-    scheduler = get_new_scheduler('v_prediction', 1000)
+    prediction_type = getattr(config.trainer, 'prediction_type', 'v_prediction')
+    num_train_timesteps = getattr(config.trainer, 'num_train_timesteps', 1000) if hasattr(config, 'trainer') else 1000
+    scheduler = get_new_scheduler(prediction_type, num_train_timesteps)
     _pipe = ZLDMPipeline(_model, scheduler, dtype=torch.float32)
 
 
@@ -840,18 +804,15 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    cfg = load_config(args.config) if args.config else {}
-    cfg_args = NestedDictToClass(cfg) if cfg else SimpleNamespace()
-
-    _log_scale = cfg_args.data.log_scale
+    # Load config to get log_scale setting
+    config = OmegaConf.load(args.config)
+    _log_scale = config.data_val.params.log_scale if hasattr(config.data_val, 'params') else config.data_val.log_scale if hasattr(config.data_val, 'log_scale') else True
     _num_inference_steps = args.num_inference_steps
     _current_idx = args.start_idx
-
-    if args.ckpt_path != '':
-        cfg_args.model.checkpoint_file_name = args.ckpt_path
     
     load_model_and_dataset(
-        cfg_args,
+        config_path=args.config,
+        dit_checkpoint_path=args.ckpt_path if args.ckpt_path else None,
         vae_config_path=args.vae_config if args.vae_config else None,
         vae_checkpoint_path=args.vae_ckpt if args.vae_ckpt else None,
         device=args.device
