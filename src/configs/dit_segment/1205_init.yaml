@@ -1,4 +1,4 @@
-resume_training: false
+resume_training: true
 from_start: false
 
 epochs: 8000
@@ -51,8 +51,8 @@ model:
     name: src.dit.simple_surface_decoder_segment.SimpleSurfaceDecoder
     trainer_name: dit_v1
     checkpoint_folder: checkpoints/1206_dit_segment_init
-    checkpoint_file_name: --
-    load_ckpt: False
+    checkpoint_file_name: model-12.pt
+    load_ckpt: false
     params:
         input_dim: 139
         cond_dim: 192
