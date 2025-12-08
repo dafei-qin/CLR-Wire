@@ -22,7 +22,7 @@ def decode_latent(sample: torch.Tensor, log_scale=True):
     return valid, shifts_tensor, rotations_tensor, scales_tensor, params_tensor
 
     
-def decode_and_sample(model, latent_params):
+def decode_and_sample(model, latent_params, num_samples=8):
     """
     Decode latent parameters, sample surfaces per surface type, and return samples in
     the same order as `latent_params`. Per-type processing keeps gradients intact.
@@ -37,7 +37,7 @@ def decode_and_sample(model, latent_params):
         type_mask = surface_type_pred == surface_type
         params_raw_recon_per_type = params_raw_recon[type_mask]
         
-        samples = params_to_samples(params_raw_recon_per_type, surface_type, 8, 8)
+        samples = params_to_samples(params_raw_recon_per_type, surface_type, num_samples, num_samples)
 
         if ordered_samples is None:
             sample_shape = samples.shape[1:]
@@ -55,9 +55,9 @@ def safe_normalize(v, dim=-1, eps=1e-6):
     norm = torch.maximum(norm, torch.ones_like(norm) * eps)
     return v / norm
 
-def decode_and_sample_with_rts(model, latent_params, shifts, rotations, scales, log_scale=False):
+def decode_and_sample_with_rts(model, latent_params, shifts, rotations, scales, log_scale=False, num_samples=8):
     
-    samples = decode_and_sample(model, latent_params)
+    samples = decode_and_sample(model, latent_params, num_samples=num_samples)
     assert not torch.isnan(samples).any(), 'samples is nan'
     if log_scale:
         scales = torch.exp(scales)
