@@ -346,7 +346,7 @@ class TrainerFlowSurface(BaseTrainer):
 
 
                 
-                    loss = loss_valid * self.weight_valid + loss_shifts * self.weight_shifts + loss_rotations * self.weight_rotations + loss_scales * self.weight_scales + loss_params * self.weight_params + loss_original_sample * self.weight_original_sample * (step >= self.original_sample_start_step) + loss_edges * self.weight_edges  * (step >= self.original_sample_start_step)
+                    loss = loss_valid * self.weight_valid + loss_shifts * self.weight_shifts + loss_rotations * self.weight_rotations + loss_scales * self.weight_scales + loss_params * self.weight_params + loss_original_sample * self.weight_original_sample * (step >= self.original_sample_start_step) + loss_edges * self.weight_sample_edges  * (step >= self.original_sample_start_step)
                     total_loss += loss.item()
                     loss_dict = {
                         'loss_valid': loss_valid.item(),
@@ -467,7 +467,7 @@ class TrainerFlowSurface(BaseTrainer):
                             loss_original_sample = torch.nn.functional.mse_loss(pred_sampled_points.reshape(pred_sampled_points.shape[0], -1), gt_sampled_points[masks.squeeze(-1).bool()])
                             loss_edges = torch.nn.functional.mse_loss(pred_sampled_edges.reshape(pred_sampled_edges.shape[0], -1), gt_sampled_edges[masks.squeeze(-1).bool()])
 
-                            loss = loss_valid * self.weight_valid + loss_shifts + loss_rotations + loss_scales + loss_params * self.weight_params + loss_original_sample * self.weight_original_sample * (step >= self.original_sample_start_step) + loss_edges * self.weight_edges
+                            loss = loss_valid * self.weight_valid + loss_shifts + loss_rotations + loss_scales + loss_params * self.weight_params + loss_original_sample * self.weight_original_sample * (step >= self.original_sample_start_step) + loss_edges * self.weight_sample_edges
                             loss_dict['val_loss_valid'] += loss_valid.item() / num_val_batches
                             loss_dict['val_loss_shifts'] += loss_shifts.item() / num_val_batches
                             loss_dict['val_loss_rotations'] += loss_rotations.item() / num_val_batches
