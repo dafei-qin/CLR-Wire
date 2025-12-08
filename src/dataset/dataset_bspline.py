@@ -103,6 +103,7 @@ class dataset_bspline(Dataset):
         return vals[index]
 
     def normalize_knots(self, knots_list):
+        # Return the diff between consecutive knots, with a gap = mode(gaps)
         knots_min = min(knots_list)
         knots_max = max(knots_list)
         assert knots_min == knots_list[0]
