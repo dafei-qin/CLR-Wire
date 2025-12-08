@@ -430,7 +430,7 @@ class TrainerFlowSurface(BaseTrainer):
                             # Prepare the sampled points
                             with torch.no_grad():
                                 gt_sampled_points = self.decode_valid_surfaces_with_padding(
-                                    params_padded, shifts_padded, rotations_padded, scales_padded, masks, num_samples=64
+                                    params_padded, shifts_padded, rotations_padded, scales_padded, masks, num_samples=8
                                 )                         
                                 B, num_max_pad = gt_sampled_points.shape[:2]
                                 gt_sampled_points = gt_sampled_points.reshape(B, num_max_pad, -1)
