@@ -266,10 +266,15 @@ class TrainerFlowSurface(BaseTrainer):
                     # Prepare the sampled points
                     with torch.no_grad():
                         gt_sampled_points = self.decode_valid_surfaces_with_padding(
-                            params_padded, shifts_padded, rotations_padded, scales_padded, masks, num_sample_points=8
+                            params_padded, shifts_padded, rotations_padded, scales_padded, masks, num_samples=8
+                        ) # (B, N_Surface, N, N, 3)
+                        B, num_max_pad = gt_sampled_points.shape[:2] 
+                        gt_sampled_points = gt_sampled_points.reshape(B, num_max_pad, -1) # (B, N_Surface, N * N * 3)
+                        gt_sampled_edges = self.decode_valid_surfaces_with_padding(
+                            params_padded, shifts_padded, rotations_padded, scales_padded, masks, num_samples=2
                         )
-                        B, num_max_pad = gt_sampled_points.shape[:2]
-                        gt_sampled_points = gt_sampled_points.reshape(B, num_max_pad, -1)
+                        gt_sampled_edges = gt_sampled_edges.reshape(B, num_max_pad, -1) # (B, N_Surface, 2 * 2 * 3)
+
 
 
                     gt_sample = torch.cat([masks.unsqueeze(-1).float(), shifts_padded, rotations_padded, scales_padded, params_padded], dim=-1)
@@ -327,19 +332,21 @@ class TrainerFlowSurface(BaseTrainer):
                         # Then we get the sampled points
                         # Because we already exp-ed the scale by the decode_latent function, here we don't exp it again.
 
-                        pred_sampled_points = decode_and_sample_with_rts(self.vae, params, shifts, rotations, scales, log_scale=False, num_samples=8)
-
+                        pred_sampled_points = decode_and_sample_with_rts(self.vae, params, shifts, rotations, scales, log_scale=False, num_samples=8) # (B, N, N, 3)
+                        pred_sampled_edges = decode_and_sample_with_rts(self.vae, params, shifts, rotations, scales, log_scale=False, num_samples=2) # (B, N, N, 3)
                         loss_original_sample = torch.nn.functional.mse_loss(pred_sampled_points.reshape(pred_sampled_points.shape[0], -1), gt_sampled_points[masks.squeeze(-1).bool()])
 
                         # Then we compute the edge-only samples, add an additional loss to emphasize the edge.
+                        loss_edges = torch.nn.functional.mse_loss(pred_sampled_edges.reshape(pred_sampled_edges.shape[0], -1), gt_sampled_edges[masks.squeeze(-1).bool()])
 
 
                     else:
                         loss_original_sample = 0.0
+                        loss_edges = 0.0
 
 
                 
-                    loss = loss_valid * self.weight_valid + loss_shifts * self.weight_shifts + loss_rotations * self.weight_rotations + loss_scales * self.weight_scales + loss_params * self.weight_params + loss_original_sample * self.weight_original_sample * (step >= self.original_sample_start_step)
+                    loss = loss_valid * self.weight_valid + loss_shifts * self.weight_shifts + loss_rotations * self.weight_rotations + loss_scales * self.weight_scales + loss_params * self.weight_params + loss_original_sample * self.weight_original_sample * (step >= self.original_sample_start_step) + loss_edges * self.weight_edges  * (step >= self.original_sample_start_step)
                     total_loss += loss.item()
                     loss_dict = {
                         'loss_valid': loss_valid.item(),
@@ -347,7 +354,8 @@ class TrainerFlowSurface(BaseTrainer):
                         'loss_rotations': loss_rotations.item(),
                         'loss_scales': loss_scales.item(),
                         'loss_params': loss_params.item(),
-                        'loss_orig_sample': loss_original_sample.item() if step >= self.original_sample_start_step else 0.0
+                        'loss_orig_sample': loss_original_sample.item() if step >= self.original_sample_start_step else 0.0,
+                        'loss_edges': loss_edges.item() if step >= self.original_sample_start_step else 0.0
                     }
                 
                 self.accelerator.backward(loss)
@@ -422,10 +430,15 @@ class TrainerFlowSurface(BaseTrainer):
                             # Prepare the sampled points
                             with torch.no_grad():
                                 gt_sampled_points = self.decode_valid_surfaces_with_padding(
-                                    params_padded, shifts_padded, rotations_padded, scales_padded, masks, num_sample_points=64
+                                    params_padded, shifts_padded, rotations_padded, scales_padded, masks, num_samples=64
                                 )                         
                                 B, num_max_pad = gt_sampled_points.shape[:2]
                                 gt_sampled_points = gt_sampled_points.reshape(B, num_max_pad, -1)
+
+                                gt_sampled_edges = self.decode_valid_surfaces_with_padding(
+                                    params_padded, shifts_padded, rotations_padded, scales_padded, masks, num_samples=2
+                                )
+                                gt_sampled_edges = gt_sampled_edges.reshape(B, num_max_pad, -1)
 
 
                             masks = masks.unsqueeze(-1)
@@ -448,17 +461,20 @@ class TrainerFlowSurface(BaseTrainer):
                             if scales.abs().max().item() > 15.0:
                                 print('Warning:', f'val_scales is out of range: {scales.abs().max().item()}')
                             # Then we get the sampled points
-                            pred_sampled_points = decode_and_sample_with_rts(self.vae, params, shifts, rotations, scales, log_scale=False)
+                            pred_sampled_points = decode_and_sample_with_rts(self.vae, params, shifts, rotations, scales, log_scale=False, num_samples=8)
+                            pred_sampled_edges = decode_and_sample_with_rts(self.vae, params, shifts, rotations, scales, log_scale=False, num_samples=2)
 
                             loss_original_sample = torch.nn.functional.mse_loss(pred_sampled_points.reshape(pred_sampled_points.shape[0], -1), gt_sampled_points[masks.squeeze(-1).bool()])
+                            loss_edges = torch.nn.functional.mse_loss(pred_sampled_edges.reshape(pred_sampled_edges.shape[0], -1), gt_sampled_edges[masks.squeeze(-1).bool()])
 
-                            loss = loss_valid * self.weight_valid + loss_shifts + loss_rotations + loss_scales + loss_params * self.weight_params + loss_original_sample * self.weight_original_sample * (step >= self.original_sample_start_step)
+                            loss = loss_valid * self.weight_valid + loss_shifts + loss_rotations + loss_scales + loss_params * self.weight_params + loss_original_sample * self.weight_original_sample * (step >= self.original_sample_start_step) + loss_edges * self.weight_edges
                             loss_dict['val_loss_valid'] += loss_valid.item() / num_val_batches
                             loss_dict['val_loss_shifts'] += loss_shifts.item() / num_val_batches
                             loss_dict['val_loss_rotations'] += loss_rotations.item() / num_val_batches
                             loss_dict['val_loss_scales'] += loss_scales.item() / num_val_batches
                             loss_dict['val_loss_params'] += loss_params.item() / num_val_batches
                             loss_dict['val_loss_orig_sample'] += loss_original_sample.item() / num_val_batches
+                            loss_dict['val_loss_edges'] += loss_edges.item() / num_val_batches
                             total_val_loss += (loss / num_val_batches)
 
 

@@ -89,7 +89,7 @@ def test_surfeval_efficiency(data_path_file, num_samples=-1, device='cuda', batc
     print(f"Batch size: {batch_size}")
     
     # Process dataset
-    for idx in tqdm(range(len(dataset)), desc="Processing surfaces"):
+    for idx in tqdm(range(50, len(dataset)), desc="Processing surfaces"):
         # try:
             # Load data
             (u_degree, v_degree, num_poles_u, num_poles_v, num_knots_u, num_knots_v,
