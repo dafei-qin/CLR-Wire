@@ -414,8 +414,8 @@ class TrainerFlowSurface(BaseTrainer):
                     total_val_loss = 0.
                     loss_dict = defaultdict(float)
                     self.ema.eval()
-                    # self.pipe.denoiser = self.ema
-                    self.pipe.denoiser = self.raw_model
+                    self.pipe.denoiser = self.ema
+                    # self.pipe.denoiser = self.raw_model
                     device = next(self.model.parameters()).device
                     num_val_batches = self.val_num_batches * self.grad_accum_every
 
