@@ -58,7 +58,7 @@ def sample_face_uv(face, nu=50, nv=50):
     normals = []
     
     # Get the surface from the face
-    surf_adaptor = BRep_Tool(face)
+    surf_adaptor = BRep_Tool.Surface(face)
     surface = surf_adaptor.Surface()
     
     # Get UV bounds
