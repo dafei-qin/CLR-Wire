@@ -41,7 +41,7 @@ def timeout_handler(signum, frame):
     raise TimeoutError("Function execution timed out")
 
 
-def sample_face_uv(face, nu=50, nv=50):
+def sample_face_uv(face, nu=50, nv=50, debug=True):
     """
     Sample points on a face in UV space and check validity
     
@@ -49,6 +49,7 @@ def sample_face_uv(face, nu=50, nv=50):
         face: TopoDS_Face object
         nu: number of samples in u direction
         nv: number of samples in v direction
+        debug: whether to print debug information
     
     Returns:
         points: numpy array of shape (N, 3) with valid 3D points
@@ -57,28 +58,38 @@ def sample_face_uv(face, nu=50, nv=50):
     points = []
     normals = []
     
-    # Get the surface from the face
-    surf_adaptor = BRep_Tool.Surface(face)
-    surface = surf_adaptor.Surface()
+    if debug:
+        ic("Starting sample_face_uv")
     
-    # Get UV bounds
-    u_min = surf_adaptor.FirstUParameter()
-    u_max = surf_adaptor.LastUParameter()
-    v_min = surf_adaptor.FirstVParameter()
-    v_max = surf_adaptor.LastVParameter()
+    # Get the surface from the face
+    u_min, u_max, v_min, v_max = [face.uv_bounds().min_point()[0], face.uv_bounds().max_point()[0], face.uv_bounds().min_point()[1], face.uv_bounds().max_point()[1]]
+    surface = BRep_Tool.Surface(face.topods_shape())
+    # surface = surf_adaptor.Surface()
+    
+    # # Get UV bounds
+    # u_min = surf_adaptor.FirstUParameter()
+    # u_max = surf_adaptor.LastUParameter()
+    # v_min = surf_adaptor.FirstVParameter()
+    # v_max = surf_adaptor.LastVParameter()
+    
+    if debug:
+        ic(u_min, u_max, v_min, v_max)
     
     # Create UV grid
     u_values = np.linspace(u_min, u_max, nu)
     v_values = np.linspace(v_min, v_max, nv)
     
+    valid_count = 0
+    invalid_count = 0
+    
     # Sample points
-    for u in u_values:
-        for v in v_values:
+    for i, u in enumerate(u_values):
+        for j, v in enumerate(v_values):
             # Create 2D point in UV space
             uv_pnt = gp_Pnt2d(u, v)
             
             # Check if point is valid using BRepClass_FaceClassifier
-            classifier = BRepClass_FaceClassifier(face, uv_pnt, 1e-6)
+            classifier = BRepClass_FaceClassifier(face.topods_shape(), uv_pnt, 1e-6)
             state = classifier.State()
             
             # Only keep points that are IN or ON the face
@@ -102,8 +113,24 @@ def sample_face_uv(face, nu=50, nv=50):
                         
                         points.append(point)
                         normals.append(normal_vec)
+                        valid_count += 1
+                    else:
+                        invalid_count += 1
+                        if debug and invalid_count <= 5:
+                            ic(f"Invalid normal at u={u:.4f}, v={v:.4f}, norm={norm}")
+                else:
+                    invalid_count += 1
+                    if debug and invalid_count <= 5:
+                        ic(f"Normal not defined at u={u:.4f}, v={v:.4f}")
+            else:
+                invalid_count += 1
+    
+    if debug:
+        ic(f"Valid points: {valid_count}, Invalid points: {invalid_count}")
     
     if len(points) == 0:
+        if debug:
+            ic("WARNING: No valid points sampled!")
         return np.array([]), np.array([])
     
     return np.array(points), np.array(normals)
@@ -177,7 +204,7 @@ def step_to_pointcloud(step_filename, ply_filename, nu=50, nv=50):
         all_normals = []
         
         for face in solid.faces():
-            points, normals = sample_face_uv(face.topods_shape(), nu=nu, nv=nv)
+            points, normals = sample_face_uv(face, nu=nu, nv=nv)
             if len(points) > 0:
                 all_points.append(points)
                 all_normals.append(normals)
