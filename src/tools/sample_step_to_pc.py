@@ -22,7 +22,7 @@ from OCC.Core.BRepBndLib import brepbndlib
 from OCC.Core.Bnd import Bnd_Box
 from OCC.Core.BRepClass import BRepClass_FaceClassifier
 # from OCC.Core.BRepAdaptor import BRepAdaptor_Surface
-from OCC.Core.BRepTools import BRep_Tool
+from OCC.Core.BRep import BRep_Tool
 from OCC.Core.GeomLProp import GeomLProp_SLProps
 from OCC.Core.gp import gp_Pnt2d
 from OCC.Core.TopAbs import TopAbs_IN, TopAbs_ON
