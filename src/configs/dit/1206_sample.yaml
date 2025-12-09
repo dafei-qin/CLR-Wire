@@ -53,7 +53,7 @@ model:
     name: src.dit.simple_surface_decoder_v2.SimpleSurfaceDecoder
     trainer_name: dit_v1
     checkpoint_folder: checkpoints/1206_sample
-    checkpoint_file_name: model-24.pt
+    checkpoint_file_name: model-53.pt
     load_ckpt: false
     params:
         input_dim: 139

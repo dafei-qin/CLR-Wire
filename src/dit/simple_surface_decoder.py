@@ -31,7 +31,7 @@ class SimpleSurfaceDecoder(nn.Module):
             post_act_fn="silu",
         )
         
-    def forward(self, sample, timestep, cond, tgt_key_padding_mask=None):
+    def forward(self, sample, timestep, cond, tgt_key_padding_mask=None, memory_key_padding_mask=None):
         sample = self.input_proj(sample)
         cond = self.cond_proj(cond)
         time_embd = self.time_embedding(self.time_proj(timestep).to(sample.device))

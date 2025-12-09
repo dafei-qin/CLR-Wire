@@ -107,7 +107,7 @@ class SimpleSurfaceDecoder(nn.Module):
             post_act_fn="silu",
         )
 
-    def forward(self, sample, timestep, cond, tgt_key_padding_mask=None):
+    def forward(self, sample, timestep, cond, tgt_key_padding_mask=None, memory_key_padding_mask=None):
 
         # Project tokens
         x = self.input_proj(sample)
