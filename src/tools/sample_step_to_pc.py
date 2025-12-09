@@ -177,7 +177,7 @@ def step_to_pointcloud(step_filename, ply_filename, nu=50, nv=50):
         all_normals = []
         
         for face in solid.faces():
-            points, normals = sample_face_uv(face, nu=nu, nv=nv)
+            points, normals = sample_face_uv(face.topods_shape(), nu=nu, nv=nv)
             if len(points) > 0:
                 all_points.append(points)
                 all_normals.append(normals)
