@@ -21,7 +21,8 @@ from occwl.compound import Compound
 from OCC.Core.BRepBndLib import brepbndlib
 from OCC.Core.Bnd import Bnd_Box
 from OCC.Core.BRepClass import BRepClass_FaceClassifier
-from OCC.Core.BRepAdaptor import BRepAdaptor_Surface
+# from OCC.Core.BRepAdaptor import BRepAdaptor_Surface
+from OCC.Core.Brep import BRep_Tool
 from OCC.Core.GeomLProp import GeomLProp_SLProps
 from OCC.Core.gp import gp_Pnt2d
 from OCC.Core.TopAbs import TopAbs_IN, TopAbs_ON
@@ -57,7 +58,7 @@ def sample_face_uv(face, nu=50, nv=50):
     normals = []
     
     # Get the surface from the face
-    surf_adaptor = BRepAdaptor_Surface(face)
+    surf_adaptor = BRep_Tool(face)
     surface = surf_adaptor.Surface()
     
     # Get UV bounds
