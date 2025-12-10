@@ -366,6 +366,55 @@ class BRepDataProcessor:
             control_points[i - 1, :] = [point.X(), point.Y(), point.Z()]
         return control_points.tolist()
 
+
+    def tokenize_cad_data_preload(self, graph):
+
+        data = []
+        
+        for face_idx in graph.nodes():
+            face = graph.nodes[face_idx]["face"]
+            face_topods = face.topods_shape()
+            surf_type = face.surface_type()
+            surface = face.specific_surface()
+
+            node_feature = None
+            if surf_type == "plane":
+                node_feature = self.plane_feature(surface, [face_idx, face_idx])
+            elif surf_type == "cylinder":
+                node_feature = self.cylinder_feature(surface, [face_idx, face_idx])
+            elif surf_type == "cone":
+                node_feature = self.cone_feature(surface, [face_idx, face_idx])
+            elif surf_type == "sphere":
+                node_feature = self.sphere_feature(surface, [face_idx, face_idx])
+            elif surf_type == "torus":
+                node_feature = self.torus_feature(surface, [face_idx, face_idx])
+            elif surf_type == "bezier":
+                node_feature = self.bezier_surface_feature(surface, [face_idx, face_idx])
+            elif surf_type == "bspline":
+                node_feature = self.bspline_surface_feature(surface, [face_idx, face_idx])
+            else:
+                raise ValueError(f"Unknown surface type: {surf_type}")
+            
+            node_feature['uv'] = [face.uv_bounds().min_point()[0], face.uv_bounds().max_point()[0], face.uv_bounds().min_point()[1], face.uv_bounds().max_point()[1]]
+            json_string = face.topods_shape().DumpJson()
+            string_data = json.loads(json_string.replace(',,', ','), object_pairs_hook=array_on_duplicate_keys)
+            surface_data = string_data['TShape']['Surface']
+            if 'basisSurf' in surface_data:
+                surface_data = surface_data['basisSurf']
+
+            if surf_type != 'besize' and surf_type != 'bspline':
+                direction = np.round(surface_data['pos']['Direction'], 7).tolist()
+                XDirection = np.round(surface_data['pos']['XDirection'], 7).tolist()
+                YDirection = np.round(surface_data['pos']['YDirection'], 7).tolist()
+                node_feature['direction'] = [direction, XDirection, YDirection]
+
+            orient = face.topods_shape().Orientation()
+            node_feature['orientation'] = 'Forward' if orient == 0 else 'Reversed'
+            data.append(node_feature)
+            
+        return data
+
+
     def tokenize_cad_data(self, step_path, output_dir="", export_obj=False, export_per_face_obj=False):
         for _, _, files in os.walk(step_path):
             assert len(files) == 1

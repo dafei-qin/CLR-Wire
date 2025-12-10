@@ -1,6 +1,9 @@
 import os
 import argparse
 import numpy as np
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(os.path.dirname(__file__)).parent.parent))
 
 from occwl.solid import Solid
 from occwl.graph import face_adjacency
@@ -10,8 +13,9 @@ from OCC.Core.GeomLProp import GeomLProp_SLProps
 from OCC.Core.gp import gp_Pnt2d
 from OCC.Core.TopAbs import TopAbs_IN, TopAbs_ON, TopAbs_OUT
 from OCC.Core.BRepClass import BRepClass_FaceClassifier
-
+import json
 from icecream import ic
+from logan_process_brep_data import BRepDataProcessor
 
 # Enable icecream for debugging
 ic.enable()
@@ -41,17 +45,7 @@ def sample_face_uv(face, nu=50, nv=50, debug=True):
     # Get the surface from the face
     u_min, u_max, v_min, v_max = [face.uv_bounds().min_point()[0], face.uv_bounds().max_point()[0], face.uv_bounds().min_point()[1], face.uv_bounds().max_point()[1]]
     surface = BRep_Tool.Surface(face.topods_shape())
-    # surface = surf_adaptor.Surface()
-    
-    # # Get UV bounds
-    # u_min = surf_adaptor.FirstUParameter()
-    # u_max = surf_adaptor.LastUParameter()
-    # v_min = surf_adaptor.FirstVParameter()
-    # v_max = surf_adaptor.LastVParameter()
-    
-    if debug:
-        ic(u_min, u_max, v_min, v_max)
-    
+
     # Create UV grid
     u_values = np.linspace(u_min, u_max, nu)
     v_values = np.linspace(v_min, v_max, nv)
@@ -85,7 +79,6 @@ def sample_face_uv(face, nu=50, nv=50, debug=True):
             # Only keep points that are IN or ON the face
             if state == TopAbs_IN or state == TopAbs_ON:
                 # Evaluate surface at (u, v)
-                
                 valid_count += 1
                 valid = True
 
@@ -162,6 +155,9 @@ def step_to_pointcloud(step_filename, ply_filename, nu=50, nv=50, debug=True):
     solids = list(solids.solids())
     ic(f"Number of solids: {len(solids)}")
 
+    processor = BRepDataProcessor()
+
+
     for index, solid in enumerate(solids):
         print(f"\n--- Processing solid {index} ---")
         ic(f'Solid {index:02d}')
@@ -187,14 +183,18 @@ def step_to_pointcloud(step_filename, ply_filename, nu=50, nv=50, debug=True):
         except Exception as e:
             ic(f"Face adjacency failed: {e}")
             raise ValueError("Face adjacency failed. The solid may be invalid.")
-        
+
+        jsons_data = processor.tokenize_cad_data_preload(graph)
         # Collect points and normals from all faces
         all_points = []
         all_normals = []
         all_masks = []
-        faces_list = list(solid.faces())
-        for face_idx, face in enumerate(faces_list):
-            print(f"\n  Face {face_idx}/{len(faces_list)-1}")
+        # faces_list = list(solid.faces())
+        for face_idx in graph.nodes():
+
+            # print(f"\n  Face {face_idx}/{len(faces_list)-1}")
+
+            face = graph.nodes[face_idx]["face"]
 
             points, normals, masks = sample_face_uv(face, nu=nu, nv=nv, debug=debug)
             
@@ -202,14 +202,10 @@ def step_to_pointcloud(step_filename, ply_filename, nu=50, nv=50, debug=True):
             all_normals.append(normals.astype(np.float32))
             all_masks.append(masks.astype(bool))
 
-       
-        
-        # Concatenate all points and normals
-        # all_points = np.vstack(all_points)
-        # all_normals = np.vstack(all_normals)
-        
-        np.savez(ply_filename.replace('ply', 'npz'), points=all_points, normals=all_normals, masks=all_masks)
-        print(f"\n✓ Successfully saved {len(all_points)} points to {ply_filename.replace('.ply', f'_{index:03d}.npz')}")
+        save_name = ply_filename.replace('.npz', f'_{index:03d}.npz')
+        np.savez(save_name, points=all_points, normals=all_normals, masks=all_masks)
+        json.dump(jsons_data, open(save_name.replace('.npz', '.json'), 'w'), ensure_ascii=False, indent=2)
+        print(f"\n✓ Successfully saved {len(all_points)} points to {save_name}")
 
 
 def main():
@@ -232,13 +228,16 @@ def main():
     
     # Set output filename
     if args.output is None:
-        output_file = args.step_file.replace('.step', '.ply')
+        output_file = args.step_file.replace('.step', '.npz')
     else:
         output_file = args.output
     
     # Ensure output has .ply extension
-    if not output_file.endswith('.ply'):
-        output_file += '.ply'
+    if not output_file.endswith('.npz'):
+        output_file += '.npz'
+
+    if not os.path.exists(os.path.dirname(output_file)):
+        os.makedirs(os.path.dirname(output_file), exist_ok=True)
     
     print(f"\n{'='*60}")
     print(f"DEBUG MODE - Single Threaded Conversion")
