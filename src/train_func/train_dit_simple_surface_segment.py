@@ -139,6 +139,7 @@ num_train_steps = epochs * num_step_per_epoch
 
 initial_lr = cli_args.resume_lr if args.resume_training and cli_args.resume_lr is not None else args.lr
 
+print('Warning, here we "fixed" the memory mask to be reversed.')
 trainer = TrainerFlowSurface(
     model,
     vae,
@@ -176,6 +177,7 @@ trainer = TrainerFlowSurface(
     original_sample_start_step=args.loss.original_sample_start_step,
     weight_sample_edges=args.loss.weight_sample_edges,
     num_inference_timesteps=args.trainer.num_inference_timesteps,
+    use_weighted_sample_loss=args.loss.use_weighted_sample_loss,
     log_scale=config.data_train.params.log_scale
 )
 

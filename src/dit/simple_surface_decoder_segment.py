@@ -96,7 +96,9 @@ class SimpleSurfaceDecoder(nn.Module):
         self.use_diag_memory_mask = use_diag_memory_mask
         self.max_num_surfaces=max_num_surfaces
         if use_diag_memory_mask:
-            # self.register_buffer('memory_mask', torch.eye(self.max_num_surfaces, dtype=torch.bool))
+            # This lead to nan, since for padding queries there are no valid keys for cross-attn softmax
+            # self.register_buffer('memory_mask', ~torch.eye(self.max_num_surfaces, dtype=torch.bool))
+            # Thus here we implement a soft mask
             self.register_buffer('memory_mask', torch.eye(self.max_num_surfaces, dtype=torch.float32) * 5 - 5) # (diag=0, off-diag = -5)
         else:
             self.memory_mask = None
