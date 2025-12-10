@@ -176,6 +176,9 @@ _custom_num_surfaces = 20  # User-specified surface count (15-32)
 _default_num_surfaces = 20  # Default value from GT mask
 _log_scale = True
 _dataset_compound = None
+_use_ddim = False  # Whether to use DDIM scheduler
+_ddim_eta = 0.0    # DDIM eta parameter
+_config_path = None  # Store config path for scheduler switching
 
 # Surface type mapping
 SURFACE_TYPE_MAP_INV = {
@@ -309,11 +312,17 @@ def load_model_and_dataset(
     dit_ckpt_path=None,
     vae_config_path=None,
     vae_checkpoint_path=None,
-    device='cuda'
+    device='cuda',
+    use_ddim=False,
+    ddim_eta=0.0,
 ):
     """Load dataset and corresponding model weights using config-based loading."""
     global _dataset, _dataset_train, _dataset_val, _model, _pipe, _max_idx, _vae, _dataset_compound
     global _pred_is_closed, _vae_model_name, _dit_model_name, _log_scale
+    global _use_ddim, _ddim_eta, _config_path
+    
+    # Store config path for later use
+    _config_path = config_path
     
     # Load config
     config = OmegaConf.load(config_path)
@@ -391,10 +400,17 @@ def load_model_and_dataset(
     # Create pipeline
     prediction_type = config.trainer.get('prediction_type', 'v_prediction')
     num_training_timesteps = config.trainer.get('num_training_timesteps', 1000)
-    scheduler = get_new_scheduler(prediction_type, num_training_timesteps)
+    _use_ddim = use_ddim
+    _ddim_eta = ddim_eta
+    scheduler = get_new_scheduler(prediction_type, num_training_timesteps, 
+                                   use_ddim=use_ddim, ddim_eta=ddim_eta)
     _pipe = ZLDMPipeline(_model, scheduler, dtype=torch.float32)
     
+    scheduler_name = "DDIM" if use_ddim else "DDPM"
     print(f"Loaded DiT model: {_dit_model_name}")
+    print(f"Loaded scheduler: {scheduler_name} (prediction_type={prediction_type})")
+    if use_ddim:
+        print(f"  DDIM eta={ddim_eta} ({'deterministic' if ddim_eta == 0.0 else 'stochastic'})")
 
 
 def _compute_loss(output, target, masks):
@@ -440,8 +456,15 @@ def to_json(params_tensor, types_tensor, mask_tensor):
     return json_data
 
 
-def process_index(idx: int, num_inference_steps: int, use_gt_mask=False):
-    """Process a single index: load GT, generate point cloud condition, run inference."""
+def process_index(idx: int, num_inference_steps: int, use_gt_mask=False, return_raw_data=False):
+    """Process a single index: load GT, generate point cloud condition, run inference.
+    
+    Args:
+        idx: dataset index
+        num_inference_steps: number of diffusion steps
+        use_gt_mask: whether to use ground truth mask
+        return_raw_data: if True, return raw shifts/rotations/scales/params tensors before visualization
+    """
     global _dataset, _pipe, _vae, _pred_is_closed, _use_custom_num_surfaces, _custom_num_surfaces, _log_scale
     
     device = next(_pipe.denoiser.parameters()).device
@@ -515,6 +538,10 @@ def process_index(idx: int, num_inference_steps: int, use_gt_mask=False):
     
     # Decode samples
     valid, shifts, rotations, scales, params = decode_latent(sample, log_scale=_log_scale)
+    # print('Use gt rts now...')
+    # valid, shifts, rotations, scales, params = decode_latent(torch.cat([gt_sample[..., :-128], sample[..., -128:]], dim=-1), log_scale=_log_scale)
+    # print('Use gt params now')
+    # valid, shifts, rotations, scales, params = decode_latent(torch.cat([sample[..., :-128], gt_sample[..., -128:]], dim=-1), log_scale=_log_scale)
     valid_gt, shifts_gt, rotations_gt, scales_gt, params_gt = decode_latent(gt_sample, log_scale=_log_scale)
     
     shifts_gt = shifts_gt[valid_gt].squeeze()
@@ -529,6 +556,16 @@ def process_index(idx: int, num_inference_steps: int, use_gt_mask=False):
     rotations = rotations[valid].squeeze()
     scales = scales[valid].squeeze()
     params = params[valid].squeeze()
+    
+    # If return_raw_data is True, return tensors before processing
+    if return_raw_data:
+        return {
+            'shifts': shifts,
+            'rotations': rotations,
+            'scales': scales,
+            'params': params,
+            'valid': valid,
+        }
     
     # Classify with is_closed support
     if _pred_is_closed:
@@ -583,6 +620,128 @@ def process_index(idx: int, num_inference_steps: int, use_gt_mask=False):
     
     return (surface_jsons, surface_jsons_gt, loss_valid, loss_shifts, loss_rotations, 
             loss_scales, loss_params, is_closed_data, gt_point_clouds, pred_point_clouds)
+
+
+def compute_generation_variance(num_runs=10):
+    """Generate multiple times with current settings and compute std of outputs.
+    
+    Args:
+        num_runs: number of generations to run (default: 10)
+    """
+    global _current_idx, _num_inference_steps
+    
+    print(f"\n{'='*80}")
+    print(f"Computing generation variance over {num_runs} runs...")
+    print(f"Index: {_current_idx}, Inference steps: {_num_inference_steps}")
+    print(f"{'='*80}\n")
+    
+    # Collect results from multiple runs
+    all_shifts = []
+    all_rotations = []
+    all_scales = []
+    all_params = []
+    
+    with torch.no_grad():
+        for run_idx in range(num_runs):
+            print(f"Run {run_idx + 1}/{num_runs}...", end=' ')
+            
+            # Run inference with return_raw_data=True
+            result = process_index(_current_idx, _num_inference_steps, 
+                                  use_gt_mask=True, return_raw_data=True)
+            
+            # Extract tensors
+            shifts = result['shifts'].cpu().numpy()
+            rotations = result['rotations'].cpu().numpy()
+            scales = result['scales'].cpu().numpy()
+            params = result['params'].cpu().numpy()
+            
+            # Ensure consistent shape (handle both single surface and multiple surfaces)
+            if shifts.ndim == 1:
+                shifts = shifts[None, :]
+            if rotations.ndim == 1:
+                rotations = rotations[None, :]
+            if scales.ndim == 0:
+                scales = scales[None]
+            if params.ndim == 1:
+                params = params[None, :]
+            
+            all_shifts.append(shifts)
+            all_rotations.append(rotations)
+            all_scales.append(scales)
+            all_params.append(params)
+            
+            print("Done")
+    
+    # Stack results: shape (num_runs, num_surfaces, feature_dim)
+    all_shifts = np.stack(all_shifts, axis=0)  # (num_runs, num_surfaces, 3)
+    all_rotations = np.stack(all_rotations, axis=0)  # (num_runs, num_surfaces, 6)
+    all_scales = np.stack(all_scales, axis=0)  # (num_runs, num_surfaces)
+    all_params = np.stack(all_params, axis=0)  # (num_runs, num_surfaces, param_dim)
+    
+    # Compute standard deviation across runs (axis=0)
+    std_shifts = np.std(all_shifts, axis=0)  # (num_surfaces, 3)
+    std_rotations = np.std(all_rotations, axis=0)  # (num_surfaces, 6)
+    std_scales = np.std(all_scales, axis=0)  # (num_surfaces,)
+    std_params = np.std(all_params, axis=0)  # (num_surfaces, param_dim)
+    
+    # Compute mean for reference
+    mean_shifts = np.mean(all_shifts, axis=0)
+    mean_rotations = np.mean(all_rotations, axis=0)
+    mean_scales = np.mean(all_scales, axis=0)
+    mean_params = np.mean(all_params, axis=0)
+    
+    # Print results
+    print(f"\n{'='*80}")
+    print(f"VARIANCE ANALYSIS RESULTS (over {num_runs} runs)")
+    print(f"{'='*80}\n")
+    
+    num_surfaces = std_shifts.shape[0]
+    print(f"Number of surfaces: {num_surfaces}\n")
+    
+    # Summary statistics (average across all surfaces)
+    print("=== AVERAGE STD ACROSS ALL SURFACES ===")
+    print(f"Shifts STD:    {np.mean(std_shifts):.6f}  (per-dim: {np.mean(std_shifts, axis=0)})")
+    print(f"Rotations STD: {np.mean(std_rotations):.6f}  (per-dim mean: {np.mean(std_rotations, axis=0).mean():.6f})")
+    print(f"Scales STD:    {np.mean(std_scales):.6f}")
+    print(f"Params STD:    {np.mean(std_params):.6f}  (per-dim mean: {np.mean(std_params, axis=0).mean():.6f})\n")
+    
+    # Per-surface details
+    print("=== PER-SURFACE STD ===")
+    for i in range(num_surfaces):
+        print(f"\nSurface {i}:")
+        print(f"  Shifts STD:    mean={np.mean(std_shifts[i]):.6f}, xyz={std_shifts[i]}")
+        print(f"  Rotations STD: mean={np.mean(std_rotations[i]):.6f}, range=[{np.min(std_rotations[i]):.6f}, {np.max(std_rotations[i]):.6f}]")
+        print(f"  Scales STD:    {std_scales[i]:.6f}")
+        print(f"  Params STD:    mean={np.mean(std_params[i]):.6f}, range=[{np.min(std_params[i]):.6f}, {np.max(std_params[i]):.6f}]")
+    
+    # Relative variance (std / mean)
+    print(f"\n{'='*80}")
+    print("=== COEFFICIENT OF VARIATION (STD/MEAN) ===")
+    print(f"{'='*80}\n")
+    
+    eps = 1e-8  # prevent division by zero
+    cv_shifts = np.mean(std_shifts / (np.abs(mean_shifts) + eps))
+    cv_rotations = np.mean(std_rotations / (np.abs(mean_rotations) + eps))
+    cv_scales = np.mean(std_scales / (np.abs(mean_scales) + eps))
+    cv_params = np.mean(std_params / (np.abs(mean_params) + eps))
+    
+    print(f"Shifts CV:    {cv_shifts:.6f}")
+    print(f"Rotations CV: {cv_rotations:.6f}")
+    print(f"Scales CV:    {cv_scales:.6f}")
+    print(f"Params CV:    {cv_params:.6f}")
+    
+    print(f"\n{'='*80}\n")
+    
+    return {
+        'std_shifts': std_shifts,
+        'std_rotations': std_rotations,
+        'std_scales': std_scales,
+        'std_params': std_params,
+        'mean_shifts': mean_shifts,
+        'mean_rotations': mean_rotations,
+        'mean_scales': mean_scales,
+        'mean_params': mean_params,
+    }
 
 
 def update_visualization():
@@ -703,6 +862,7 @@ def callback():
     global _gt_group, _gen_group, _gt_pc_group, _gen_pc_group
     global _use_train_dataset, _dataset_train, _dataset_val
     global _show_closed_colors, _use_custom_num_surfaces, _custom_num_surfaces, _default_num_surfaces
+    global _use_ddim, _ddim_eta, _pipe, _config_path
     
     psim.Text("DiT Simple Surface Segment Inference")
     psim.Separator()
@@ -727,21 +887,53 @@ def callback():
     
     # Index controls
     psim.Text("Sample Navigation:")
-    slider_changed, slider_idx = psim.SliderInt("Test Index", _current_idx, 0, _max_idx)
+    psim.Text(f"Current: {_current_idx} / {_max_idx}")
+    psim.Separator()
+    
+    # Slider for browsing
+    slider_changed, slider_idx = psim.SliderInt("Browse (Slider)", _current_idx, 0, _max_idx)
     if slider_changed and slider_idx != _current_idx:
         _current_idx = slider_idx
         update_visualization()
     
-    input_changed, input_idx = psim.InputInt("Go To Index", _current_idx)
+    # Input box for direct jump
+    psim.PushItemWidth(150)
+    input_changed, input_idx = psim.InputInt("Jump to Index", _current_idx)
+    psim.PopItemWidth()
     if input_changed:
         input_idx = max(0, min(_max_idx, input_idx))
         if input_idx != _current_idx:
             _current_idx = input_idx
             update_visualization()
     
-    psim.Separator()
-    psim.Text(f"Current Index: {_current_idx}")
-    psim.Text(f"Max Index: {_max_idx}")
+    psim.SameLine()
+    psim.Text(f"(0-{_max_idx})")
+    
+    # Quick navigation buttons
+    psim.PushItemWidth(80)
+    if psim.Button("First"):
+        if _current_idx != 0:
+            _current_idx = 0
+            update_visualization()
+    
+    psim.SameLine()
+    if psim.Button("Prev"):
+        if _current_idx > 0:
+            _current_idx -= 1
+            update_visualization()
+    
+    psim.SameLine()
+    if psim.Button("Next"):
+        if _current_idx < _max_idx:
+            _current_idx += 1
+            update_visualization()
+    
+    psim.SameLine()
+    if psim.Button("Last"):
+        if _current_idx != _max_idx:
+            _current_idx = _max_idx
+            update_visualization()
+    psim.PopItemWidth()
     
     # Inference steps control
     psim.Separator()
@@ -753,8 +945,39 @@ def callback():
     if psim.Button("Regenerate"):
         update_visualization()
     
+    psim.SameLine()
+    if psim.Button("Compute Variance (10 runs)"):
+        compute_generation_variance(num_runs=10)
+    
     psim.Separator()
     psim.Text(f"Inference Steps: {_num_inference_steps}")
+    
+    # Sampling method control
+    psim.Separator()
+    psim.Text("Sampling Method:")
+    
+    changed_ddim, new_use_ddim = psim.Checkbox("Use DDIM (faster)", _use_ddim)
+    if changed_ddim:
+        _use_ddim = new_use_ddim
+        # Recreate scheduler and update pipeline
+        if _config_path:
+            from omegaconf import OmegaConf
+            config = OmegaConf.load(_config_path)
+            prediction_type = config.trainer.get('prediction_type', 'v_prediction')
+            num_training_timesteps = config.trainer.get('num_training_timesteps', 1000)
+            from src.flow.surface_flow import get_new_scheduler
+            scheduler = get_new_scheduler(prediction_type, num_training_timesteps,
+                                           use_ddim=_use_ddim, ddim_eta=_ddim_eta)
+            _pipe.scheduler = scheduler
+            _pipe.scheduler_type = type(scheduler).__name__
+            print(f"Switched to {'DDIM' if _use_ddim else 'DDPM'} scheduler")
+    
+    if _use_ddim:
+        eta_changed, new_eta = psim.SliderFloat("DDIM eta", _ddim_eta, 0.0, 1.0)
+        if eta_changed:
+            _ddim_eta = new_eta
+            _pipe.scheduler.eta = _ddim_eta
+        psim.Text(f"eta={_ddim_eta:.2f} ({'det' if _ddim_eta < 0.01 else 'stoch'})")
     
     # Surface count control
     psim.Separator()
@@ -857,6 +1080,18 @@ if __name__ == "__main__":
         default=0,
         help='Starting index for visualization'
     )
+    parser.add_argument(
+        "--use_ddim",
+        action='store_true',
+        default=False,
+        help='Use DDIM scheduler instead of DDPM'
+    )
+    parser.add_argument(
+        "--ddim_eta",
+        type=float,
+        default=0.0,
+        help='DDIM eta parameter (0.0=deterministic, 1.0=stochastic)'
+    )
     args = parser.parse_args()
 
     _num_inference_steps = args.num_inference_steps
@@ -867,7 +1102,9 @@ if __name__ == "__main__":
         dit_ckpt_path=args.ckpt_path if args.ckpt_path else None,
         vae_config_path=args.vae_config if args.vae_config else None,
         vae_checkpoint_path=args.vae_ckpt if args.vae_ckpt else None,
-        device=args.device
+        device=args.device,
+        use_ddim=args.use_ddim,
+        ddim_eta=args.ddim_eta,
     )
     
     # Update max index based on filtered indices

@@ -1,6 +1,9 @@
 import os
 import argparse
 import numpy as np
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(os.path.dirname(__file__)).parent.parent))
 
 from occwl.solid import Solid
 from occwl.graph import face_adjacency
@@ -10,9 +13,11 @@ from OCC.Core.GeomLProp import GeomLProp_SLProps
 from OCC.Core.gp import gp_Pnt2d
 from OCC.Core.TopAbs import TopAbs_IN, TopAbs_ON, TopAbs_OUT
 from OCC.Core.BRepClass import BRepClass_FaceClassifier
-
+import json
 from icecream import ic
+from logan_process_brep_data import BRepDataProcessor
 
+import networkx as nx
 # Enable icecream for debugging
 ic.enable()
 
@@ -34,6 +39,7 @@ def sample_face_uv(face, nu=50, nv=50, debug=True):
     """
     points = []
     normals = []
+    masks = []
     
     if debug:
         ic("Starting sample_face_uv")
@@ -41,17 +47,7 @@ def sample_face_uv(face, nu=50, nv=50, debug=True):
     # Get the surface from the face
     u_min, u_max, v_min, v_max = [face.uv_bounds().min_point()[0], face.uv_bounds().max_point()[0], face.uv_bounds().min_point()[1], face.uv_bounds().max_point()[1]]
     surface = BRep_Tool.Surface(face.topods_shape())
-    # surface = surf_adaptor.Surface()
-    
-    # # Get UV bounds
-    # u_min = surf_adaptor.FirstUParameter()
-    # u_max = surf_adaptor.LastUParameter()
-    # v_min = surf_adaptor.FirstVParameter()
-    # v_max = surf_adaptor.LastVParameter()
-    
-    if debug:
-        ic(u_min, u_max, v_min, v_max)
-    
+
     # Create UV grid
     u_values = np.linspace(u_min, u_max, nu)
     v_values = np.linspace(v_min, v_max, nv)
@@ -69,6 +65,19 @@ def sample_face_uv(face, nu=50, nv=50, debug=True):
             classifier = BRepClass_FaceClassifier(face.topods_shape(), uv_pnt, 1e-6)
             state = classifier.State()
             
+            props = GeomLProp_SLProps(surface, u, v, 1, 1e-6)
+
+            pnt = props.Value()
+            point = np.array([pnt.X(), pnt.Y(), pnt.Z()])
+            
+            # Get normal vector
+            if props.IsNormalDefined():
+                normal = props.Normal()
+                normal_vec = np.array([normal.X(), normal.Y(), normal.Z()])
+                norm = np.linalg.norm(normal_vec)
+                normal_vec = normal_vec / (norm + 1e-6)
+            else:
+                normal_vec = np.array([0, 0, 0])
             # Only keep points that are IN or ON the face
             if state == TopAbs_IN or state == TopAbs_ON:
                 # Evaluate surface at (u, v)
@@ -105,6 +114,11 @@ def sample_face_uv(face, nu=50, nv=50, debug=True):
                         ic(f"Normal not defined at u={u:.4f}, v={v:.4f}")
             else:
                 invalid_count += 1
+                valid = False
+
+            points.append(point)
+            normals.append(normal_vec)
+            masks.append(valid)
     
     if debug:
         ic(f"Valid points: {valid_count}, Invalid points: {invalid_count}")
@@ -112,9 +126,9 @@ def sample_face_uv(face, nu=50, nv=50, debug=True):
     if len(points) == 0:
         if debug:
             ic("WARNING: No valid points sampled!")
-        return np.array([]), np.array([])
+        return np.array([]), np.array([]), np.array([])
     
-    return np.array(points), np.array(normals)
+    return np.array(points), np.array(normals), np.array(masks)
 
 
 def save_ply(filename, points, normals):
@@ -151,6 +165,16 @@ def save_ply(filename, points, normals):
     print(f"Saved {len(points)} points to {filename}")
 
 
+def strip_features_and_make_undirected(G: nx.DiGraph) -> nx.Graph:
+    """
+    删除所有节点和边的 attributes，只保留纯拓扑结构，
+    并将 DiGraph 转为 Graph
+    """
+    H = nx.Graph()
+    H.add_nodes_from(G.nodes())
+    H.add_edges_from(G.edges())
+    return H
+
 def step_to_pointcloud(step_filename, ply_filename, nu=50, nv=50, debug=True):
     """
     Convert STEP file to point cloud with normals (single-threaded debug version)
@@ -170,6 +194,9 @@ def step_to_pointcloud(step_filename, ply_filename, nu=50, nv=50, debug=True):
     solids, attributes = Compound.load_step_with_attributes(step_filename)
     solids = list(solids.solids())
     ic(f"Number of solids: {len(solids)}")
+
+    processor = BRepDataProcessor()
+
 
     for index, solid in enumerate(solids):
         print(f"\n--- Processing solid {index} ---")
@@ -196,35 +223,30 @@ def step_to_pointcloud(step_filename, ply_filename, nu=50, nv=50, debug=True):
         except Exception as e:
             ic(f"Face adjacency failed: {e}")
             raise ValueError("Face adjacency failed. The solid may be invalid.")
-        
+
+        jsons_data = processor.tokenize_cad_data_preload(graph)
         # Collect points and normals from all faces
         all_points = []
         all_normals = []
-        
-        faces_list = list(solid.faces())
-        for face_idx, face in enumerate(faces_list):
-            print(f"\n  Face {face_idx}/{len(faces_list)-1}")
+        all_masks = []
+        # faces_list = list(solid.faces())
+        for face_idx in graph.nodes():
 
-            points, normals = sample_face_uv(face, nu=nu, nv=nv, debug=debug)
-            if len(points) > 0:
-                all_points.append(points)
-                all_normals.append(normals)
-                print(f"  -> Sampled {len(points)} points")
-            else:
-                print(f"  -> No valid points sampled")
+            # print(f"\n  Face {face_idx}/{len(faces_list)-1}")
 
-        if len(all_points) == 0:
-            print(f"\nWarning: No valid points sampled for solid {index}")
-            continue
-        
-        # Concatenate all points and normals
-        all_points = np.vstack(all_points)
-        all_normals = np.vstack(all_normals)
-        
-        # Save to PLY file
-        ply_filename_with_index = f"{ply_filename[:-4]}_{index}.ply"
-        save_ply(ply_filename_with_index, all_points, all_normals)
-        print(f"\n✓ Successfully saved {len(all_points)} points to {ply_filename_with_index}")
+            face = graph.nodes[face_idx]["face"]
+
+            points, normals, masks = sample_face_uv(face, nu=nu, nv=nv, debug=debug)
+            
+            all_points.append(points.astype(np.float32))
+            all_normals.append(normals.astype(np.float32))
+            all_masks.append(masks.astype(bool))
+
+        graph_undirected = strip_features_and_make_undirected(graph)
+        save_name = ply_filename.replace('.npz', f'_{index:03d}.npz')
+        np.savez(save_name, points=all_points, normals=all_normals, masks=all_masks, graph_nodes=list(graph_undirected.nodes()), graph_edges=list(graph_undirected.edges()))
+        json.dump(jsons_data, open(save_name.replace('.npz', '.json'), 'w'), ensure_ascii=False, indent=2)
+        print(f"\n✓ Successfully saved {len(all_points)} points to {save_name}")
 
 
 def main():
@@ -247,13 +269,16 @@ def main():
     
     # Set output filename
     if args.output is None:
-        output_file = args.step_file.replace('.step', '.ply')
+        output_file = args.step_file.replace('.step', '.npz')
     else:
         output_file = args.output
     
     # Ensure output has .ply extension
-    if not output_file.endswith('.ply'):
-        output_file += '.ply'
+    if not output_file.endswith('.npz'):
+        output_file += '.npz'
+
+    if not os.path.exists(os.path.dirname(output_file)):
+        os.makedirs(os.path.dirname(output_file), exist_ok=True)
     
     print(f"\n{'='*60}")
     print(f"DEBUG MODE - Single Threaded Conversion")
