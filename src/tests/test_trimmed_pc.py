@@ -78,9 +78,10 @@ def load_npz_data(npz_path: str) -> Dict:
 
 
 def reset_scene():
-    """Clear all polyscope structures"""
+    """Clear all polyscope structures except groups"""
     if not _ps_initialized:
         return
+    # Remove all structures but groups will be preserved
     ps.remove_all_structures()
 
 
@@ -98,13 +99,8 @@ def update_visualization():
         print(f"Invalid index: {_current_idx}")
         return
     
-    # Clear scene
+    # Clear scene (groups are preserved)
     reset_scene()
-    
-    # Recreate groups
-    _surface_group = ps.create_group("Surfaces")
-    _valid_pc_group = ps.create_group("Valid Point Clouds")
-    _invalid_pc_group = ps.create_group("Invalid Point Clouds")
     
     # Load data
     npz_path = _npz_files[_current_idx]
@@ -330,6 +326,12 @@ def main():
     # Initialize polyscope
     ps.init()
     _ps_initialized = True
+    
+    # Create groups (only once at initialization)
+    global _surface_group, _valid_pc_group, _invalid_pc_group
+    _surface_group = ps.create_group("Surfaces")
+    _valid_pc_group = ps.create_group("Valid Point Clouds")
+    _invalid_pc_group = ps.create_group("Invalid Point Clouds")
     
     # Set user callback
     ps.set_user_callback(callback)
