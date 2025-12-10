@@ -13,6 +13,7 @@ import numpy as np
 import polyscope as ps
 import polyscope.imgui as psim
 from scipy.spatial.transform import Rotation as R
+from omegaconf import OmegaConf
 
 
 
@@ -20,15 +21,15 @@ from scipy.spatial.transform import Rotation as R
 project_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(project_root))
 
-from src.dataset.dataset_latent import LatentDataset
+from src.dataset.dataset_latent_segment import LatentDataset
 from src.dataset.dataset_v1 import dataset_compound
 from src.utils.config import NestedDictToClass, load_config
 from src.utils.import_tools import load_model_from_config, load_dataset_from_config
 from src.flow.surface_flow import ZLDMPipeline, get_new_scheduler
 from src.tests.test_vae_v1 import to_json
 from src.tools.surface_to_canonical_space import from_canonical
+from src.utils.surface_latent_tools import decode_and_sample_with_rts, decode_latent
 from utils.surface import visualize_json_interset
-from omegaconf import OmegaConf
 
 # Colors for is_closed visualization
 # Format: [R, G, B] in range [0, 1]
@@ -59,7 +60,6 @@ def apply_closed_colors_to_surfaces(surfaces_dict, is_u_closed_list, is_v_closed
                 surface_data['ps_handler'].set_color(color)
             except Exception as e:
                 print(f"Warning: Could not set color for surface {i}: {e}")
-
 
 
 def register_unit_cube():
@@ -134,16 +134,22 @@ _dataset_val = None
 _use_train_dataset = False  # False = val, True = train
 _model = None
 _pipe = None
+_vae = None
 _current_idx = 0
 _current_filtered_idx = 0
 _max_idx = 0
 _gt_group = None
 _gen_group = None
-_gt_pc = None
-_gen_pc = None
+_gt_pc_group = None
+_gen_pc_group = None
+_gt_surfaces = {}
+_gen_surfaces = {}
+_gt_point_clouds = {}
+_gen_point_clouds = {}
 _show_gt = True
 _show_gen = True
-_show_pc = True
+_show_gt_pc = True
+_show_gen_pc = True
 _filtered_indices = []
 _index_metadata = []
 _filters = {}
@@ -159,9 +165,6 @@ _apply_shift = False
 _scale_factor = 1.0
 _apply_scale = False
 _num_inference_steps = 50
-# Surface groups
-_gt_surfaces = {}
-_gen_surfaces = {}
 # pred_is_closed related variables
 _pred_is_closed = False
 _show_closed_colors = True  # Toggle for showing is_closed coloring
@@ -171,6 +174,8 @@ _dit_model_name = 'dit_v1'
 _use_custom_num_surfaces = False  # Whether to use custom surface count
 _custom_num_surfaces = 20  # User-specified surface count (15-32)
 _default_num_surfaces = 20  # Default value from GT mask
+_log_scale = True
+_dataset_compound = None
 
 # Surface type mapping
 SURFACE_TYPE_MAP_INV = {
@@ -197,7 +202,7 @@ def build_index_metadata():
 
     for idx in range(len(_dataset)):
         try:
-            latent_params, rotations, scales, shifts, classes, bbox_mins, bbox_maxs, mask, pc = _dataset[idx]
+            latent_params, rotations, scales, shifts, classes, bbox_mins, bbox_maxs, mask = _dataset[idx]
             num_valid = int(mask.sum().item())
             meta = {
                 "valid": num_valid > 0,
@@ -301,146 +306,151 @@ def switch_dataset(use_train: bool):
 
 def load_model_and_dataset(
     config_path,
-    dit_checkpoint_path=None,
+    dit_ckpt_path=None,
     vae_config_path=None,
     vae_checkpoint_path=None,
     device='cuda'
 ):
-    """Load dataset and corresponding model weights using config-based approach."""
+    """Load dataset and corresponding model weights using config-based loading."""
     global _dataset, _dataset_train, _dataset_val, _model, _pipe, _max_idx, _vae, _dataset_compound
-    global _pred_is_closed, _vae_model_name, _dit_model_name
-
-    # Load main config using OmegaConf
+    global _pred_is_closed, _vae_model_name, _dit_model_name, _log_scale
+    
+    # Load config
     config = OmegaConf.load(config_path)
     
-    # Load datasets using load_dataset_from_config
-    _dataset_val = load_dataset_from_config(config, section='data_val')
+    # Load datasets using config
     _dataset_train = load_dataset_from_config(config, section='data_train')
+    _dataset_val = load_dataset_from_config(config, section='data_val')
     
     # Set initial dataset to val
     _dataset = _dataset_val
     
-    # Load VAE config
-    vae_config_file = vae_config_path if vae_config_path else config.vae.config_file
-    vae_config = OmegaConf.load(vae_config_file)
+    # Get log_scale from config
+    _log_scale = config.data_train.params.get('log_scale', True) if 'data_train' in config else True
     
-    # Extract VAE metadata
-    _vae_model_name = getattr(vae_config.model, 'name', 'vae_v1')
-    _pred_is_closed = getattr(vae_config.model, 'pred_is_closed', False)
-    print(f"Loaded VAE config: model_name={_vae_model_name}, pred_is_closed={_pred_is_closed}")
+    # Load VAE config if provided
+    if vae_config_path:
+        vae_config = OmegaConf.load(vae_config_path)
+    elif 'vae' in config and 'config_file' in config.vae:
+        vae_config = OmegaConf.load(config.vae.config_file)
+    else:
+        raise ValueError("VAE config not provided. Use --vae_config or ensure config has vae.config_file")
     
-    # Initialize dataset_compound with pred_is_closed setting
+    # Load VAE model
+    _vae = load_model_from_config(vae_config, device=device)
+    _vae.eval()
+    
+    # Get VAE model name and pred_is_closed from VAE config
+    if 'model' in vae_config:
+        model_cfg = vae_config.model
+        _vae_model_name = model_cfg.get('name', 'vae_v1')
+        if isinstance(_vae_model_name, str) and '.' in _vae_model_name:
+            # Extract model name from full path
+            _vae_model_name = _vae_model_name.split('.')[-1].lower()
+        _pred_is_closed = model_cfg.get('pred_is_closed', False)
+    else:
+        _vae_model_name = 'vae_v1'
+        _pred_is_closed = False
+    
+    print(f"Loaded VAE: model_name={_vae_model_name}, pred_is_closed={_pred_is_closed}")
+    
+    # Load dataset_compound for to_json
     _dataset_compound = dataset_compound(json_dir='./', canonical=True, detect_closed=_pred_is_closed)
+    
     build_index_metadata()
     initialize_filters()
     refresh_filtered_indices(preserve_current=False)
-
-    # Load DiT model using load_model_from_config
-    _dit_model_name = config.model.name
-    print(f"Using DiT model: {_dit_model_name}")
-    _model = load_model_from_config(config)
-    _model.to(device)
     
-    # Load DiT checkpoint
-    dit_ckpt_path = dit_checkpoint_path if dit_checkpoint_path else config.model.checkpoint_file_name
-    checkpoint = torch.load(dit_ckpt_path, map_location=device)
-    if 'ema_model' in checkpoint or 'ema' in checkpoint:
-        ema_key = 'ema' if 'ema' in checkpoint else 'ema_model'
-        ema_model = checkpoint[ema_key]
-        ema_model = {k.replace("ema_model.", "").replace("ema.", ""): v for k, v in ema_model.items()}
-        _model.load_state_dict(ema_model, strict=False)
-        print("Loaded DiT EMA model weights.")
-    elif 'model' in checkpoint:
-        _model.load_state_dict(checkpoint['model'])
-        print("Loaded DiT model weights.")
-    else:
-        _model.load_state_dict(checkpoint)
-        print("Loaded DiT raw model state_dict.")
-
-    # Load VAE model using load_model_from_config
-    _vae = load_model_from_config(vae_config)
-    _vae.to(device)
+    # Load DiT model
+    _dit_model_name = config.model.get('name', 'dit_v1')
+    if isinstance(_dit_model_name, str) and '.' in _dit_model_name:
+        # Extract model name from full path
+        _dit_model_name = _dit_model_name.split('.')[-1]
     
-    # Load VAE checkpoint
-    if vae_checkpoint_path:
-        vae_ckpt_path = vae_checkpoint_path
-    elif hasattr(vae_config.model, 'checkpoint_file_name'):
-        vae_ckpt_path = vae_config.model.checkpoint_file_name
-    else:
-        raise ValueError("VAE checkpoint path not provided. Use --vae_ckpt or ensure VAE config has model.checkpoint_file_name")
+    # Load DiT model using config
+    _model = load_model_from_config(config, device=device)
     
-    checkpoint = torch.load(vae_ckpt_path, map_location=device)
-    if 'ema_model' in checkpoint or 'ema' in checkpoint:
-        ema_key = 'ema' if 'ema' in checkpoint else 'ema_model'
-        ema_model = checkpoint[ema_key]
-        ema_model = {k.replace("ema_model.", "").replace("ema.", ""): v for k, v in ema_model.items()}
-        _vae.load_state_dict(ema_model, strict=False)
-        print("Loaded VAE EMA model weights.")
-    elif 'model' in checkpoint:
-        _vae.load_state_dict(checkpoint['model'])
-        print("Loaded VAE model weights.")
-    else:
-        _vae.load_state_dict(checkpoint)
-        print("Loaded VAE raw model state_dict.")
-
-    _vae.eval()
-
+    # Override checkpoint if provided
+    if dit_ckpt_path:
+        checkpoint = torch.load(dit_ckpt_path, map_location=device)
+        if 'ema_model' in checkpoint or 'ema' in checkpoint:
+            ema_key = 'ema' if 'ema' in checkpoint else 'ema_model'
+            ema_model = checkpoint[ema_key]
+            ema_model = {k.replace("ema_model.", "").replace("ema.", ""): v for k, v in ema_model.items()}
+            _model.load_state_dict(ema_model, strict=False)
+            print("Loaded DiT EMA model weights.")
+        elif 'model' in checkpoint:
+            _model.load_state_dict(checkpoint['model'])
+            print("Loaded DiT model weights.")
+        else:
+            _model.load_state_dict(checkpoint)
+            print("Loaded DiT raw model state_dict.")
+    
+    _model.eval()
+    
     # Create pipeline
-    prediction_type = getattr(config.trainer, 'prediction_type', 'v_prediction')
-    num_train_timesteps = getattr(config.trainer, 'num_train_timesteps', 1000) if hasattr(config, 'trainer') else 1000
-    scheduler = get_new_scheduler(prediction_type, num_train_timesteps)
+    prediction_type = config.trainer.get('prediction_type', 'v_prediction')
+    num_training_timesteps = config.trainer.get('num_training_timesteps', 1000)
+    scheduler = get_new_scheduler(prediction_type, num_training_timesteps)
     _pipe = ZLDMPipeline(_model, scheduler, dtype=torch.float32)
-
+    
+    print(f"Loaded DiT model: {_dit_model_name}")
 
 
 def _compute_loss(output, target, masks):
+    loss_raw = torch.nn.functional.mse_loss(output, target, reduction='none')
+    loss_others = loss_raw[..., 1:] * masks.float()
+    total_valid_surfaces = masks.float().sum()
+    loss_shifts = loss_others[..., :3].mean(dim=(2)).sum() / total_valid_surfaces
+    loss_rotations = loss_others[..., 3:3+6].mean(dim=(2)).sum() / total_valid_surfaces
+    loss_scales = loss_others[..., 3+6:3+6+1].mean(dim=(2)).sum() / total_valid_surfaces
+    loss_params = loss_others[..., 3+6+1:].mean(dim=(2)).sum() / total_valid_surfaces
+    
+    bce_logits_loss = torch.nn.BCEWithLogitsLoss(reduction='none')
+    loss_valid = bce_logits_loss(output[..., 0], masks.float().squeeze(-1)).mean()
+    
+    return loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params
 
-        loss_raw = torch.nn.functional.mse_loss(output, target, reduction='none')
 
-        loss_others = loss_raw[..., 1:] * masks.float()
-        total_valid_surfaces = masks.float().sum()
-        # loss_types = loss_others[..., :self.model.num_surface_types]
-        loss_shifts = loss_others[..., :3].mean(dim=(2)).sum() / total_valid_surfaces
-        loss_rotations = loss_others[..., 3:3+6].mean(dim=(2)).sum() / total_valid_surfaces
-        loss_scales = loss_others[..., 3+6:3+6+1].mean(dim=(2)).sum() / total_valid_surfaces
-        loss_params = loss_others[..., 3+6+1:].mean(dim=(2)).sum() / total_valid_surfaces
-        
-        bce_logits_loss = torch.nn.BCEWithLogitsLoss(reduction='none')
-        loss_valid = bce_logits_loss(output[..., 0], masks.float().squeeze(-1)).mean()
-        # print('gt_scale: ', target[..., 3+6+1:3+6+2])
-        # print('pred_scale: ', output[..., 3+6+1:3+6+2])
-        
-        return loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params
+def fix_rts(shifts, rotations, scales):
+    shifts = shifts.cpu().numpy()
+    rotations = rotations.cpu().numpy()
+    scales = scales.cpu().numpy()
+    D = rotations[:, :3]
+    X = rotations[:, 3:6]
+    D = D / np.linalg.norm(D, axis=1, keepdims=True)
+    X = X / np.linalg.norm(X, axis=1, keepdims=True)
+    Y = np.cross(D, X)
+    Y = Y / np.linalg.norm(Y, axis=1, keepdims=True)
+    X = np.cross(Y, D)
+    X = X / np.linalg.norm(X, axis=1, keepdims=True)
+    rotations = np.concatenate([D, X, Y], axis=1).reshape(-1, 3, 3)
+    return shifts, rotations, scales
 
-def decode_sample(sample: torch.Tensor):
-    global _log_scale
-    valid_tensor = sample[..., 0]
-    sample = sample[..., 1:]
-    shifts_tensor = sample[..., :3]
-    rotations_tensor = sample[..., 3:3+6]
-    scales_tensor = sample[..., 3+6:3+6+1]
-    if _log_scale:
-        scales_tensor = torch.exp(scales_tensor)
 
-    params_tensor = sample[..., 3+6+1:]
-    valid = torch.sigmoid(valid_tensor) > 0.5
+def to_json(params_tensor, types_tensor, mask_tensor):
+    global _dataset_compound
+    json_data = []
+    for i in range(len(params_tensor)):
+        params = params_tensor[i][mask_tensor[i]]
+        recovered_surface = _dataset_compound._recover_surface(params, types_tensor[i].item())
+        recovered_surface['idx'] = [i, i]
+        recovered_surface['orientation'] = 'Forward'
+        json_data.append(recovered_surface)
+    return json_data
 
-    return valid, shifts_tensor, rotations_tensor, scales_tensor, params_tensor
 
 def process_index(idx: int, num_inference_steps: int, use_gt_mask=False):
-    """Process a single index: load GT, sample point cloud, run inference."""
-    global _dataset, _pipe, _gt_pc, _vae, _pred_is_closed, _use_custom_num_surfaces, _custom_num_surfaces
+    """Process a single index: load GT, generate point cloud condition, run inference."""
+    global _dataset, _pipe, _vae, _pred_is_closed, _use_custom_num_surfaces, _custom_num_surfaces, _log_scale
     
     device = next(_pipe.denoiser.parameters()).device
     
     forward_args = _dataset[idx]
-    print('processing data: ', _dataset.latent_files[idx])
     forward_args = [_.to(device).unsqueeze(0) for _ in forward_args]
     
-    # Check if dataset returns is_closed data
-
-    params_padded, rotations_padded, scales_padded, shifts_padded, surface_type, bbox_mins, bbox_maxs, masks, pc_cond = forward_args
-
+    params_padded, rotations_padded, scales_padded, shifts_padded, surface_type, bbox_mins, bbox_maxs, masks = forward_args
+    
     # Build custom mask if enabled
     if _use_custom_num_surfaces:
         batch_size = masks.shape[0]
@@ -451,28 +461,67 @@ def process_index(idx: int, num_inference_steps: int, use_gt_mask=False):
         masks = custom_mask
     
     masks = masks.unsqueeze(-1)
-    # print(scales_padded)
     gt_sample = torch.cat([masks.float(), shifts_padded, rotations_padded, scales_padded, params_padded], dim=-1)
-
-    # gt_sample = gt_sample.unsqueeze(0)
-    # pc_cond = pc_cond.unsqueeze(0)
+    
+    # Generate point cloud condition from GT (same as in trainer)
+    with torch.no_grad():
+        if masks.dim() == 3:
+            masks_2d = masks.squeeze(-1)
+        else:
+            masks_2d = masks
+        masks_bool = masks_2d.bool()
+        
+        valid_indices = torch.nonzero(masks_bool, as_tuple=False)
+        
+        if valid_indices.numel() > 0:
+            valid_params = params_padded[masks_bool]
+            valid_shifts = shifts_padded[masks_bool]
+            valid_rotations = rotations_padded[masks_bool]
+            valid_scales = scales_padded[masks_bool]
+            
+            valid_sampled_points = decode_and_sample_with_rts(
+                _vae, valid_params, valid_shifts, valid_rotations, valid_scales, log_scale=_log_scale
+            )
+            valid_sampled_points = valid_sampled_points.reshape(valid_sampled_points.shape[0], -1, 3)
+            
+            B, num_max_pad = masks_bool.shape
+            num_points = valid_sampled_points.shape[1]
+            gt_sampled_points = torch.zeros(
+                B, num_max_pad, num_points, 3,
+                device=valid_sampled_points.device,
+                dtype=valid_sampled_points.dtype
+            )
+            
+            batch_indices = valid_indices[:, 0]
+            pad_indices = valid_indices[:, 1]
+            gt_sampled_points[batch_indices, pad_indices] = valid_sampled_points
+        else:
+            B, num_max_pad = masks_bool.shape
+            gt_sampled_points = torch.zeros(
+                B, num_max_pad, 64, 3,
+                device=params_padded.device,
+                dtype=params_padded.dtype
+            )
+        
+        gt_sampled_points = gt_sampled_points.reshape(B, num_max_pad, -1)
+    
     noise = torch.randn_like(gt_sample)
-
-    sample  = _pipe(noise=noise, pc=pc_cond, num_inference_steps=num_inference_steps, show_progress=True, tgt_key_padding_mask=~masks.bool().squeeze(-1), gt_sample=None)
-
+    
+    sample = _pipe(noise=noise, pc=gt_sampled_points, num_inference_steps=num_inference_steps, 
+                   show_progress=True, tgt_key_padding_mask=~masks.bool().squeeze(-1), 
+                   memory_key_padding_mask=~masks.bool().squeeze(-1))
+    
     loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params = _compute_loss(sample, gt_sample, masks)
-    # sample = torch.cat([gt_sample[..., :1], sample[..., 1:1+3+6], gt_sample[..., 1+3+6:1+3+6+1], sample[..., -128:]], dim=-1)
-
-    # print("Using GT RTS now...")
-    # sample = torch.cat([gt_sample[..., :-128], sample[..., -128:]], dim=-1)
-    valid, shifts, rotations, scales, params = decode_sample(sample)
-
-    valid_gt, shifts_gt, rotations_gt, scales_gt, params_gt = decode_sample(gt_sample)
+    
+    # Decode samples
+    valid, shifts, rotations, scales, params = decode_latent(sample, log_scale=_log_scale)
+    valid_gt, shifts_gt, rotations_gt, scales_gt, params_gt = decode_latent(gt_sample, log_scale=_log_scale)
+    
     shifts_gt = shifts_gt[valid_gt].squeeze()
     rotations_gt = rotations_gt[valid_gt].squeeze()
     scales_gt = scales_gt[valid_gt].squeeze()
     params_gt = params_gt[valid_gt].squeeze()
-
+    
     if use_gt_mask:
         valid = masks.squeeze(-1).bool()
     
@@ -480,7 +529,7 @@ def process_index(idx: int, num_inference_steps: int, use_gt_mask=False):
     rotations = rotations[valid].squeeze()
     scales = scales[valid].squeeze()
     params = params[valid].squeeze()
-
+    
     # Classify with is_closed support
     if _pred_is_closed:
         type_logits_pred, types_pred, is_closed_logits, is_closed_pred = _vae.classify(params)
@@ -498,19 +547,32 @@ def process_index(idx: int, num_inference_steps: int, use_gt_mask=False):
         gt_is_u_closed = None
         gt_is_v_closed = None
     
+    # Decode to get surface parameters for visualization
     params_decoded_gt, mask_gt = _vae.decode(params_gt, types_pred_gt)
-    shifts_gt, rotations_gt, scales_gt = fix_rts(shifts_gt, rotations_gt, scales_gt)
+
+    shifts_gt_fixed_np, rotations_fixed_np, scales_gt_fixed_np = fix_rts(shifts_gt, rotations_gt, scales_gt)
+
     surface_jsons_gt = to_json(params_decoded_gt.cpu().numpy(), types_pred_gt.cpu().numpy(), mask_gt.cpu().numpy())
-    surface_jsons_gt = [from_canonical(surface_jsons_gt[i], shifts_gt[i], rotations_gt[i], scales_gt[i]) for i in range(len(surface_jsons_gt))]
-        
-    # Decode to get surface parameters
+    surface_jsons_gt = [from_canonical(surface_jsons_gt[i], shifts_gt_fixed_np[i], rotations_fixed_np[i], scales_gt_fixed_np[i]) for i in range(len(surface_jsons_gt))]
+    
     params_decoded, mask = _vae.decode(params, types_pred)
-
-    shifts, rotations, scales = fix_rts(shifts, rotations, scales)
-
+    shifts_fixed_np, rotations_fixed_np, scales_fixed_np = fix_rts(shifts, rotations, scales)
     surface_jsons = to_json(params_decoded.cpu().numpy(), types_pred.cpu().numpy(), mask.cpu().numpy())
-    surface_jsons = [from_canonical(surface_jsons[i], shifts[i], rotations[i], scales[i]) for i in range(len(surface_jsons))]
-
+    surface_jsons = [from_canonical(surface_jsons[i], shifts_fixed_np[i], rotations_fixed_np[i], scales_fixed_np[i]) for i in range(len(surface_jsons))]
+    
+    # Generate point clouds for visualization
+    with torch.no_grad():
+        # GT point clouds
+        # Becasue the scales are already exp-ed by the decode_latent function
+        gt_point_clouds = decode_and_sample_with_rts(_vae, params_gt, shifts_gt, rotations_gt, scales_gt[..., None], log_scale=False)
+        gt_point_clouds = gt_point_clouds.cpu().numpy()  # (num_surfaces, H, W, 3)
+        
+        # Pred point clouds
+        pred_point_clouds = decode_and_sample_with_rts(_vae, params, shifts, rotations, scales[..., None], log_scale=False)
+        pred_point_clouds = pred_point_clouds.cpu().numpy()  # (num_surfaces, H, W, 3)
+    
+    loss_samples = np.mean(np.abs((pred_point_clouds**2  - gt_point_clouds**2)))
+    print('loss_samples: ', loss_samples)
     # Prepare is_closed data for return
     is_closed_data = {
         'pred_is_u_closed': pred_is_u_closed,
@@ -518,46 +580,16 @@ def process_index(idx: int, num_inference_steps: int, use_gt_mask=False):
         'gt_is_u_closed': gt_is_u_closed,
         'gt_is_v_closed': gt_is_v_closed,
     }
-
-    return surface_jsons, surface_jsons_gt, loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params, is_closed_data
-
-def fix_rts(shifts, rotations, scales):
-    shifts = shifts.cpu().numpy()
-    rotations = rotations.cpu().numpy()
-    scales = scales.cpu().numpy()
-    D = rotations[:, :3]
-    X = rotations[:, 3:6]
-    D = D / np.linalg.norm(D)
-    X = X / np.linalg.norm(X)
-    Y = np.cross(D, X)
-    Y = Y / np.linalg.norm(Y)
-    X = np.cross(Y, D)
-    X = X / np.linalg.norm(X)
-    rotations = np.concatenate([D, X, Y], axis=1).reshape(-1, 3, 3)
-    return shifts, rotations, scales
-
-def to_json(params_tensor, types_tensor, mask_tensor):
-    global _dataset_compound
-    json_data = []
-    # SURFACE_TYPE_MAP_INVERSE = {value: key for key, value in SURFACE_TYPE_MAP.items()}
-    for i in range(len(params_tensor)):
-        # (types_tensor[i].item(), mask_tensor[i].sum())
-        params = params_tensor[i][mask_tensor[i]]
-        # surface_type = SURFACE_TYPE_MAP_INVERSE[types_tensor[i].item()]
-        # print('surface index: ',i)
-        recovered_surface = _dataset_compound._recover_surface(params, types_tensor[i].item())
-
-        recovered_surface['idx'] = [i, i]
-        recovered_surface['orientation'] = 'Forward'
-        json_data.append(recovered_surface)
-
-    return json_data
+    
+    return (surface_jsons, surface_jsons_gt, loss_valid, loss_shifts, loss_rotations, 
+            loss_scales, loss_params, is_closed_data, gt_point_clouds, pred_point_clouds)
 
 
 def update_visualization():
     """Update the visualization with current index"""
-    global _current_idx, _gen_group, _gt_group, _gen_pc, _num_inference_steps
-    global _gt_surfaces, _gen_surfaces, _show_gt, _show_gen
+    global _current_idx, _gen_group, _gt_group, _gt_pc_group, _gen_pc_group, _num_inference_steps
+    global _gt_surfaces, _gen_surfaces, _gt_point_clouds, _gen_point_clouds
+    global _show_gt, _show_gen, _show_gt_pc, _show_gen_pc
     global _pred_is_closed, _show_closed_colors, _default_num_surfaces, _dataset
     global _use_custom_num_surfaces, _custom_num_surfaces
     
@@ -571,7 +603,6 @@ def update_visualization():
             masks = forward_args[7]  # masks is the 8th element (0-indexed)
             gt_mask_count = int(masks.sum().item())
             _default_num_surfaces = gt_mask_count
-            # If not using custom, update custom_num_surfaces to match default
             if not _use_custom_num_surfaces:
                 _custom_num_surfaces = _default_num_surfaces
         except Exception as e:
@@ -583,26 +614,18 @@ def update_visualization():
     # Process current sample
     print(f"\nProcessing index {_current_idx}...")
     with torch.no_grad():
-        result = process_index(
-            _current_idx, _num_inference_steps, use_gt_mask=True
-        )
-        if len(result) == 8:  # Has is_closed_data
-            surface_jsons, surface_jsons_gt, loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params, is_closed_data = result
-        else:
-            surface_jsons, surface_jsons_gt, loss_valid, loss_shifts, loss_rotations, loss_scales, loss_params = result
-            is_closed_data = None
+        result = process_index(_current_idx, _num_inference_steps, use_gt_mask=True)
+        (surface_jsons, surface_jsons_gt, loss_valid, loss_shifts, loss_rotations, 
+         loss_scales, loss_params, is_closed_data, gt_point_clouds, pred_point_clouds) = result
     
     # Display losses
     print(f"Losses - Valid: {loss_valid.item():.6f}, Shifts: {loss_shifts.item():.6f}, "
           f"Rotations: {loss_rotations.item():.6f}, Scales: {loss_scales.item():.6f}, "
           f"Params: {loss_params.item():.6f}")
     
-    # Visualize generated surfaces
-
-    # try:
     print(f"Visualizing {len(surface_jsons)} generated surfaces and {len(surface_jsons_gt)} GT surfaces")
     
-    # Visualize generated surfaces
+    # Visualize generated surfaces (OCC)
     _gen_surfaces = visualize_json_interset(surface_jsons, plot=True, plot_gui=False, tol=1e-5, ps_header=f'sample_{_current_idx}')
     for surface_key, surface_data in _gen_surfaces.items():
         if 'surface' in surface_data and surface_data['surface'] is not None and 'ps_handler' in surface_data:
@@ -614,7 +637,7 @@ def update_visualization():
                                         is_closed_data['pred_is_u_closed'], 
                                         is_closed_data['pred_is_v_closed'])
     
-    # Visualize GT surfaces
+    # Visualize GT surfaces (OCC)
     _gt_surfaces = visualize_json_interset(surface_jsons_gt, plot=True, plot_gui=False, tol=1e-5, ps_header=f'gt_{_current_idx}')
     for surface_key, surface_data in _gt_surfaces.items():
         if 'surface' in surface_data and surface_data['surface'] is not None and 'ps_handler' in surface_data:
@@ -626,11 +649,40 @@ def update_visualization():
                                         is_closed_data['gt_is_u_closed'], 
                                         is_closed_data['gt_is_v_closed'])
     
+    # Visualize generated point clouds
+    _gen_point_clouds = {}
+    for i, pc in enumerate(pred_point_clouds):
+        pc_flat = pc.reshape(-1, 3)  # (H*W, 3)
+        pc_name = f"pred_pc_{_current_idx}_{i}"
+        try:
+            pc_handler = ps.register_point_cloud(pc_name, pc_flat, radius=0.003)
+            pc_handler.set_color([0.8, 0.2, 0.2])  # Red for predictions
+            pc_handler.add_to_group(_gen_pc_group)
+            _gen_point_clouds[pc_name] = pc_handler
+        except Exception as e:
+            print(f"Warning: Could not visualize pred point cloud {i}: {e}")
+    
+    # Visualize GT point clouds
+    _gt_point_clouds = {}
+    for i, pc in enumerate(gt_point_clouds):
+        pc_flat = pc.reshape(-1, 3)  # (H*W, 3)
+        pc_name = f"gt_pc_{_current_idx}_{i}"
+        try:
+            pc_handler = ps.register_point_cloud(pc_name, pc_flat, radius=0.003)
+            pc_handler.set_color([0.2, 0.8, 0.2])  # Green for GT
+            pc_handler.add_to_group(_gt_pc_group)
+            _gt_point_clouds[pc_name] = pc_handler
+        except Exception as e:
+            print(f"Warning: Could not visualize GT point cloud {i}: {e}")
+    
     # Configure groups with current visibility settings
     _gen_group.set_enabled(_show_gen)
     _gt_group.set_enabled(_show_gt)
+    _gen_pc_group.set_enabled(_show_gen_pc)
+    _gt_pc_group.set_enabled(_show_gt_pc)
     
-    print(f"Visualized {len(_gen_surfaces)} generated surfaces and {len(_gt_surfaces)} GT surfaces")
+    print(f"Visualized {len(_gen_surfaces)} generated surfaces, {len(_gt_surfaces)} GT surfaces")
+    print(f"Visualized {len(_gen_point_clouds)} generated point clouds, {len(_gt_point_clouds)} GT point clouds")
     
     # Print is_closed statistics if enabled
     if _pred_is_closed and is_closed_data:
@@ -643,18 +695,16 @@ def update_visualization():
             gt_v_closed_count = sum(is_closed_data['gt_is_v_closed'])
             print(f"GT is_closed: u={gt_u_closed_count}/{len(is_closed_data['gt_is_u_closed'])}, v={gt_v_closed_count}/{len(is_closed_data['gt_is_v_closed'])}")
 
-    # except Exception as e:
-    #     print(f'Error visualizing surfaces: {e}')
-
 
 def callback():
     """Polyscope callback function for UI controls"""
     global _current_idx, _max_idx, _num_inference_steps
-    global _show_gt, _show_gen, _gt_group, _gen_group
+    global _show_gt, _show_gen, _show_gt_pc, _show_gen_pc
+    global _gt_group, _gen_group, _gt_pc_group, _gen_pc_group
     global _use_train_dataset, _dataset_train, _dataset_val
     global _show_closed_colors, _use_custom_num_surfaces, _custom_num_surfaces, _default_num_surfaces
     
-    psim.Text("DiT Simple Surface Inference")
+    psim.Text("DiT Simple Surface Segment Inference")
     psim.Separator()
     
     # Dataset switcher
@@ -669,7 +719,6 @@ def callback():
             switch_dataset(use_train)
             update_visualization()
         
-        # Display dataset info
         dataset_name = "TRAIN" if _use_train_dataset else "VAL"
         dataset_size = len(_dataset_train) if _use_train_dataset else len(_dataset_val)
         psim.Text(f"Current: {dataset_name} ({dataset_size} samples)")
@@ -717,13 +766,11 @@ def callback():
     if _use_custom_num_surfaces:
         input_changed, new_count = psim.InputInt("Surface Count (15-32)", _custom_num_surfaces)
         if input_changed:
-            # Clamp to valid range
             _custom_num_surfaces = max(15, min(32, new_count))
         if input_changed or changed_use_custom:
             update_visualization()
     else:
         if changed_use_custom:
-            # Reset to default when disabling custom
             _custom_num_surfaces = _default_num_surfaces
             update_visualization()
     
@@ -731,13 +778,21 @@ def callback():
     if _gt_group is not None and _gen_group is not None:
         psim.Separator()
         psim.Text("Visibility Controls:")
-        changed_gt, _show_gt = psim.Checkbox("Show Ground Truth", _show_gt)
+        changed_gt, _show_gt = psim.Checkbox("Show Ground Truth Surfaces", _show_gt)
         if changed_gt:
             _gt_group.set_enabled(_show_gt)
         
-        changed_gen, _show_gen = psim.Checkbox("Show Generated", _show_gen)
+        changed_gen, _show_gen = psim.Checkbox("Show Generated Surfaces", _show_gen)
         if changed_gen:
             _gen_group.set_enabled(_show_gen)
+        
+        changed_gt_pc, _show_gt_pc = psim.Checkbox("Show GT Point Clouds", _show_gt_pc)
+        if changed_gt_pc:
+            _gt_pc_group.set_enabled(_show_gt_pc)
+        
+        changed_gen_pc, _show_gen_pc = psim.Checkbox("Show Generated Point Clouds", _show_gen_pc)
+        if changed_gen_pc:
+            _gen_pc_group.set_enabled(_show_gen_pc)
         
         # is_closed color controls
         if _pred_is_closed:
@@ -759,14 +814,13 @@ def callback():
                            "  Gray: Neither closed")
 
 
-
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument(
         '--config',
         type=str,
-        default='src/configs/train_dit_simple_surface_v1.yaml',
+        default='src/configs/dit_segment/1205_init.yaml',
         help='Path to the YAML config file.',
     )
     parser.add_argument(
@@ -779,13 +833,13 @@ if __name__ == "__main__":
         '--vae_config',
         type=str,
         default='',
-        help='Path to the VAE YAML config file (for model version and pred_is_closed)'
+        help='Path to the VAE YAML config file (overrides config.vae.config_file)'
     )
     parser.add_argument(
         '--vae_ckpt',
         type=str,
         default='',
-        help='Path to the VAE checkpoint (overrides config)'
+        help='Path to the VAE checkpoint (overrides config, usually not needed if config has it)'
     )
     parser.add_argument(
         "--num_inference_steps",
@@ -805,15 +859,12 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    # Load config to get log_scale setting
-    config = OmegaConf.load(args.config)
-    _log_scale = config.data_val.params.log_scale if hasattr(config.data_val, 'params') else config.data_val.log_scale if hasattr(config.data_val, 'log_scale') else True
     _num_inference_steps = args.num_inference_steps
     _current_idx = args.start_idx
-    
+
     load_model_and_dataset(
         config_path=args.config,
-        dit_checkpoint_path=args.ckpt_path if args.ckpt_path else None,
+        dit_ckpt_path=args.ckpt_path if args.ckpt_path else None,
         vae_config_path=args.vae_config if args.vae_config else None,
         vae_checkpoint_path=args.vae_ckpt if args.vae_ckpt else None,
         device=args.device
@@ -831,9 +882,11 @@ if __name__ == "__main__":
     ps.init()
     _ps_initialized = True
     
-    # Create surface groups
+    # Create groups
     _gt_group = ps.create_group("Ground Truth Surfaces")
     _gen_group = ps.create_group("Generated Surfaces")
+    _gt_pc_group = ps.create_group("Ground Truth Point Clouds")
+    _gen_pc_group = ps.create_group("Generated Point Clouds")
     
     # Register reference cube
     register_unit_cube()

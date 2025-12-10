@@ -74,6 +74,7 @@ class TrainerFlowSurface(BaseTrainer):
         weight_shifts = 1.0,
         weight_original_sample = 1.0,
         original_sample_start_step = 0,
+        weight_sample_edges = 1.0,
         log_scale=True,
         **kwargs
     ):
@@ -125,9 +126,82 @@ class TrainerFlowSurface(BaseTrainer):
         self.weight_shifts = weight_shifts 
         self.weight_original_sample = weight_original_sample
         self.original_sample_start_step = original_sample_start_step
+        self.weight_sample_edges = weight_sample_edges
 
     
         self.log_scale = log_scale
+    
+    def decode_valid_surfaces_with_padding(
+        self,
+        params_padded: torch.Tensor,
+        shifts_padded: torch.Tensor,
+        rotations_padded: torch.Tensor,
+        scales_padded: torch.Tensor,
+        masks: torch.Tensor,
+        num_samples: int=8,
+    ) -> torch.Tensor:
+        """
+        Decode and sample only valid (non-padded) surfaces based on masks.
+        This method optimizes computation by only processing valid surfaces and avoiding padding.
+        
+        Args:
+            params_padded: (B, num_max_pad, ...) Padded surface parameters
+            shifts_padded: (B, num_max_pad, 3) Padded translation vectors
+            rotations_padded: (B, num_max_pad, 6) Padded rotation matrices (6D representation)
+            scales_padded: (B, num_max_pad, 1) Padded scale factors
+            masks: (B, num_max_pad) or (B, num_max_pad, 1) Binary mask indicating valid surfaces
+            num_sample_points: Default number of sample points (H=W) if no valid surfaces
+            
+        Returns:
+            gt_sampled_points: (B, num_max_pad, H*W, 3) Sampled points with padding
+        """
+        # Ensure masks is 2D (B, num_max_pad)
+        if masks.dim() == 3:
+            masks_2d = masks.squeeze(-1)
+        else:
+            masks_2d = masks
+        masks_bool = masks_2d.bool()
+        
+        # Get indices of valid surfaces: (num_valid, 2) where each row is [batch_idx, pad_idx]
+        valid_indices = torch.nonzero(masks_bool, as_tuple=False)  # (num_valid, 2)
+        
+        if valid_indices.numel() > 0:
+            # Extract valid surfaces only (no padded)
+            valid_params = params_padded[masks_bool]  # (num_valid, ...)
+            valid_shifts = shifts_padded[masks_bool]  # (num_valid, 3)
+            valid_rotations = rotations_padded[masks_bool]  # (num_valid, 6)
+            valid_scales = scales_padded[masks_bool]  # (num_valid, 1)
+            
+            # Decode and sample only valid surfaces
+            valid_sampled_points = decode_and_sample_with_rts(
+                self.vae, valid_params, valid_shifts, valid_rotations, valid_scales, log_scale=self.log_scale, num_samples=num_samples
+            )  # (num_valid, H, W, 3)
+            valid_sampled_points = valid_sampled_points.reshape(valid_sampled_points.shape[0], -1, 3)  # (num_valid, H*W, 3)
+            
+            # Create padded output tensor: (B, num_max_pad, H*W, 3)
+            B, num_max_pad = masks_bool.shape
+            num_points = valid_sampled_points.shape[1]
+            gt_sampled_points = torch.zeros(
+                B, num_max_pad, num_points, 3,
+                device=valid_sampled_points.device,
+                dtype=valid_sampled_points.dtype
+            )
+            
+            # Place valid results back to their original positions
+            batch_indices = valid_indices[:, 0]  # (num_valid,)
+            pad_indices = valid_indices[:, 1]    # (num_valid,)
+            gt_sampled_points[batch_indices, pad_indices] = valid_sampled_points
+        else:
+            # No valid surfaces, create empty padded tensor
+            B, num_max_pad = masks_bool.shape
+            gt_sampled_points = torch.zeros(
+                B, num_max_pad, num_samples * num_samples, 3,
+                device=params_padded.device,
+                dtype=params_padded.dtype
+            )
+        
+        return gt_sampled_points
+
     def log_loss(self, total_loss, lr, total_norm, step, loss_dict={}):
         """Enhanced loss logging for B-spline model"""
         if not self.use_wandb_tracking or not self.is_main:
@@ -146,7 +220,7 @@ class TrainerFlowSurface(BaseTrainer):
         self.log(**log_dict)
         
         # Print detailed loss information
-        loss_str = f'loss: {total_loss:.3f}, loss_valid: {loss_dict["loss_valid"]:.3f}, loss_shifts: {loss_dict["loss_shifts"]:.3f}, loss_rotations: {loss_dict["loss_rotations"]:.3f}, loss_scales: {loss_dict["loss_scales"]:.3f}, loss_params: {loss_dict["loss_params"]:.3f}, loss_orig_sample: {loss_dict["loss_orig_sample"]:.3f}'
+        loss_str = f'loss: {total_loss:.3f}, loss_valid: {loss_dict["loss_valid"]:.3f}, loss_shifts: {loss_dict["loss_shifts"]:.3f}, loss_rotations: {loss_dict["loss_rotations"]:.3f}, loss_scales: {loss_dict["loss_scales"]:.3f}, loss_params: {loss_dict["loss_params"]:.3f}, loss_orig_sample: {loss_dict["loss_orig_sample"]:.3f}, loss_edges: {loss_dict["loss_edges"]:.3f}'
 
 
         self.print(get_current_time() + f' {loss_str} lr: {lr:.6f} norm: {total_norm:.3f}')
@@ -191,54 +265,17 @@ class TrainerFlowSurface(BaseTrainer):
 
                     # Prepare the sampled points
                     with torch.no_grad():
-                        # Ensure masks is 2D (B, num_max_pad)
-                        if masks.dim() == 3:
-                            masks_2d = masks.squeeze(-1)
-                        else:
-                            masks_2d = masks
-                        masks_bool = masks_2d.bool()
-                        
-                        # Get indices of valid surfaces: (num_valid, 2) where each row is [batch_idx, pad_idx]
-                        valid_indices = torch.nonzero(masks_bool, as_tuple=False)  # (num_valid, 2)
-                        
-                        if valid_indices.numel() > 0:
-                            # Extract valid surfaces only (no padded)
-                            valid_params = params_padded[masks_bool]  # (num_valid, ...)
-                            valid_shifts = shifts_padded[masks_bool]  # (num_valid, 3)
-                            valid_rotations = rotations_padded[masks_bool]  # (num_valid, 6)
-                            valid_scales = scales_padded[masks_bool]  # (num_valid, 1)
-                            
-                            # Decode and sample only valid surfaces
-                            valid_sampled_points = decode_and_sample_with_rts(
-                                self.vae, valid_params, valid_shifts, valid_rotations, valid_scales, log_scale=self.log_scale
-                            )  # (num_valid, H, W, 3)
-                            valid_sampled_points = valid_sampled_points.reshape(valid_sampled_points.shape[0], -1, 3)  # (num_valid, H*W, 3)
-                            
-                            # Create padded output tensor: (B, num_max_pad, H*W, 3)
-                            B, num_max_pad = masks_bool.shape
-                            num_points = valid_sampled_points.shape[1]
-                            gt_sampled_points = torch.zeros(
-                                B, num_max_pad, num_points, 3,
-                                device=valid_sampled_points.device,
-                                dtype=valid_sampled_points.dtype
-                            )
-                            
-                            # Place valid results back to their original positions
-                            batch_indices = valid_indices[:, 0]  # (num_valid,)
-                            pad_indices = valid_indices[:, 1]    # (num_valid,)
-                            gt_sampled_points[batch_indices, pad_indices] = valid_sampled_points
-                        else:
-                            # No valid surfaces, create empty padded tensor
-                            B, num_max_pad = masks_bool.shape
-                            gt_sampled_points = torch.zeros(
-                                B, num_max_pad, 64, 3,  # Assuming 8x8=64 points
-                                device=params_padded.device,
-                                dtype=params_padded.dtype
-                            )
-                    
-                    gt_sampled_points = gt_sampled_points.reshape(B, num_max_pad, -1)
-                    # print(gt_sampled_points.shape, gt_sampled_points.abs().max().item())
-                    assert gt_sampled_points.abs().max().item() < 15.0, f'gt_sampled_points is out of range: {gt_sampled_points.abs().max().item()}'
+                        gt_sampled_points = self.decode_valid_surfaces_with_padding(
+                            params_padded, shifts_padded, rotations_padded, scales_padded, masks, num_samples=8
+                        ) # (B, N_Surface, N, N, 3)
+                        B, num_max_pad = gt_sampled_points.shape[:2] 
+                        gt_sampled_points = gt_sampled_points.reshape(B, num_max_pad, -1) # (B, N_Surface, N * N * 3)
+                        gt_sampled_edges = self.decode_valid_surfaces_with_padding(
+                            params_padded, shifts_padded, rotations_padded, scales_padded, masks, num_samples=2
+                        )
+                        gt_sampled_edges = gt_sampled_edges.reshape(B, num_max_pad, -1) # (B, N_Surface, 2 * 2 * 3)
+
+
 
                     gt_sample = torch.cat([masks.unsqueeze(-1).float(), shifts_padded, rotations_padded, scales_padded, params_padded], dim=-1)
                     
@@ -286,22 +323,30 @@ class TrainerFlowSurface(BaseTrainer):
                     else:
                         raise ValueError(f'Unsupported prediction type: {self.scheduler.config.prediction_type}')
 
+                    # Then we get the predicted samples. 
                     if step >= self.original_sample_start_step:
-                        # Here we get the x0
+
                         pred_original_sample = pred_original_sample[masks.squeeze(-1).bool()]
                         valid, shifts, rotations, scales, params = decode_latent(pred_original_sample, log_scale=self.log_scale)
-                        # print(f'max(scales): {scales.abs().max().item()}')
+
                         # Then we get the sampled points
                         # Because we already exp-ed the scale by the decode_latent function, here we don't exp it again.
-                        pred_sampled_points = decode_and_sample_with_rts(self.vae, params, shifts, rotations, scales, log_scale=False)
 
+                        pred_sampled_points = decode_and_sample_with_rts(self.vae, params, shifts, rotations, scales, log_scale=False, num_samples=8) # (B, N, N, 3)
+                        pred_sampled_edges = decode_and_sample_with_rts(self.vae, params, shifts, rotations, scales, log_scale=False, num_samples=2) # (B, N, N, 3)
                         loss_original_sample = torch.nn.functional.mse_loss(pred_sampled_points.reshape(pred_sampled_points.shape[0], -1), gt_sampled_points[masks.squeeze(-1).bool()])
+
+                        # Then we compute the edge-only samples, add an additional loss to emphasize the edge.
+                        loss_edges = torch.nn.functional.mse_loss(pred_sampled_edges.reshape(pred_sampled_edges.shape[0], -1), gt_sampled_edges[masks.squeeze(-1).bool()])
+
+
                     else:
                         loss_original_sample = 0.0
+                        loss_edges = 0.0
 
 
                 
-                    loss = loss_valid * self.weight_valid + loss_shifts * self.weight_shifts + loss_rotations * self.weight_rotations + loss_scales * self.weight_scales + loss_params * self.weight_params + loss_original_sample * self.weight_original_sample * (step >= self.original_sample_start_step)
+                    loss = loss_valid * self.weight_valid + loss_shifts * self.weight_shifts + loss_rotations * self.weight_rotations + loss_scales * self.weight_scales + loss_params * self.weight_params + loss_original_sample * self.weight_original_sample * (step >= self.original_sample_start_step) + loss_edges * self.weight_sample_edges  * (step >= self.original_sample_start_step)
                     total_loss += loss.item()
                     loss_dict = {
                         'loss_valid': loss_valid.item(),
@@ -309,7 +354,8 @@ class TrainerFlowSurface(BaseTrainer):
                         'loss_rotations': loss_rotations.item(),
                         'loss_scales': loss_scales.item(),
                         'loss_params': loss_params.item(),
-                        'loss_orig_sample': loss_original_sample.item() if step >= self.original_sample_start_step else 0.0
+                        'loss_orig_sample': loss_original_sample.item() if step >= self.original_sample_start_step else 0.0,
+                        'loss_edges': loss_edges.item() if step >= self.original_sample_start_step else 0.0
                     }
                 
                 self.accelerator.backward(loss)
@@ -381,55 +427,19 @@ class TrainerFlowSurface(BaseTrainer):
                             forward_args = [_.to(device) for _ in forward_args]
                             params_padded, rotations_padded, scales_padded, shifts_padded, surface_type, bbox_mins, bbox_maxs, masks = forward_args
 
+                            # Prepare the sampled points
+                            with torch.no_grad():
+                                gt_sampled_points = self.decode_valid_surfaces_with_padding(
+                                    params_padded, shifts_padded, rotations_padded, scales_padded, masks, num_samples=8
+                                )                         
+                                B, num_max_pad = gt_sampled_points.shape[:2]
+                                gt_sampled_points = gt_sampled_points.reshape(B, num_max_pad, -1)
 
+                                gt_sampled_edges = self.decode_valid_surfaces_with_padding(
+                                    params_padded, shifts_padded, rotations_padded, scales_padded, masks, num_samples=2
+                                )
+                                gt_sampled_edges = gt_sampled_edges.reshape(B, num_max_pad, -1)
 
-                            # Ensure masks is 2D (B, num_max_pad)
-                            if masks.dim() == 3:
-                                masks_2d = masks.squeeze(-1)
-                            else:
-                                masks_2d = masks
-                            masks_bool = masks_2d.bool()
-                            
-                            # Get indices of valid surfaces: (num_valid, 2) where each row is [batch_idx, pad_idx]
-                            valid_indices = torch.nonzero(masks_bool, as_tuple=False)  # (num_valid, 2)
-                            
-                            if valid_indices.numel() > 0:
-                                # Extract valid surfaces only (no padded)
-                                valid_params = params_padded[masks_bool]  # (num_valid, ...)
-                                valid_shifts = shifts_padded[masks_bool]  # (num_valid, 3)
-                                valid_rotations = rotations_padded[masks_bool]  # (num_valid, 6)
-                                valid_scales = scales_padded[masks_bool]  # (num_valid, 1)
-                                
-                                # Decode and sample only valid surfaces
-                                valid_sampled_points = decode_and_sample_with_rts(
-                                    self.vae, valid_params, valid_shifts, valid_rotations, valid_scales, log_scale=self.log_scale
-                                )  # (num_valid, H, W, 3)
-                                valid_sampled_points = valid_sampled_points.reshape(valid_sampled_points.shape[0], -1, 3)  # (num_valid, H*W, 3)
-                                
-                                # Create padded output tensor: (B, num_max_pad, H*W, 3)
-                                B, num_max_pad = masks_bool.shape
-                                num_points = valid_sampled_points.shape[1]
-                                gt_sampled_points = torch.zeros(
-                                    B, num_max_pad, num_points, 3,
-                                    device=valid_sampled_points.device,
-                                    dtype=valid_sampled_points.dtype
-                                )
-                                
-                                # Place valid results back to their original positions
-                                batch_indices = valid_indices[:, 0]  # (num_valid,)
-                                pad_indices = valid_indices[:, 1]    # (num_valid,)
-                                gt_sampled_points[batch_indices, pad_indices] = valid_sampled_points
-                            else:
-                                # No valid surfaces, create empty padded tensor
-                                B, num_max_pad = masks_bool.shape
-                                gt_sampled_points = torch.zeros(
-                                    B, num_max_pad, 64, 3,  # Assuming 8x8=64 points
-                                    device=params_padded.device,
-                                    dtype=params_padded.dtype
-                                )
-                            
-                            gt_sampled_points = gt_sampled_points.reshape(B, num_max_pad, -1)
-                            # assert gt_sampled_points.abs().max().item() < 15.0, f'val_gt_sampled_points is out of range: {gt_sampled_points.abs().max().item()}'
 
                             masks = masks.unsqueeze(-1)
                             gt_sample = torch.cat([masks.float(), shifts_padded, rotations_padded, scales_padded, params_padded], dim=-1)
@@ -451,17 +461,20 @@ class TrainerFlowSurface(BaseTrainer):
                             if scales.abs().max().item() > 15.0:
                                 print('Warning:', f'val_scales is out of range: {scales.abs().max().item()}')
                             # Then we get the sampled points
-                            pred_sampled_points = decode_and_sample_with_rts(self.vae, params, shifts, rotations, scales, log_scale=False)
+                            pred_sampled_points = decode_and_sample_with_rts(self.vae, params, shifts, rotations, scales, log_scale=False, num_samples=8)
+                            pred_sampled_edges = decode_and_sample_with_rts(self.vae, params, shifts, rotations, scales, log_scale=False, num_samples=2)
 
                             loss_original_sample = torch.nn.functional.mse_loss(pred_sampled_points.reshape(pred_sampled_points.shape[0], -1), gt_sampled_points[masks.squeeze(-1).bool()])
+                            loss_edges = torch.nn.functional.mse_loss(pred_sampled_edges.reshape(pred_sampled_edges.shape[0], -1), gt_sampled_edges[masks.squeeze(-1).bool()])
 
-                            loss = loss_valid * self.weight_valid + loss_shifts + loss_rotations + loss_scales + loss_params * self.weight_params + loss_original_sample * self.weight_original_sample * (step >= self.original_sample_start_step)
+                            loss = loss_valid * self.weight_valid + loss_shifts + loss_rotations + loss_scales + loss_params * self.weight_params + loss_original_sample * self.weight_original_sample * (step >= self.original_sample_start_step) + loss_edges * self.weight_sample_edges
                             loss_dict['val_loss_valid'] += loss_valid.item() / num_val_batches
                             loss_dict['val_loss_shifts'] += loss_shifts.item() / num_val_batches
                             loss_dict['val_loss_rotations'] += loss_rotations.item() / num_val_batches
                             loss_dict['val_loss_scales'] += loss_scales.item() / num_val_batches
                             loss_dict['val_loss_params'] += loss_params.item() / num_val_batches
                             loss_dict['val_loss_orig_sample'] += loss_original_sample.item() / num_val_batches
+                            loss_dict['val_loss_edges'] += loss_edges.item() / num_val_batches
                             total_val_loss += (loss / num_val_batches)
 
 

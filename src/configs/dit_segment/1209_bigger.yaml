@@ -1,7 +1,7 @@
-resume_training: true
+resume_training: false
 from_start: false
 
-epochs: 20000
+epochs: 8000
 batch_size: 512
 lr: 0.0001
 num_workers: 4
@@ -17,12 +17,12 @@ log_every_step: 50
 
 use_wandb_tracking: true
 wandb_project_name: DIT_SIMPLE_SEGMENT
-wandb_run_name: 1206_dit_segment_init
+wandb_run_name: 1208_dit_segment_bigger
 
 data_train:
     name: src.dataset.dataset_latent_segment.LatentDataset
     params:
-        latent_dir: /mnt/ramdisk/logan_jsons_latent_pred_closed/abc
+        latent_dir: ../data/logan_jsons_latent_pred_closed/abc
         latent_dim: 128
         num_data: -1
         log_scale: true
@@ -32,7 +32,7 @@ data_train:
 data_val:
     name: src.dataset.dataset_latent_segment.LatentDataset
     params:
-        latent_dir: /mnt/ramdisk/logan_jsons_latent_pred_closed/abc_test
+        latent_dir: ../data/logan_jsons_latent_pred_closed/abc_test
         latent_dim: 128
         num_data: -1
         log_scale: true
@@ -50,8 +50,8 @@ model:
     # name: dit_v2
     name: src.dit.simple_surface_decoder_segment.SimpleSurfaceDecoder
     trainer_name: dit_v1
-    checkpoint_folder: checkpoints/1206_dit_segment_init
-    checkpoint_file_name: model-126.pt
+    checkpoint_folder: checkpoints/1208_dit_segment_bigger
+    checkpoint_file_name: model-12.pt
     load_ckpt: false
     params:
         input_dim: 139
@@ -59,7 +59,7 @@ model:
         mem_dim: 384
         output_dim: 139
         latent_dim: 384
-        num_layers: 12
+        num_layers: 24
         num_heads: 6
         max_num_surfaces: 32
         use_diag_memory_mask: True

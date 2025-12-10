@@ -375,7 +375,7 @@ if __name__ == "__main__":
     
     vae_config = OmegaConf.load(args.vae_config)
 
-    _vae, _ = load_model_from_config(vae_config)
+    _vae = load_model_from_config(vae_config)
     _vae = _vae.to('cuda')
     _vae = _vae
 

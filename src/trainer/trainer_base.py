@@ -670,7 +670,7 @@ class BaseTrainer(Module):
             model = self.accelerator.get_state_dict(self.model),
             optimizer = self.optimizer.state_dict(),
             ema = self.ema.state_dict(),
-            ema_model = self.ema.ema_model.state_dict(),  # Save inner model's state dict without wrapper
+            # ema_model = self.ema.ema_model.state_dict(),  # Save inner model's state dict without wrapper
             scaler = self.accelerator.scaler.state_dict() if exists(self.accelerator.scaler) else None,
         )
 

@@ -327,7 +327,7 @@ class ZLDMPipeline:
         return timesteps, num_inference_steps - t_start
 
     @torch.no_grad()
-    def __call__(self, noise, pc=None,  num_inference_steps=50, generator: torch.Generator = None, sample=None, show_progress=True, tgt_key_padding_mask=None, gt_sample=None,
+    def __call__(self, noise, pc=None,  num_inference_steps=50, generator: torch.Generator = None, sample=None, show_progress=True, memory_key_padding_mask=None, tgt_key_padding_mask=None, gt_sample=None,
                 ):
         # device = self.Z.device
         # device = self.denoiser.device
@@ -365,6 +365,7 @@ class ZLDMPipeline:
                 timestep=t_tensor.expand(sample.shape[0]),
                 cond=pc,
                 tgt_key_padding_mask=tgt_key_padding_mask,
+                memory_key_padding_mask=memory_key_padding_mask,
             )
 
             # Space for cfg

@@ -175,6 +175,7 @@ trainer = TrainerFlowSurface(
     weight_shifts=args.loss.weight_shifts,
     weight_original_sample=args.loss.weight_original_sample,
     original_sample_start_step=args.loss.original_sample_start_step,
+    weight_sample_edges=args.loss.weight_sample_edges,
     num_inference_timesteps=args.trainer.num_inference_timesteps,
     log_scale=config.data_train.params.log_scale
 )
