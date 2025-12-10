@@ -22,7 +22,7 @@ wandb_run_name: 1208_dit_segment_bigger
 data_train:
     name: src.dataset.dataset_latent_segment.LatentDataset
     params:
-        latent_dir: ../data/logan_jsons_latent_pred_closed/abc
+        latent_dir: /mnt/ramdisk/logan_jsons_latent_pred_closed/abc
         latent_dim: 128
         num_data: -1
         log_scale: true
@@ -32,7 +32,7 @@ data_train:
 data_val:
     name: src.dataset.dataset_latent_segment.LatentDataset
     params:
-        latent_dir: ../data/logan_jsons_latent_pred_closed/abc_test
+        latent_dir: /mnt/ramdisk/logan_jsons_latent_pred_closed/abc_test
         latent_dim: 128
         num_data: -1
         log_scale: true
