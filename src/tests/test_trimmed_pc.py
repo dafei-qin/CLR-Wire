@@ -23,12 +23,15 @@ _current_data = None
 _show_valid_pc = True
 _show_invalid_pc = True
 _show_surfaces = True
+_show_edges = True
 _ps_initialized = False
 _point_cloud_handlers = {}
 _surface_group = None
 _valid_pc_group = None
 _invalid_pc_group = None
+_edges_group = None
 _surfaces = {}
+_edge_handlers = {}
 
 
 def scan_npz_files(folder_path: str) -> List[str]:
@@ -57,6 +60,16 @@ def load_npz_data(npz_path: str) -> Dict:
     normals_list = data['normals']  # List of arrays, each (H*W, 3)
     masks_list = data['masks']  # List of arrays, each (H*W,) boolean
     
+    # Load graph data if available
+    graph_nodes = None
+    graph_edges = None
+    if 'graph_nodes' in data:
+        graph_nodes = data['graph_nodes']
+        print(f"Loaded graph with {len(graph_nodes)} nodes")
+    if 'graph_edges' in data:
+        graph_edges = data['graph_edges']
+        print(f"Loaded {len(graph_edges)} edges")
+    
     # Load corresponding json
     json_path = npz_path.replace('.npz', '.json')
     surface_jsons = None
@@ -71,6 +84,8 @@ def load_npz_data(npz_path: str) -> Dict:
         'points': points_list,
         'normals': normals_list,
         'masks': masks_list,
+        'graph_nodes': graph_nodes,
+        'graph_edges': graph_edges,
         'surface_jsons': surface_jsons,
         'npz_path': npz_path,
         'json_path': json_path if os.path.exists(json_path) else None
@@ -88,9 +103,9 @@ def reset_scene():
 def update_visualization():
     """Update visualization with current npz file"""
     global _current_idx, _current_data, _npz_files
-    global _show_valid_pc, _show_invalid_pc, _show_surfaces
-    global _point_cloud_handlers, _surfaces
-    global _surface_group, _valid_pc_group, _invalid_pc_group
+    global _show_valid_pc, _show_invalid_pc, _show_surfaces, _show_edges
+    global _point_cloud_handlers, _surfaces, _edge_handlers
+    global _surface_group, _valid_pc_group, _invalid_pc_group, _edges_group
     
     if not _ps_initialized or not _npz_files:
         return
@@ -191,10 +206,68 @@ def update_visualization():
     else:
         print("No surface JSON data available")
     
+    # Visualize adjacency edges
+    _edge_handlers = {}
+    graph_edges = _current_data['graph_edges']
+    graph_nodes = _current_data['graph_nodes']
+    
+    if graph_edges is not None and len(graph_edges) > 0:
+        print(f"Visualizing {len(graph_edges)} adjacency edges...")
+        
+        # Compute centroids of valid points for each surface
+        surface_centroids = {}
+        for i in range(len(points_list)):
+            points = points_list[i]
+            masks = masks_list[i]
+            valid_mask = masks.astype(bool)
+            valid_points = points[valid_mask]
+            
+            if len(valid_points) > 0:
+                centroid = np.mean(valid_points, axis=0)
+                surface_centroids[i] = centroid
+            else:
+                # Fallback to all points if no valid points
+                if len(points) > 0:
+                    surface_centroids[i] = np.mean(points, axis=0)
+        
+        # Build edge visualization
+        edge_count = 0
+        for edge_idx, edge in enumerate(graph_edges):
+            face_i, face_j = int(edge[0]), int(edge[1])
+            
+            # Check if both surfaces have centroids
+            if face_i in surface_centroids and face_j in surface_centroids:
+                centroid_i = surface_centroids[face_i]
+                centroid_j = surface_centroids[face_j]
+                
+                # Create edge as curve network with 2 nodes and 1 edge
+                edge_nodes = np.array([centroid_i, centroid_j])  # (2, 3)
+                edge_connections = np.array([[0, 1]])  # (1, 2)
+                
+                edge_name = f"edge_{edge_idx:04d}_f{face_i}_f{face_j}"
+                try:
+                    edge_handler = ps.register_curve_network(
+                        edge_name, 
+                        edge_nodes, 
+                        edge_connections,
+                        radius=0.0015
+                    )
+                    edge_handler.set_color([0.3, 0.3, 0.8])  # Blue for edges
+                    edge_handler.add_to_group(_edges_group)
+                    _edge_handlers[edge_name] = edge_handler
+                    edge_count += 1
+                except Exception as e:
+                    print(f"Warning: Could not visualize edge {edge_idx}: {e}")
+        
+        print(f"Successfully visualized {edge_count} edges")
+    else:
+        print("No graph edge data available")
+    
     # Set group visibility
     _valid_pc_group.set_enabled(_show_valid_pc)
     _invalid_pc_group.set_enabled(_show_invalid_pc)
     _surface_group.set_enabled(_show_surfaces)
+    _edges_group.set_enabled(_show_edges)
     
     print(f"{'='*60}\n")
 
@@ -202,8 +275,8 @@ def update_visualization():
 def callback():
     """Polyscope callback function for UI controls"""
     global _current_idx, _max_idx
-    global _show_valid_pc, _show_invalid_pc, _show_surfaces
-    global _valid_pc_group, _invalid_pc_group, _surface_group
+    global _show_valid_pc, _show_invalid_pc, _show_surfaces, _show_edges
+    global _valid_pc_group, _invalid_pc_group, _surface_group, _edges_group
     global _current_data
     
     psim.Text("Trimmed Point Cloud Visualizer")
@@ -268,6 +341,11 @@ def callback():
         changed_surfaces, _show_surfaces = psim.Checkbox("Show Surfaces", _show_surfaces)
         if changed_surfaces:
             _surface_group.set_enabled(_show_surfaces)
+        
+        if _edges_group is not None:
+            changed_edges, _show_edges = psim.Checkbox("Show Adjacency Edges (Blue)", _show_edges)
+            if changed_edges:
+                _edges_group.set_enabled(_show_edges)
     
     # Statistics
     if _current_data is not None:
@@ -276,12 +354,15 @@ def callback():
         
         points_list = _current_data['points']
         masks_list = _current_data['masks']
+        graph_edges = _current_data.get('graph_edges', None)
         
         total_valid = sum(np.sum(mask) for mask in masks_list)
         total_invalid = sum(np.sum(~mask.astype(bool)) for mask in masks_list)
         total_points = total_valid + total_invalid
         
         psim.Text(f"Surfaces: {len(points_list)}")
+        if graph_edges is not None:
+            psim.Text(f"Adjacency edges: {len(graph_edges)}")
         psim.Text(f"Total points: {total_points}")
         psim.Text(f"Valid: {total_valid} ({100*total_valid/total_points:.1f}%)")
         psim.Text(f"Invalid: {total_invalid} ({100*total_invalid/total_points:.1f}%)")
@@ -328,10 +409,11 @@ def main():
     _ps_initialized = True
     
     # Create groups (only once at initialization)
-    global _surface_group, _valid_pc_group, _invalid_pc_group
+    global _surface_group, _valid_pc_group, _invalid_pc_group, _edges_group
     _surface_group = ps.create_group("Surfaces")
     _valid_pc_group = ps.create_group("Valid Point Clouds")
     _invalid_pc_group = ps.create_group("Invalid Point Clouds")
+    _edges_group = ps.create_group("Adjacency Edges")
     
     # Set user callback
     ps.set_user_callback(callback)

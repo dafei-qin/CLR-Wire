@@ -17,6 +17,7 @@ import json
 from icecream import ic
 from logan_process_brep_data import BRepDataProcessor
 
+import networkx as nx
 # Enable icecream for debugging
 ic.enable()
 
@@ -135,6 +136,16 @@ def save_ply(filename, points, normals):
     print(f"Saved {len(points)} points to {filename}")
 
 
+def strip_features_and_make_undirected(G: nx.DiGraph) -> nx.Graph:
+    """
+    删除所有节点和边的 attributes，只保留纯拓扑结构，
+    并将 DiGraph 转为 Graph
+    """
+    H = nx.Graph()
+    H.add_nodes_from(G.nodes())
+    H.add_edges_from(G.edges())
+    return H
+
 def step_to_pointcloud(step_filename, ply_filename, nu=50, nv=50, debug=True):
     """
     Convert STEP file to point cloud with normals (single-threaded debug version)
@@ -202,8 +213,9 @@ def step_to_pointcloud(step_filename, ply_filename, nu=50, nv=50, debug=True):
             all_normals.append(normals.astype(np.float32))
             all_masks.append(masks.astype(bool))
 
+        graph_undirected = strip_features_and_make_undirected(graph)
         save_name = ply_filename.replace('.npz', f'_{index:03d}.npz')
-        np.savez(save_name, points=all_points, normals=all_normals, masks=all_masks)
+        np.savez(save_name, points=all_points, normals=all_normals, masks=all_masks, graph_nodes=list(graph_undirected.nodes()), graph_edges=list(graph_undirected.edges()))
         json.dump(jsons_data, open(save_name.replace('.npz', '.json'), 'w'), ensure_ascii=False, indent=2)
         print(f"\n✓ Successfully saved {len(all_points)} points to {save_name}")
 
