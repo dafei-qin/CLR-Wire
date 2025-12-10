@@ -22,7 +22,7 @@ from src.flow.surface_flow import ZLDMPipeline, get_new_scheduler
 from src.vae.layers import BSplineSurfaceLayer
 from src.trainer.trainer_base import BaseTrainer
 from src.utils.helpers import divisible_by, get_current_time, get_lr
-from src.utils.surface_latent_tools import decode_and_sample_with_rts, decode_latent
+from src.utils.surface_latent_tools import decode_and_sample_with_rts, decode_latent, decode_only
 
 # B-spline enhanced trainer class
 class TrainerFlowSurface(BaseTrainer):
@@ -207,6 +207,7 @@ class TrainerFlowSurface(BaseTrainer):
                                 self.vae, valid_params, valid_shifts, valid_rotations, valid_scales, log_scale=self.log_scale
                             )  # (num_valid, H, W, 3)
                             valid_sampled_points = valid_sampled_points.reshape(valid_sampled_points.shape[0], -1, 3)  # (num_valid, H*W, 3)
+
                             
                             # Create padded output tensor: (B, num_max_pad, H*W, 3)
                             B, num_max_pad = masks_bool.shape

@@ -22,7 +22,7 @@ from src.flow.surface_flow import ZLDMPipeline, get_new_scheduler
 from src.vae.layers import BSplineSurfaceLayer
 from src.trainer.trainer_base import BaseTrainer
 from src.utils.helpers import divisible_by, get_current_time, get_lr
-from src.utils.surface_latent_tools import decode_and_sample_with_rts, decode_latent
+from src.utils.surface_latent_tools import decode_and_sample_with_rts, decode_latent, decode_only
 
 
 def has_nan_or_inf(t):
@@ -74,7 +74,9 @@ class TrainerFlowSurface(BaseTrainer):
         weight_shifts = 1.0,
         weight_original_sample = 1.0,
         original_sample_start_step = 0,
-        weight_sample_edges = 1.0,
+        weight_sample_edges = 0.0,
+        use_weighted_sample_loss=False,
+        weight_surf_params = 0.0,
         log_scale=True,
         **kwargs
     ):
@@ -125,8 +127,10 @@ class TrainerFlowSurface(BaseTrainer):
         self.weight_scales = weight_scales
         self.weight_shifts = weight_shifts 
         self.weight_original_sample = weight_original_sample
+        self.use_weighted_sample_loss=use_weighted_sample_loss
         self.original_sample_start_step = original_sample_start_step
         self.weight_sample_edges = weight_sample_edges
+        self.weight_surf_params = weight_surf_params
 
     
         self.log_scale = log_scale
@@ -220,7 +224,7 @@ class TrainerFlowSurface(BaseTrainer):
         self.log(**log_dict)
         
         # Print detailed loss information
-        loss_str = f'loss: {total_loss:.3f}, loss_valid: {loss_dict["loss_valid"]:.3f}, loss_shifts: {loss_dict["loss_shifts"]:.3f}, loss_rotations: {loss_dict["loss_rotations"]:.3f}, loss_scales: {loss_dict["loss_scales"]:.3f}, loss_params: {loss_dict["loss_params"]:.3f}, loss_orig_sample: {loss_dict["loss_orig_sample"]:.3f}, loss_edges: {loss_dict["loss_edges"]:.3f}'
+        loss_str = f'loss: {total_loss:.3f}, loss_valid: {loss_dict["loss_valid"]:.3f}, loss_shifts: {loss_dict["loss_shifts"]:.3f}, loss_rotations: {loss_dict["loss_rotations"]:.3f}, loss_scales: {loss_dict["loss_scales"]:.3f}, loss_params: {loss_dict["loss_params"]:.3f}, loss_orig_sample: {loss_dict["loss_orig_sample"]:.3f}, loss_edges: {loss_dict["loss_edges"]:.3f}, loss_surf_params: {loss_dict["loss_surf_params"]:.3f}'
 
 
         self.print(get_current_time() + f' {loss_str} lr: {lr:.6f} norm: {total_norm:.3f}')
@@ -265,15 +269,27 @@ class TrainerFlowSurface(BaseTrainer):
 
                     # Prepare the sampled points
                     with torch.no_grad():
+
+                        gt_valid_surface_params = decode_only(self.vae, params_padded[masks.bool()])
+
+
+
                         gt_sampled_points = self.decode_valid_surfaces_with_padding(
                             params_padded, shifts_padded, rotations_padded, scales_padded, masks, num_samples=8
                         ) # (B, N_Surface, N, N, 3)
+                        # Here we compute the estimated area of each surface:
+                        surface_max = torch.max(gt_sampled_points, dim=(2))[0] # (B, N_Surface, 3)
+                        surface_min = torch.min(gt_sampled_points, dim=(2))[0]
+                        surface_weight = torch.max((surface_max - surface_min), dim=-1)[0] # (B, N_Surface)
+                        surface_weight = torch.clamp(1 / (surface_weight + 1e-3), min=1.0)[masks.bool()]
                         B, num_max_pad = gt_sampled_points.shape[:2] 
                         gt_sampled_points = gt_sampled_points.reshape(B, num_max_pad, -1) # (B, N_Surface, N * N * 3)
                         gt_sampled_edges = self.decode_valid_surfaces_with_padding(
                             params_padded, shifts_padded, rotations_padded, scales_padded, masks, num_samples=2
                         )
                         gt_sampled_edges = gt_sampled_edges.reshape(B, num_max_pad, -1) # (B, N_Surface, 2 * 2 * 3)
+
+
 
 
 
@@ -334,11 +350,19 @@ class TrainerFlowSurface(BaseTrainer):
 
                         pred_sampled_points = decode_and_sample_with_rts(self.vae, params, shifts, rotations, scales, log_scale=False, num_samples=8) # (B, N, N, 3)
                         pred_sampled_edges = decode_and_sample_with_rts(self.vae, params, shifts, rotations, scales, log_scale=False, num_samples=2) # (B, N, N, 3)
-                        loss_original_sample = torch.nn.functional.mse_loss(pred_sampled_points.reshape(pred_sampled_points.shape[0], -1), gt_sampled_points[masks.squeeze(-1).bool()])
+                        # if self.use_weighted_sample_loss:
+                            # loss_original_sample = 
+                        loss_original_sample = torch.nn.functional.mse_loss(pred_sampled_points.reshape(pred_sampled_points.shape[0], -1), gt_sampled_points[masks.squeeze(-1).bool()], reduction='none')
+                        if self.use_weighted_sample_loss:
+                            loss_original_sample = loss_original_sample * surface_weight.unsqueeze(-1)
+                        loss_original_sample = loss_original_sample.mean()
+
 
                         # Then we compute the edge-only samples, add an additional loss to emphasize the edge.
                         loss_edges = torch.nn.functional.mse_loss(pred_sampled_edges.reshape(pred_sampled_edges.shape[0], -1), gt_sampled_edges[masks.squeeze(-1).bool()])
 
+                        pred_valid_surface_params = decode_only(self.vae, params)
+                        loss_surf_params = torch.nn.functional.mse_loss(pred_valid_surface_params, gt_valid_surface_params)
 
                     else:
                         loss_original_sample = 0.0
@@ -346,7 +370,7 @@ class TrainerFlowSurface(BaseTrainer):
 
 
                 
-                    loss = loss_valid * self.weight_valid + loss_shifts * self.weight_shifts + loss_rotations * self.weight_rotations + loss_scales * self.weight_scales + loss_params * self.weight_params + loss_original_sample * self.weight_original_sample * (step >= self.original_sample_start_step) + loss_edges * self.weight_sample_edges  * (step >= self.original_sample_start_step)
+                    loss = loss_valid * self.weight_valid + loss_shifts * self.weight_shifts + loss_rotations * self.weight_rotations + loss_scales * self.weight_scales + loss_params * self.weight_params + loss_original_sample * self.weight_original_sample * (step >= self.original_sample_start_step) + loss_edges * self.weight_sample_edges  * (step >= self.original_sample_start_step) + loss_surf_params * self.weight_surf_params * (step >= self.original_sample_start_step)
                     total_loss += loss.item()
                     loss_dict = {
                         'loss_valid': loss_valid.item(),
@@ -355,7 +379,8 @@ class TrainerFlowSurface(BaseTrainer):
                         'loss_scales': loss_scales.item(),
                         'loss_params': loss_params.item(),
                         'loss_orig_sample': loss_original_sample.item() if step >= self.original_sample_start_step else 0.0,
-                        'loss_edges': loss_edges.item() if step >= self.original_sample_start_step else 0.0
+                        'loss_edges': loss_edges.item() if step >= self.original_sample_start_step else 0.0,
+                        'loss_surf_params': loss_surf_params.item() if step >= self.original_sample_start_step else 0.0
                     }
                 
                 self.accelerator.backward(loss)
@@ -440,6 +465,13 @@ class TrainerFlowSurface(BaseTrainer):
                                 )
                                 gt_sampled_edges = gt_sampled_edges.reshape(B, num_max_pad, -1)
 
+                                surface_max = torch.max(gt_sampled_points, dim=(2))[0] # (B, N_Surface, 3)
+                                surface_min = torch.min(gt_sampled_points, dim=(2))[0]
+                                surface_weight = torch.max((surface_max - surface_min), dim=-1)[0] # (B, N_Surface)
+                                surface_weight = torch.clamp(1 / (surface_weight + 1e-3), min=1.0)[masks.bool()]
+
+                                gt_valid_surface_params = decode_only(self.vae, params_padded[masks.bool()])
+
 
                             masks = masks.unsqueeze(-1)
                             gt_sample = torch.cat([masks.float(), shifts_padded, rotations_padded, scales_padded, params_padded], dim=-1)
@@ -457,17 +489,25 @@ class TrainerFlowSurface(BaseTrainer):
                             
                             pred_original_sample = sample[masks.squeeze(-1).bool()]
                             valid, shifts, rotations, scales, params = decode_latent(pred_original_sample, log_scale=self.log_scale)
-                            
+
+                            # Here we decode the params to real surface parameters. 
+                            pred_valid_surface_params = decode_only(self.vae, params)
+                            loss_surf_params = torch.nn.functional.mse_loss(pred_valid_surface_params, gt_valid_surface_params)
+
                             if scales.abs().max().item() > 15.0:
                                 print('Warning:', f'val_scales is out of range: {scales.abs().max().item()}')
                             # Then we get the sampled points
                             pred_sampled_points = decode_and_sample_with_rts(self.vae, params, shifts, rotations, scales, log_scale=False, num_samples=8)
                             pred_sampled_edges = decode_and_sample_with_rts(self.vae, params, shifts, rotations, scales, log_scale=False, num_samples=2)
 
-                            loss_original_sample = torch.nn.functional.mse_loss(pred_sampled_points.reshape(pred_sampled_points.shape[0], -1), gt_sampled_points[masks.squeeze(-1).bool()])
+                            loss_original_sample = torch.nn.functional.mse_loss(pred_sampled_points.reshape(pred_sampled_points.shape[0], -1), gt_sampled_points[masks.squeeze(-1).bool()], reduction='none')
+                            if self.use_weighted_sample_loss:
+                                loss_original_sample = loss_original_sample * surface_weight.unsqueeze(-1)
+                            loss_original_sample = loss_original_sample.mean()
+
                             loss_edges = torch.nn.functional.mse_loss(pred_sampled_edges.reshape(pred_sampled_edges.shape[0], -1), gt_sampled_edges[masks.squeeze(-1).bool()])
 
-                            loss = loss_valid * self.weight_valid + loss_shifts + loss_rotations + loss_scales + loss_params * self.weight_params + loss_original_sample * self.weight_original_sample * (step >= self.original_sample_start_step) + loss_edges * self.weight_sample_edges
+                            loss = loss_valid * self.weight_valid + loss_shifts + loss_rotations + loss_scales + loss_params * self.weight_params + loss_original_sample * self.weight_original_sample * (step >= self.original_sample_start_step) + loss_edges * self.weight_sample_edges + loss_surf_params * self.weight_surf_params * (step >= self.original_sample_start_step)
                             loss_dict['val_loss_valid'] += loss_valid.item() / num_val_batches
                             loss_dict['val_loss_shifts'] += loss_shifts.item() / num_val_batches
                             loss_dict['val_loss_rotations'] += loss_rotations.item() / num_val_batches
@@ -475,11 +515,12 @@ class TrainerFlowSurface(BaseTrainer):
                             loss_dict['val_loss_params'] += loss_params.item() / num_val_batches
                             loss_dict['val_loss_orig_sample'] += loss_original_sample.item() / num_val_batches
                             loss_dict['val_loss_edges'] += loss_edges.item() / num_val_batches
+                            loss_dict['val_loss_surf_params'] += loss_surf_params.item() / num_val_batches
                             total_val_loss += (loss / num_val_batches)
 
 
                 # Print validation losses
-                self.print(get_current_time() + f" total loss: {total_val_loss:.3f}, loss_valid: {loss_dict['val_loss_valid']:.3f}, loss_shifts: {loss_dict['val_loss_shifts']:.3f}, loss_rotations: {loss_dict['val_loss_rotations']:.3f}, loss_scales: {loss_dict['val_loss_scales']:.3f}, loss_params: {loss_dict['val_loss_params']:.3f}, loss_orig_sample: {loss_dict['val_loss_orig_sample']:.3f}")
+                self.print(get_current_time() + f" total loss: {total_val_loss:.3f}, loss_valid: {loss_dict['val_loss_valid']:.3f}, loss_shifts: {loss_dict['val_loss_shifts']:.3f}, loss_rotations: {loss_dict['val_loss_rotations']:.3f}, loss_scales: {loss_dict['val_loss_scales']:.3f}, loss_params: {loss_dict['val_loss_params']:.3f}, loss_orig_sample: {loss_dict['val_loss_orig_sample']:.3f}, loss_edges: {loss_dict['val_loss_edges']:.3f}, loss_surf_params: {loss_dict['val_loss_surf_params']:.3f}")
 
                 
                 # Calculate and print estimated finishing time

@@ -50,6 +50,56 @@ def decode_and_sample(model, latent_params, num_samples=8):
 
     return ordered_samples
 
+def decode_only(model, latent_params):
+    """
+    Decode latent parameters, sample surfaces per surface type, and return samples in
+    the same order as `latent_params`. Per-type processing keeps gradients intact.
+    """
+    assert not torch.isnan(latent_params).any(), "latent_params contains inf/nan" + str(latent_params)
+    class_logits, surface_type_pred, is_closed_logits, is_closed = model.classify(latent_params)
+
+    params_raw_recon, mask = model.decode(latent_params, surface_type_pred)
+    assert not torch.isnan(params_raw_recon).any(), "params_raw_recon contains inf/nan" + str(params_raw_recon)
+    ordered_params = None
+    # Class of params: Location, Direction, uv, scalar
+    ordered_locations = torch.zeros((params_raw_recon.shape[0], 3), device=params_raw_recon.device, dtype=params_raw_recon.dtype)
+    ordered_directions = torch.zeros((params_raw_recon.shape[0], 3, 3), device=params_raw_recon.device, dtype=params_raw_recon.dtype)
+    ordered_uvs = torch.zeros((params_raw_recon.shape[0], 4), device=params_raw_recon.device, dtype=params_raw_recon.dtype)
+    ordered_scalars = torch.zeros((params_raw_recon.shape[0], 2), device=params_raw_recon.device, dtype=params_raw_recon.dtype)
+
+    for surface_type in surface_type_pred.unique():
+        type_mask = surface_type_pred == surface_type
+        params_raw_recon_per_type = params_raw_recon[type_mask]
+        
+        surface_params = recover_surface_from_params(params_raw_recon_per_type, surface_type)
+        # samples = params_to_samples(params_raw_recon_per_type, surface_type, num_samples, num_samples)
+
+        # type_mask = type_mask.unsqueeze(-1)
+        # #ordered_locations.masked_scatter(type_mask, surface_params['location'])
+        ordered_locations[type_mask] = surface_params['location']
+
+        # ordered_directions.masked_scatter(type_mask.unsqueeze(-1), surface_params['direction'])
+        ordered_directions[type_mask] = surface_params['direction']
+        # ordered_uvs.masked_scatter(type_mask, surface_params['uv'])
+        ordered_uvs[type_mask] = surface_params['uv']
+        if surface_type == 0: # No scalar
+            pass
+        elif surface_type == 2 or surface_type == 4:
+            # ordered_scalars.masked_scatter(type_mask, surface_params['scalar'])
+            ordered_scalars[type_mask] = surface_params['scalar']
+        elif surface_type == 1 or surface_type == 3:
+            surface_params['scalar'] = torch.cat([surface_params['scalar'], torch.zeros((surface_params['scalar'].shape[0], 1), device=surface_params['scalar'].device, dtype=surface_params['scalar'].dtype)], dim=-1)
+            # ordered_scalars.masked_scatter(type_mask, surface_params['scalar'])
+            ordered_scalars[type_mask] = surface_params['scalar']
+
+
+        
+    ordered_directions = ordered_directions[..., :2].reshape(ordered_directions.shape[0], -1)
+    ordered_params = torch.cat([ordered_locations, ordered_directions, ordered_uvs, ordered_scalars], dim=-1)
+
+
+    return ordered_params
+
 def safe_normalize(v, dim=-1, eps=1e-6):
     norm = torch.norm(v, dim=dim, keepdim=True)
     norm = torch.maximum(norm, torch.ones_like(norm) * eps)

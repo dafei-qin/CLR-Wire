@@ -1,7 +1,7 @@
 resume_training: false
 from_start: false
 
-epochs: 8000
+epochs: 12000
 batch_size: 512
 lr: 0.0001
 num_workers: 4
@@ -11,8 +11,8 @@ grad_accum_every: 1
 ema_update_every: 10
 max_grad_norm: 1.0
 
-val_every_epoch: 10
-save_every_epoch: 50
+val_every_epoch: 100
+save_every_epoch: 250
 log_every_step: 50
 
 use_wandb_tracking: true
@@ -75,3 +75,6 @@ loss:
     weight_shifts: 1.0
     weight_original_sample: 1.0
     original_sample_start_step: 00000
+    weight_sample_edges: 0.0
+    weight_surf_params: 1.0
+    use_weighted_sample_loss: true
