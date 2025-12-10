@@ -1,12 +1,23 @@
 import argparse
 import random
-
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent))
 from OCC.Core.Geom import Geom_BezierSurface, Geom_BSplineSurface, Geom_BezierCurve, Geom_BSplineCurve
 from OCC.Core.GeomAPI import GeomAPI_PointsToBSplineSurface, GeomAPI_PointsToBSpline
 from OCC.Core.GeomAbs import GeomAbs_C2
 from OCC.Core.TColgp import TColgp_Array1OfPnt, TColgp_Array2OfPnt
 from OCC.Core.gp import gp_Lin, gp_Circ, gp_Elips, gp_Pln, gp_Cylinder, gp_Cone, gp_Sphere, gp_Torus, gp_Hypr, gp_Parab, \
     gp_Pnt, gp_Trsf
+from OCC.Core.STEPControl import STEPControl_Reader
+from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
+from OCC.Core.TopoDS import TopoDS_Iterator
+from OCC.Extend.DataExchange import write_obj_file
+from OCC.Core.TopExp import TopExp_Explorer
+from OCC.Core.TopAbs import TopAbs_FACE
+from OCC.Core.BRep import BRep_Tool
+from OCC.Core.TopLoc import TopLoc_Location
+
 from occwl.solid import Solid
 from occwl.uvgrid import uvgrid, ugrid
 from occwl.graph import face_adjacency
@@ -23,6 +34,9 @@ import os, json
 from icecream import ic
 from multiprocessing.pool import Pool
 import time
+import trimesh
+
+from utils.surface import extract_mesh_from_face 
 ic.disable()
 # from utils import load_step_with_timeout, load_abc_step, load_furniture_step
 
@@ -352,7 +366,7 @@ class BRepDataProcessor:
             control_points[i - 1, :] = [point.X(), point.Y(), point.Z()]
         return control_points.tolist()
 
-    def tokenize_cad_data(self, step_path):
+    def tokenize_cad_data(self, step_path, output_dir="", export_obj=False, export_per_face_obj=False):
         for _, _, files in os.walk(step_path):
             assert len(files) == 1
             step_path = os.path.join(step_path, files[0])
@@ -386,9 +400,25 @@ class BRepDataProcessor:
                 except:
                     raise ValueError("Face adjacency failed. The solid may be invalid.")
                 data = []
+                if export_obj:
+                    # Export the whole obj
+                    solid_topods = solid.topods_shape()
+                    mesh = BRepMesh_IncrementalMesh(solid_topods, 0.005, False, 0.1)
+                    mesh.Perform()
+                    obj_name = os.path.basename(step_path).replace(".step", f"_{__idx:03d}.obj")
+                    obj_name = os.path.join(output_dir, obj_name)
+                    write_obj_file(solid_topods, obj_name)
+
 
                 for face_idx in graph.nodes():
                     face = graph.nodes[face_idx]["face"]
+                    face_topods = face.topods_shape()
+                    if export_per_face_obj:
+                        # Export the face obj
+                        vertices, triangles = extract_mesh_from_face(face_topods)
+                        mesh = trimesh.Trimesh(vertices, triangles)
+                        mesh.export(obj_name.replace('.obj', f'_surface_{face_idx:03d}.obj'))
+
                     surf_type = face.surface_type()
                     surface = face.specific_surface()
                     node_feature = None
@@ -420,7 +450,7 @@ class BRepDataProcessor:
                     
                     node_feature['uv'] = [face.uv_bounds().min_point()[0], face.uv_bounds().max_point()[0], face.uv_bounds().min_point()[1], face.uv_bounds().max_point()[1]]
                     json_string = face.topods_shape().DumpJsonToString()
-                    string_data = json.loads('{' + json_string.replace(' ', '').replace(',,', ',') + '}', object_pairs_hook=array_on_duplicate_keys)
+                    string_data = json.loads(json_string.replace(',,', ','), object_pairs_hook=array_on_duplicate_keys)
                     surface_data = string_data['TShape']['Surface']
                     if 'basisSurf' in surface_data:
                         surface_data = surface_data['basisSurf']
@@ -442,20 +472,16 @@ class BRepDataProcessor:
             datas.append(data)
         return datas, attributes
 
-    def tokenize_and_save_cad_data(self, path):
+    def tokenize_and_save_cad_data(self, path, export_obj=False, export_per_face_obj=False):
         step_path, output_path = path
-        if os.path.exists(output_path):
-            return 0
         try:
             # with zlw.Timer("Process"):
-            datas, attributes = self.tokenize_cad_data(step_path)
-            solid_attributes = []
-            for key in attributes.keys():
-                if type(key) == occwl.solid.Solid:
-                    solid_attributes.append(attributes[key])
+            datas, attributes = self.tokenize_cad_data(step_path, output_dir=output_path, export_obj=export_obj, export_per_face_obj=export_per_face_obj)
+
+
             for i, data in enumerate(datas):
-                # with open(output_path.replace('.json', f'_{i:03d}_{solid_attributes[i]["name"]}.json'), 'w', encoding='utf-8') as f: # Readable export
-                with open(output_path.replace('.json', f'_{i:03d}.json'), 'w', encoding='utf-8') as f: # Readable export
+                output_name = os.path.join(output_path, os.path.basename(step_path).replace('.step', f'_{i:03d}.json'))
+                with open(output_name, 'w', encoding='utf-8') as f: # Readable export
                     json.dump(data, f, ensure_ascii=False, indent=2)
 
             # with open(output_path, 'w') as f: # Compressed export
@@ -468,37 +494,26 @@ class BRepDataProcessor:
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", type=str, help="Data folder path", required=True)
-    parser.add_argument("--option", type=str, choices=['abc', 'deepcad', 'furniture'], default='abc',
-                        help="Choose between dataset option [abc/deepcad/furniture] (default: abc)")
-    parser.add_argument("--interval", type=int, help="Data range index, only required for abc/deepcad")
+    parser.add_argument("--output", type=str, help="data output folder path")
+
     args = parser.parse_args()
 
-    if args.option == 'deepcad':
-        OUTPUT = f'data/deepcad_parsed/{args.interval:04d}'
-    elif args.option == 'abc':
-        OUTPUT = f'data/abc_parsed/{args.interval:04d}'
-    else:
-        OUTPUT = f'data/furniture_parsed/{args.interval:04d}'
-
-    os.makedirs(OUTPUT, exist_ok=True)
-
-    if args.option == 'furniture':
-        step_dirs = load_furniture_step(args.input)
-    else:
-        step_dirs = load_abc_step(args.input, args.option=='deepcad')
-        step_dirs = step_dirs[args.interval*10000 : (args.interval+1)*10000]
-        step_dirs = [(dirs, f'{OUTPUT}/{os.path.basename(dirs)}.json') for dirs in step_dirs]
-
-    # shuffule the step_dirs
-    random.shuffle(step_dirs)
-
+    os.makedirs(args.output, exist_ok=True)
+    
+    files = Path(args.input).rglob('*.step')
+    
     extractor = BRepDataProcessor()
 
-    with Pool(os.cpu_count()) as pool:
-        results = pool.map(extractor.tokenize_and_save_cad_data, step_dirs)
-    # convert_iter = Pool(os.cpu_count()).imap(extractor.tokenize_and_save_cad_data, step_dirs)
-    # valid = 0
-    # for status in tqdm(convert_iter, total=len(step_dirs)):
-    #     valid += status
-    valid = sum(results)
-    print(f'Done... Data Converted Ratio {100.0*valid/len(step_dirs)}%')
+    for f in files:
+        out_name = os.path.dirname(f.relative_to(args.input))
+        out_path = os.path.join(args.output, out_name)
+        extractor.tokenize_and_save_cad_data([f, out_path], export_obj=True, export_per_face_obj=True)
+
+    # with Pool(os.cpu_count()) as pool:
+    #     results = pool.map(extractor.tokenize_and_save_cad_data, step_dirs)
+    # # convert_iter = Pool(os.cpu_count()).imap(extractor.tokenize_and_save_cad_data, step_dirs)
+    # # valid = 0
+    # # for status in tqdm(convert_iter, total=len(step_dirs)):
+    # #     valid += status
+    # valid = sum(results)
+    # print(f'Done... Data Converted Ratio {100.0*valid/len(step_dirs)}%')
