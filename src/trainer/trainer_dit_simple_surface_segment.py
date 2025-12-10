@@ -458,6 +458,12 @@ class TrainerFlowSurface(BaseTrainer):
                                     params_padded, shifts_padded, rotations_padded, scales_padded, masks, num_samples=8
                                 )                         
                                 B, num_max_pad = gt_sampled_points.shape[:2]
+
+                                surface_max = torch.max(gt_sampled_points, dim=(2))[0] # (B, N_Surface, 3)
+                                surface_min = torch.min(gt_sampled_points, dim=(2))[0]
+                                surface_weight = torch.max((surface_max - surface_min), dim=-1)[0] # (B, N_Surface)
+                                surface_weight = torch.clamp(1 / (surface_weight + 1e-3), min=1.0)[masks.bool()]
+                                
                                 gt_sampled_points = gt_sampled_points.reshape(B, num_max_pad, -1)
 
                                 gt_sampled_edges = self.decode_valid_surfaces_with_padding(
@@ -465,10 +471,7 @@ class TrainerFlowSurface(BaseTrainer):
                                 )
                                 gt_sampled_edges = gt_sampled_edges.reshape(B, num_max_pad, -1)
 
-                                surface_max = torch.max(gt_sampled_points, dim=(2))[0] # (B, N_Surface, 3)
-                                surface_min = torch.min(gt_sampled_points, dim=(2))[0]
-                                surface_weight = torch.max((surface_max - surface_min), dim=-1)[0] # (B, N_Surface)
-                                surface_weight = torch.clamp(1 / (surface_weight + 1e-3), min=1.0)[masks.bool()]
+                               
 
                                 gt_valid_surface_params = decode_only(self.vae, params_padded[masks.bool()])
 

@@ -17,6 +17,7 @@ from icecream import ic
 ic.enable()
 
 
+
 def sample_face_uv(face, nu=50, nv=50, debug=True):
     """
     Sample points on a face in UV space and check validity
@@ -90,6 +91,10 @@ def sample_face_uv(face, nu=50, nv=50, debug=True):
                         points.append(point)
                         normals.append(normal_vec)
                         valid_count += 1
+
+                        du = props.D1U()
+                        dv = props.D1V()
+                        jacobian = du.Crossed(dv).Magnitude()
                     else:
                         invalid_count += 1
                         if debug and invalid_count <= 5:
