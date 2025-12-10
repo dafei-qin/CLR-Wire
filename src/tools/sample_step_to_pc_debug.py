@@ -1,8 +1,17 @@
 import os
+# Set environment variable to suppress warnings
+os.environ['PYTHONWARNINGS'] = 'ignore::DeprecationWarning'
+
 import argparse
 import numpy as np
 import sys
+import warnings
 from pathlib import Path
+
+# Suppress warnings BEFORE importing occwl
+warnings.filterwarnings('ignore', category=DeprecationWarning)
+warnings.simplefilter('ignore', DeprecationWarning)
+
 sys.path.insert(0, str(Path(os.path.dirname(__file__)).parent.parent))
 
 from occwl.solid import Solid
@@ -16,109 +25,118 @@ from OCC.Core.BRepClass import BRepClass_FaceClassifier
 import json
 from icecream import ic
 from logan_process_brep_data import BRepDataProcessor
-
+import random
 import networkx as nx
 # Enable icecream for debugging
 ic.enable()
 
 
 
-def sample_face_uv(face, nu=50, nv=50, debug=True):
+def sample_face_uv(face, num_samples=2000, debug=True):
     """
-    Sample points on a face in UV space and check validity
+    Sample points on a face in UV space using random sampling and check validity
     
     Args:
         face: TopoDS_Face object
-        nu: number of samples in u direction
-        nv: number of samples in v direction
+        num_samples: number of random samples to generate
         debug: whether to print debug information
     
     Returns:
         points: numpy array of shape (N, 3) with valid 3D points
         normals: numpy array of shape (N, 3) with corresponding normals
+        masks: numpy array of shape (N,) with validity flags
     """
     points = []
     normals = []
     masks = []
     
     if debug:
-        ic("Starting sample_face_uv")
+        ic("Starting sample_face_uv with random sampling")
     
     # Get the surface from the face
     u_min, u_max, v_min, v_max = [face.uv_bounds().min_point()[0], face.uv_bounds().max_point()[0], face.uv_bounds().min_point()[1], face.uv_bounds().max_point()[1]]
     surface = BRep_Tool.Surface(face.topods_shape())
 
-    # Create UV grid
-    u_values = np.linspace(u_min, u_max, nu)
-    v_values = np.linspace(v_min, v_max, nv)
+    # Generate random UV samples
+    u_values = np.random.uniform(u_min, u_max, num_samples)
+    v_values = np.random.uniform(v_min, v_max, num_samples)
     
     valid_count = 0
     invalid_count = 0
+    w_max = 1e-17
     
     # Sample points
-    for i, u in enumerate(u_values):
-        for j, v in enumerate(v_values):
-            # Create 2D point in UV space
-            uv_pnt = gp_Pnt2d(u, v)
-            
-            # Check if point is valid using BRepClass_FaceClassifier
-            classifier = BRepClass_FaceClassifier(face.topods_shape(), uv_pnt, 1e-6)
-            state = classifier.State()
-            
-            props = GeomLProp_SLProps(surface, u, v, 1, 1e-6)
+    for i in range(num_samples):
+        u = u_values[i]
+        v = v_values[i]
+        
+        # Create 2D point in UV space
+        uv_pnt = gp_Pnt2d(u, v)
+        
+        # Check if point is valid using BRepClass_FaceClassifier
+        classifier = BRepClass_FaceClassifier(face.topods_shape(), uv_pnt, 1e-6)
+        state = classifier.State()
+        
+        props = GeomLProp_SLProps(surface, u, v, 1, 1e-6)
 
-            pnt = props.Value()
-            point = np.array([pnt.X(), pnt.Y(), pnt.Z()])
+        pnt = props.Value()
+        point = np.array([pnt.X(), pnt.Y(), pnt.Z()])
+        
+        # Get normal vector
+        if props.IsNormalDefined():
+            normal = props.Normal()
+            normal_vec = np.array([normal.X(), normal.Y(), normal.Z()])
+            norm = np.linalg.norm(normal_vec)
+            normal_vec = normal_vec / (norm + 1e-6)
+        else:
+            normal_vec = np.array([0, 0, 0])
+        
+        # Only keep points that are IN or ON the face
+        if state == TopAbs_IN or state == TopAbs_ON:
+            # Evaluate surface at (u, v)
+            props = GeomLProp_SLProps(surface, u, v, 1, 1e-6)
             
-            # Get normal vector
             if props.IsNormalDefined():
+                # Get 3D point
+                pnt = props.Value()
+                point = np.array([pnt.X(), pnt.Y(), pnt.Z()])
+                
+                # Get normal vector
                 normal = props.Normal()
                 normal_vec = np.array([normal.X(), normal.Y(), normal.Z()])
-                norm = np.linalg.norm(normal_vec)
-                normal_vec = normal_vec / (norm + 1e-6)
-            else:
-                normal_vec = np.array([0, 0, 0])
-            # Only keep points that are IN or ON the face
-            if state == TopAbs_IN or state == TopAbs_ON:
-                # Evaluate surface at (u, v)
-                props = GeomLProp_SLProps(surface, u, v, 1, 1e-6)
                 
-                if props.IsNormalDefined():
-                    # Get 3D point
-                    pnt = props.Value()
-                    point = np.array([pnt.X(), pnt.Y(), pnt.Z()])
+                # Normalize the normal vector
+                norm = np.linalg.norm(normal_vec)
+                if norm > 1e-10:
+                    normal_vec = normal_vec / norm
                     
-                    # Get normal vector
-                    normal = props.Normal()
-                    normal_vec = np.array([normal.X(), normal.Y(), normal.Z()])
-                    
-                    # Normalize the normal vector
-                    norm = np.linalg.norm(normal_vec)
-                    if norm > 1e-10:
-                        normal_vec = normal_vec / norm
-                        
-                        points.append(point)
-                        normals.append(normal_vec)
-                        valid_count += 1
+                    du = props.D1U()
+                    dv = props.D1V()
+                    jacobian = du.Crossed(dv).Magnitude()
+                    w_max = max(w_max, jacobian)
+                    valid = random.random() < jacobian / w_max
 
-                        du = props.D1U()
-                        dv = props.D1V()
-                        jacobian = du.Crossed(dv).Magnitude()
+                    if valid:
+                        valid_count += 1
                     else:
                         invalid_count += 1
-                        if debug and invalid_count <= 5:
-                            ic(f"Invalid normal at u={u:.4f}, v={v:.4f}, norm={norm}")
                 else:
                     invalid_count += 1
+                    valid = False
                     if debug and invalid_count <= 5:
-                        ic(f"Normal not defined at u={u:.4f}, v={v:.4f}")
+                        ic(f"Invalid normal at u={u:.4f}, v={v:.4f}, norm={norm}")
             else:
                 invalid_count += 1
                 valid = False
+                if debug and invalid_count <= 5:
+                    ic(f"Normal not defined at u={u:.4f}, v={v:.4f}")
+        else:
+            invalid_count += 1
+            valid = False
 
-            points.append(point)
-            normals.append(normal_vec)
-            masks.append(valid)
+        points.append(point)
+        normals.append(normal_vec)
+        masks.append(valid)
     
     if debug:
         ic(f"Valid points: {valid_count}, Invalid points: {invalid_count}")
@@ -175,17 +193,20 @@ def strip_features_and_make_undirected(G: nx.DiGraph) -> nx.Graph:
     H.add_edges_from(G.edges())
     return H
 
-def step_to_pointcloud(step_filename, ply_filename, nu=50, nv=50, debug=True):
+def step_to_pointcloud(step_filename, ply_filename, num_samples=2000, debug=True):
     """
     Convert STEP file to point cloud with normals (single-threaded debug version)
     
     Args:
         step_filename: input STEP file
         ply_filename: output PLY file (base name)
-        nu: number of UV samples in u direction
-        nv: number of UV samples in v direction
+        num_samples: number of random samples per face
         debug: whether to print debug information
     """
+    # Suppress warnings in this function too
+    import warnings
+    warnings.filterwarnings('ignore', category=DeprecationWarning)
+    
     print(f"\n{'='*60}")
     print(f"Processing: {step_filename}")
     print(f"{'='*60}\n")
@@ -235,8 +256,15 @@ def step_to_pointcloud(step_filename, ply_filename, nu=50, nv=50, debug=True):
             # print(f"\n  Face {face_idx}/{len(faces_list)-1}")
 
             face = graph.nodes[face_idx]["face"]
-
-            points, normals, masks = sample_face_uv(face, nu=nu, nv=nv, debug=debug)
+            tried_runs = 0
+            num_samples_current = num_samples
+            while tried_runs < 10:
+                points, normals, masks = sample_face_uv(face, num_samples=num_samples_current, debug=debug)
+                if masks.sum() < num_samples:
+                    num_samples_current = num_samples_current * 2
+                    tried_runs += 1
+                else:
+                    break
             
             all_points.append(points.astype(np.float32))
             all_normals.append(normals.astype(np.float32))
@@ -258,10 +286,8 @@ def main():
                         help='Input STEP file to process')
     parser.add_argument('--output', type=str, default=None, 
                         help='Output PLY file (default: same name as input)')
-    parser.add_argument('--nu', type=int, default=50,
-                        help='Number of UV samples in u direction')
-    parser.add_argument('--nv', type=int, default=50,
-                        help='Number of UV samples in v direction')
+    parser.add_argument('--num_samples', type=int, default=1000,
+                        help='Number of random samples per face')
     parser.add_argument('--no-debug', action='store_true',
                         help='Disable debug output')
     
@@ -285,13 +311,13 @@ def main():
     print(f"{'='*60}")
     print(f"Input:  {args.step_file}")
     print(f"Output: {output_file}")
-    print(f"UV sampling: {args.nu} x {args.nv}")
+    print(f"Random samples per face: {args.num_samples}")
     print(f"Debug output: {'disabled' if args.no_debug else 'enabled'}")
     print(f"{'='*60}\n")
     
 
     step_to_pointcloud(args.step_file, output_file, 
-                        nu=args.nu, nv=args.nv, 
+                        num_samples=args.num_samples, 
                         debug=not args.no_debug)
 
 
