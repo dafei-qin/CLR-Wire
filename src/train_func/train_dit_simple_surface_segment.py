@@ -139,6 +139,7 @@ num_train_steps = epochs * num_step_per_epoch
 
 initial_lr = cli_args.resume_lr if args.resume_training and cli_args.resume_lr is not None else args.lr
 
+print('Warning, here we "fixed" the memory mask to be reversed.')
 trainer = TrainerFlowSurface(
     model,
     vae,
