@@ -12,7 +12,7 @@ from einops import rearrange
 from diffusers import ModelMixin, ConfigMixin
 from diffusers.models.controlnet import ControlNetConditioningEmbedding
 from diffusers.configuration_utils import register_to_config
-from diffusers import DDPMScheduler, FlowMatchEulerDiscreteScheduler
+from diffusers import DDPMScheduler, DDIMScheduler, FlowMatchEulerDiscreteScheduler
 from src.flow.embedding import PointEmbd2D
 
 def zero_module(module):    
@@ -309,7 +309,7 @@ class ZLDM(ModelMixin, ConfigMixin):
 
 
 class ZLDMPipeline:
-    def __init__(self, denoiser: ZLDM, scheduler: Union[DDPMScheduler], dtype):
+    def __init__(self, denoiser: ZLDM, scheduler: Union[DDPMScheduler, DDIMScheduler], dtype):
         super().__init__()
 
         self.denoiser = denoiser
@@ -372,12 +372,19 @@ class ZLDMPipeline:
             model_output = model_output_uncond
 
             # 2. compute previous image: x_t -> x_t-1
+            step_kwargs = {}
+            
+            # DDIM specific: add eta parameter if available
+            if isinstance(self.scheduler, DDIMScheduler):
+                step_kwargs['eta'] = getattr(self.scheduler, 'eta', 0.0)
+                step_kwargs['use_clipped_model_output'] = False
             
             prev_sample = self.scheduler.step(
                 model_output[:, None, :, :].permute(0, 3, 1, 2),
                 t,
                 sample[:, None, :, :].permute(0, 3, 1, 2),
                 generator=generator,
+                **step_kwargs,
             ).prev_sample.permute(0, 2, 3, 1)[:, 0, :, :]
 
             # print('t: ', t.item(), 'update_diff: ', (sample - prev_sample).abs().mean())
@@ -419,9 +426,33 @@ def enforce_zero_terminal_snr(betas):
     return betas
 
 
-def get_new_scheduler(type='v_prediction', num_train_timesteps=1000):
-    if type == 'v_prediction':
-        print("Using v_prediction scheduler")
+def get_new_scheduler(type='v_prediction', num_train_timesteps=1000, use_ddim=False, ddim_eta=0.0):
+    """
+    Create a scheduler for training and inference.
+    
+    Args:
+        type: prediction type ('v_prediction' or 'sample')
+        num_train_timesteps: number of training timesteps
+        use_ddim: whether to use DDIM scheduler (default: False for backward compatibility)
+        ddim_eta: DDIM eta parameter (0.0=deterministic, 1.0=stochastic like DDPM)
+    """
+    if use_ddim:
+        print(f"Using DDIM scheduler with eta={ddim_eta}")
+        # DDIM scheduler configuration
+        scheduler = DDIMScheduler(
+            num_train_timesteps=num_train_timesteps,
+            beta_schedule="squaredcos_cap_v2",  # 与DDPM保持一致
+            clip_sample=False,
+            prediction_type=type,
+            timestep_spacing="linspace",
+            # DDIM specific parameters
+            set_alpha_to_one=False,  # 保持与训练一致
+            steps_offset=0,
+        )
+        # Store eta for later use in pipeline
+        scheduler.eta = ddim_eta
+    elif type == 'v_prediction':
+        print("Using v_prediction scheduler (DDPM)")
         scheduler = DDPMScheduler(
             num_train_timesteps=num_train_timesteps,
             # beta_start=0.00085,
@@ -442,7 +473,7 @@ def get_new_scheduler(type='v_prediction', num_train_timesteps=1000):
             timestep_spacing="linspace",
         )
     elif type == 'sample':
-        print("Using sample scheduler")
+        print("Using sample scheduler (DDPM)")
         scheduler = DDPMScheduler(
             num_train_timesteps=num_train_timesteps, 
             prediction_type="sample"
