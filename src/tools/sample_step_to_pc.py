@@ -296,9 +296,9 @@ def step_to_pointcloud(step_filename, ply_filename, num_samples=1000, debug=Fals
         # Save to NPZ file with graph data
         save_name = ply_filename.replace('.npz', f'_{index:03d}.npz')
         np.savez(save_name, 
-                 points=all_points, 
-                 normals=all_normals, 
-                 masks=all_masks, 
+                 points=np.array(all_points, dtype=object), 
+                 normals=np.array(all_normals, dtype=object), 
+                 masks=np.array(all_masks, dtype=object), 
                  graph_nodes=list(graph_undirected.nodes()), 
                  graph_edges=list(graph_undirected.edges()))
         

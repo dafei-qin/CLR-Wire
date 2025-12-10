@@ -272,7 +272,10 @@ def step_to_pointcloud(step_filename, ply_filename, num_samples=2000, debug=True
 
         graph_undirected = strip_features_and_make_undirected(graph)
         save_name = ply_filename.replace('.npz', f'_{index:03d}.npz')
-        np.savez(save_name, points=all_points, normals=all_normals, masks=all_masks, graph_nodes=list(graph_undirected.nodes()), graph_edges=list(graph_undirected.edges()))
+
+        for p, n, m in zip(all_points, all_normals, all_masks):
+            print(p.shape, n.shape, m.shape)
+        np.savez(save_name, points=np.array(all_points, dtype=object), normals=np.array(all_normals, dtype=object), masks=np.array(all_masks, dtype=object), graph_nodes=list(graph_undirected.nodes()), graph_edges=list(graph_undirected.edges()))
         json.dump(jsons_data, open(save_name.replace('.npz', '.json'), 'w'), ensure_ascii=False, indent=2)
         print(f"\n✓ Successfully saved {len(all_points)} points to {save_name}")
 
