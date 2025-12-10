@@ -33,6 +33,7 @@ def sample_face_uv(face, nu=50, nv=50, debug=True):
     """
     points = []
     normals = []
+    masks = []
     
     if debug:
         ic("Starting sample_face_uv")
@@ -68,38 +69,33 @@ def sample_face_uv(face, nu=50, nv=50, debug=True):
             classifier = BRepClass_FaceClassifier(face.topods_shape(), uv_pnt, 1e-6)
             state = classifier.State()
             
+            props = GeomLProp_SLProps(surface, u, v, 1, 1e-6)
+
+            pnt = props.Value()
+            point = np.array([pnt.X(), pnt.Y(), pnt.Z()])
+            
+            # Get normal vector
+            if props.IsNormalDefined():
+                normal = props.Normal()
+                normal_vec = np.array([normal.X(), normal.Y(), normal.Z()])
+                norm = np.linalg.norm(normal_vec)
+                normal_vec = normal_vec / (norm + 1e-6)
+            else:
+                normal_vec = np.array([0, 0, 0])
             # Only keep points that are IN or ON the face
             if state == TopAbs_IN or state == TopAbs_ON:
                 # Evaluate surface at (u, v)
-                props = GeomLProp_SLProps(surface, u, v, 1, 1e-6)
                 
-                if props.IsNormalDefined():
-                    # Get 3D point
-                    pnt = props.Value()
-                    point = np.array([pnt.X(), pnt.Y(), pnt.Z()])
-                    
-                    # Get normal vector
-                    normal = props.Normal()
-                    normal_vec = np.array([normal.X(), normal.Y(), normal.Z()])
-                    
-                    # Normalize the normal vector
-                    norm = np.linalg.norm(normal_vec)
-                    if norm > 1e-10:
-                        normal_vec = normal_vec / norm
-                        
-                        points.append(point)
-                        normals.append(normal_vec)
-                        valid_count += 1
-                    else:
-                        invalid_count += 1
-                        if debug and invalid_count <= 5:
-                            ic(f"Invalid normal at u={u:.4f}, v={v:.4f}, norm={norm}")
-                else:
-                    invalid_count += 1
-                    if debug and invalid_count <= 5:
-                        ic(f"Normal not defined at u={u:.4f}, v={v:.4f}")
+                valid_count += 1
+                valid = True
+
             else:
                 invalid_count += 1
+                valid = False
+
+            points.append(point)
+            normals.append(normal_vec)
+            masks.append(valid)
     
     if debug:
         ic(f"Valid points: {valid_count}, Invalid points: {invalid_count}")
@@ -107,9 +103,9 @@ def sample_face_uv(face, nu=50, nv=50, debug=True):
     if len(points) == 0:
         if debug:
             ic("WARNING: No valid points sampled!")
-        return np.array([]), np.array([])
+        return np.array([]), np.array([]), np.array([])
     
-    return np.array(points), np.array(normals)
+    return np.array(points), np.array(normals), np.array(masks)
 
 
 def save_ply(filename, points, normals):
@@ -195,31 +191,25 @@ def step_to_pointcloud(step_filename, ply_filename, nu=50, nv=50, debug=True):
         # Collect points and normals from all faces
         all_points = []
         all_normals = []
-        
+        all_masks = []
         faces_list = list(solid.faces())
         for face_idx, face in enumerate(faces_list):
             print(f"\n  Face {face_idx}/{len(faces_list)-1}")
 
-            points, normals = sample_face_uv(face, nu=nu, nv=nv, debug=debug)
-            if len(points) > 0:
-                all_points.append(points)
-                all_normals.append(normals)
-                print(f"  -> Sampled {len(points)} points")
-            else:
-                print(f"  -> No valid points sampled")
+            points, normals, masks = sample_face_uv(face, nu=nu, nv=nv, debug=debug)
+            
+            all_points.append(points.astype(np.float32))
+            all_normals.append(normals.astype(np.float32))
+            all_masks.append(masks.astype(bool))
 
-        if len(all_points) == 0:
-            print(f"\nWarning: No valid points sampled for solid {index}")
-            continue
+       
         
         # Concatenate all points and normals
-        all_points = np.vstack(all_points)
-        all_normals = np.vstack(all_normals)
+        # all_points = np.vstack(all_points)
+        # all_normals = np.vstack(all_normals)
         
-        # Save to PLY file
-        ply_filename_with_index = f"{ply_filename[:-4]}_{index}.ply"
-        save_ply(ply_filename_with_index, all_points, all_normals)
-        print(f"\n✓ Successfully saved {len(all_points)} points to {ply_filename_with_index}")
+        np.savez(ply_filename.replace('ply', 'npz'), points=all_points, normals=all_normals, masks=all_masks)
+        print(f"\n✓ Successfully saved {len(all_points)} points to {ply_filename.replace('.ply', f'_{index:03d}.npz')}")
 
 
 def main():
