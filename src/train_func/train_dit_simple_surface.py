@@ -166,6 +166,7 @@ trainer = TrainerFlowSurface(
     weight_rotations=args.loss.weight_rotations,
     weight_scales=args.loss.weight_scales,
     weight_shifts=args.loss.weight_shifts,
+    use_weighted_sample_loss=args.loss.use_weighted_sample_loss,
     num_inference_timesteps=args.trainer.num_inference_timesteps,
 )
 

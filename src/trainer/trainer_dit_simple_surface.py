@@ -69,6 +69,7 @@ class TrainerFlowSurface(BaseTrainer):
         weight_shifts = 1.0,
         weight_original_sample = 1.0,
         original_sample_start_step = 0,
+        use_weighted_sample_loss=False,
         log_scale=True,
         **kwargs
     ):
@@ -119,6 +120,7 @@ class TrainerFlowSurface(BaseTrainer):
         self.weight_scales = weight_scales
         self.weight_shifts = weight_shifts  
         self.weight_original_sample = weight_original_sample
+        self.use_weighted_sample_loss = use_weighted_sample_loss
         self.original_sample_start_step = original_sample_start_step
 
         self.log_scale = log_scale
@@ -231,6 +233,13 @@ class TrainerFlowSurface(BaseTrainer):
                                 dtype=params_padded.dtype
                             )
                     
+                    # Compute surface weight for weighted loss
+                    # gt_sampled_points is currently (B, num_max_pad, num_points, 3)
+                    surface_max = torch.max(gt_sampled_points, dim=(2))[0]  # (B, N_Surface, 3)
+                    surface_min = torch.min(gt_sampled_points, dim=(2))[0]
+                    surface_weight = torch.max((surface_max - surface_min), dim=-1)[0]  # (B, N_Surface)
+                    surface_weight = torch.clamp(1 / (surface_weight + 1e-3), min=1.0)[masks.squeeze(-1).bool()]
+                    
                     gt_sampled_points = gt_sampled_points.reshape(B, num_max_pad, -1)
                     # print(gt_sampled_points.shape, gt_sampled_points.abs().max().item())
                     assert gt_sampled_points.abs().max().item() < 15.0, f'gt_sampled_points is out of range: {gt_sampled_points.abs().max().item()}'
@@ -282,7 +291,10 @@ class TrainerFlowSurface(BaseTrainer):
                         # Because we already exp-ed the scale by the decode_latent function, here we don't exp it again.
                         pred_sampled_points = decode_and_sample_with_rts(self.vae, params, shifts, rotations, scales, log_scale=False)
 
-                        loss_original_sample = torch.nn.functional.mse_loss(pred_sampled_points.reshape(pred_sampled_points.shape[0], -1), gt_sampled_points[masks.squeeze(-1).bool()])
+                        loss_original_sample = torch.nn.functional.mse_loss(pred_sampled_points.reshape(pred_sampled_points.shape[0], -1), gt_sampled_points[masks.squeeze(-1).bool()], reduction='none')
+                        if self.use_weighted_sample_loss:
+                            loss_original_sample = loss_original_sample * surface_weight.unsqueeze(-1)
+                        loss_original_sample = loss_original_sample.mean()
                     else:
                         loss_original_sample = 0.0
 
@@ -393,6 +405,12 @@ class TrainerFlowSurface(BaseTrainer):
                                 dtype=params_padded.dtype
                             )
                         
+                        # Compute surface weight for weighted loss
+                        surface_max = torch.max(gt_sampled_points, dim=(2))[0]  # (B, N_Surface, 3)
+                        surface_min = torch.min(gt_sampled_points, dim=(2))[0]
+                        surface_weight = torch.max((surface_max - surface_min), dim=-1)[0]  # (B, N_Surface)
+                        surface_weight = torch.clamp(1 / (surface_weight + 1e-3), min=1.0)[masks.squeeze(-1).bool()]
+                        
                         gt_sampled_points = gt_sampled_points.reshape(B, num_max_pad, -1)
 
 
@@ -415,7 +433,10 @@ class TrainerFlowSurface(BaseTrainer):
                         # Then we get the sampled points
                         pred_sampled_points = decode_and_sample_with_rts(self.vae, params, shifts, rotations, scales, log_scale=False)
 
-                        loss_original_sample = torch.nn.functional.mse_loss(pred_sampled_points.reshape(pred_sampled_points.shape[0], -1), gt_sampled_points[masks.squeeze(-1).bool()])
+                        loss_original_sample = torch.nn.functional.mse_loss(pred_sampled_points.reshape(pred_sampled_points.shape[0], -1), gt_sampled_points[masks.squeeze(-1).bool()], reduction='none')
+                        if self.use_weighted_sample_loss:
+                            loss_original_sample = loss_original_sample * surface_weight.unsqueeze(-1)
+                        loss_original_sample = loss_original_sample.mean()
 
                         
                         
