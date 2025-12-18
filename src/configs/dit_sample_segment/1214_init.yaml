@@ -1,0 +1,80 @@
+resume_training: false
+from_start: false
+
+epochs: 12000
+batch_size: 128
+lr: 0.0001
+num_workers: 4
+num_gpus: 8
+
+grad_accum_every: 1
+ema_update_every: 10
+max_grad_norm: 1.0
+
+val_every_epoch: 100
+save_every_epoch: 250
+log_every_step: 50
+
+use_wandb_tracking: true
+wandb_project_name: DIT_SAMPLE_SEGMENT
+wandb_run_name: 1214_init
+
+
+log_scale: true
+data_train:
+    name: src.dataset.dataset_pc.PointCloudSurfaceDataset
+    params:
+        dataset_dir: ../data/abc_trimmed_pc_filtered/0
+        max_num_surfaces: 32
+        max_points_per_surface: 1024
+        canonical: true
+        replica: 1
+
+data_val:
+    name: src.dataset.dataset_pc.PointCloudSurfaceDataset
+    params:
+        dataset_dir: ../data/abc_trimmed_pc_filtered_test/
+        max_num_surfaces: 32
+        max_points_per_surface: 1024
+        canonical: true
+        replica: 1
+
+
+trainer:
+    use_logvar: false
+    prediction_type: v_prediction
+    num_inference_timesteps: 50
+
+
+model:
+    # name: dit_v2
+    name: src.dit.simple_surface_decoder_segment.SimpleSurfaceDecoder
+    trainer_name: dit_v1
+    checkpoint_folder: checkpoints/dit_sample_segment/1214_init
+    checkpoint_file_name: model-12.pt
+    load_ckpt: false
+    params:
+        input_dim: 139
+        cond_dim: 6144 # 1024 * 6
+        mem_dim: 1024
+        output_dim: 139
+        latent_dim: 1024
+        num_layers: 24
+        num_heads: 16
+        max_num_surfaces: 32
+        use_diag_memory_mask: True
+
+vae:
+    config_file: src/configs/train_vae_v1_canonical_logvar_l2norm_pred_closed.yaml
+
+loss:
+    weight_valid: 0
+    weight_params: 1.0
+    weight_rotations: 1.0
+    weight_scales: 1.0
+    weight_shifts: 1.0
+    weight_original_sample: 1.0
+    original_sample_start_step: 00000
+    weight_sample_edges: 0.0
+    weight_surf_params: 1.0
+    use_weighted_sample_loss: true
