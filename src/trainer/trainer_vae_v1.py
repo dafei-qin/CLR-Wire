@@ -55,6 +55,7 @@ class Trainer_vae_v1(BaseTrainer):
         is_closed_weight = 1.0,
         u_closed_pos_weight: float = 1.0,
         v_closed_pos_weight: float = 1.0,
+        use_fsq: bool = False,  # Whether to use FSQ instead of VAE
         **kwargs
     ):
         super().__init__(
@@ -115,6 +116,16 @@ class Trainer_vae_v1(BaseTrainer):
         self.abnormal_values_buffer = []
         self.raw_model = self.model.module if hasattr(self.model, 'module') else self.model
         self.use_logvar = use_logvar
+        self.use_fsq = use_fsq  # FSQ mode flag
+        
+        # Validate FSQ configuration
+        if self.use_fsq:
+            if self.loss_l2norm_weight > 0:
+                print(f"⚠️  Warning: L2 norm loss (weight={self.loss_l2norm_weight}) is enabled with FSQ. "
+                      f"This may not be meaningful for quantized latents. Consider setting loss_l2norm_weight=0.")
+            if self.loss_kl_weight > 0:
+                print(f"ℹ️  Info: KL loss weight is {self.loss_kl_weight} but will be ignored in FSQ mode.")
+            print(f"✓ FSQ mode enabled. Codebook size: {self.raw_model.codebook_size}")
 
     def compute_accuracy(self, logits, labels):
         predictions = torch.argmax(logits, dim=-1)
@@ -137,7 +148,7 @@ class Trainer_vae_v1(BaseTrainer):
             return 1.0
         return min(1.0, step / self.kl_annealing_steps)
 
-    def log_loss(self, total_loss, accuracy, accuracy_is_closed, loss_recon, loss_cls, loss_kl, loss_l2norm, loss_is_closed, lr, total_norm, step, time_per_step, kl_beta=1.0, active_dims=None):
+    def log_loss(self, total_loss, accuracy, accuracy_is_closed, loss_recon, loss_cls, loss_kl, loss_l2norm, loss_is_closed, lr, total_norm, step, time_per_step, kl_beta=1.0, active_dims=None, codebook_usage=None, unique_codes=None):
         if not self.use_wandb_tracking or not self.is_main:
             return
         
@@ -157,12 +168,27 @@ class Trainer_vae_v1(BaseTrainer):
             'time_per_step': time_per_step,
         }
         
+        # Add VAE-specific metrics
         if active_dims is not None:
             log_dict['active_latent_dims'] = active_dims
         
+        # Add FSQ-specific metrics
+        if codebook_usage is not None:
+            log_dict['fsq/codebook_usage'] = codebook_usage
+        if unique_codes is not None:
+            log_dict['fsq/unique_codes'] = unique_codes
+        
         self.log(**log_dict)
         
-        self.print(get_current_time() + f' loss: {total_loss:.3f} acc: {accuracy:.3f} acc_is_closed: {accuracy_is_closed:.3f} lr: {lr:.6f} norm: {total_norm:.3f} kl_beta: {kl_beta:.3f} time_per_step: {time_per_step:.3f}')
+        # Print statement
+        print_msg = (f'{get_current_time()} loss: {total_loss:.3f} acc: {accuracy:.3f} recon: {loss_recon:.3f} '
+                    f'acc_closed: {accuracy_is_closed:.3f} lr: {lr:.6f} norm: {total_norm:.3f} '
+                    f'kl_beta: {kl_beta:.3f} time: {time_per_step:.3f}')
+        
+        if self.use_fsq and codebook_usage is not None:
+            print_msg += f' CB_usage: {codebook_usage:.3f} codes: {unique_codes}'
+        
+        self.print(print_msg)
 
     def train(self):
         step = self.step.item()
@@ -202,15 +228,20 @@ class Trainer_vae_v1(BaseTrainer):
                     
                     # print('data prepare time: ', f'{time.time() - tt:.2f}s')
                     tt = time.time()
-                    mu, logvar = self.raw_model.encode(params_padded, surface_type)
-                    if self.use_logvar:
-                        z = self.raw_model.reparameterize(mu, logvar)
+                    if self.use_fsq:
+                        z_quantized, indices = self.raw_model.encode(params_padded, surface_type)
+                        z = z_quantized
                     else:
-                        z = mu
+                        mu, logvar = self.raw_model.encode(params_padded, surface_type)
+                        if self.use_logvar:
+                            z = self.raw_model.reparameterize(mu, logvar)
+                        else:
+                            z = mu
                     if self.pred_is_closed:
                         class_logits, surface_type_pred, is_closed_logits, is_closed = self.raw_model.classify(z)
                     else:
                         class_logits, surface_type_pred = self.raw_model.classify(z)
+
 
                     params_raw_recon, mask = self.raw_model.decode(z, surface_type)
                     
@@ -221,20 +252,24 @@ class Trainer_vae_v1(BaseTrainer):
                         # is_closed_logits shape: [batch, 2], is_closed_gt shape: [batch, 2]
                         # pos_weight is applied element-wise per position (u=0, v=1)
                         loss_is_closed = self.loss_is_closed(is_closed_logits, is_closed_gt.float())
-                        
-
                     else:
-                        loss_is_closed = 0.0
-                    # Compute KL loss with free bits strategy
-                    # Per-dimension KL: [batch, latent_dim]
-                    kl_per_dim = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp())
-                    
-                    # Apply free bits: only penalize KL above the threshold
-                    if self.kl_free_bits > 0:
-                        kl_per_dim = torch.clamp(kl_per_dim - self.kl_free_bits, min=0.0)
-                    
-                    # Mean across batch and dimensions
-                    loss_kl = torch.mean(kl_per_dim)
+                        loss_is_closed = torch.tensor(0.0, device=z.device)
+
+                    if not self.use_fsq:
+                        # Compute KL loss with free bits strategy
+                        # Per-dimension KL: [batch, latent_dim]
+
+                        kl_per_dim = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp())
+                        
+                        # Apply free bits: only penalize KL above the threshold
+                        if self.kl_free_bits > 0:
+                            kl_per_dim = torch.clamp(kl_per_dim - self.kl_free_bits, min=0.0)
+                        
+                        # Mean across batch and dimensions
+                        loss_kl = torch.mean(kl_per_dim)
+                    else:
+                        loss_kl = torch.tensor(0.0, device=z.device)
+                        kl_per_dim = None  # FSQ doesn't have KL loss
                     
 
                     # Compute KL annealing beta
@@ -247,7 +282,7 @@ class Trainer_vae_v1(BaseTrainer):
                     if self.pred_is_closed:
                         accuracy_is_closed = self.compute_accuracy_is_closed(is_closed_logits, is_closed_gt)
                     else:
-                        accuracy_is_closed = 0.0
+                        accuracy_is_closed = torch.tensor(0.0, device=z.device)
 
                     loss = loss / self.grad_accum_every
                     total_loss += loss.item()
@@ -265,14 +300,26 @@ class Trainer_vae_v1(BaseTrainer):
                 cur_lr = get_lr(self.optimizer.optimizer)
                 total_norm = self.optimizer.total_norm
                 
-                # Compute active dimensions if free bits is enabled
+                # Compute active dimensions if free bits is enabled (only for VAE, not FSQ)
                 active_dims = None
-                if self.kl_free_bits > 0:
+                if not self.use_fsq and self.kl_free_bits > 0 and kl_per_dim is not None:
                     # Count dimensions with KL above threshold
                     kl_per_dim_mean = kl_per_dim.mean(dim=0)  # Average over batch
                     active_dims = (kl_per_dim_mean > 0).float().sum().item()
+                
+                # Compute FSQ-specific metrics
+                codebook_usage = None
+                unique_codes = None
+                if self.use_fsq and 'indices' in locals():
+                    unique_codes_tensor = torch.unique(indices)
+                    unique_codes = unique_codes_tensor.numel()
+                    codebook_size = self.raw_model.codebook_size
+                    codebook_usage = unique_codes / codebook_size
                                                         
-                self.log_loss(total_loss, total_accuracy, accuracy_is_closed, loss_recon.item(), loss_cls.item(), loss_kl.item(), loss_l2norm.item(), loss_is_closed.item(), cur_lr, total_norm, step, kl_beta, active_dims)
+                self.log_loss(total_loss, total_accuracy, accuracy_is_closed, loss_recon.item(), 
+                            loss_cls.item(), loss_kl.item(), loss_l2norm.item(), 
+                            loss_is_closed.item(), cur_lr, total_norm, step, time_per_step, 
+                            kl_beta, active_dims, codebook_usage, unique_codes)
                 
             step += 1
             self.step.add_(1)
@@ -291,6 +338,9 @@ class Trainer_vae_v1(BaseTrainer):
                 total_val_accuracy = 0.
                 total_val_accuracy_is_closed = 0.
                 device = next(self.model.parameters()).device
+                
+                # For FSQ: collect all indices to compute codebook usage
+                all_val_indices = [] if self.use_fsq else None
                 
                 self.ema.eval()
                 num_val_batches = self.val_num_batches * self.grad_accum_every
@@ -326,49 +376,87 @@ class Trainer_vae_v1(BaseTrainer):
                         # print(params_padded.abs().max())
                         abnormal_value = params_padded.abs().max().item()
                         t = time.time()
-                        # params_raw_recon, mask, class_logits, mu, logvar = self.ema(params_padded, surface_type)
-                        mu, logvar = self.raw_model.encode(params_padded, surface_type)
-                        if self.use_logvar:
-                            z = self.raw_model.reparameterize(mu, logvar)
+                        
+                        # Encode (VAE or FSQ)
+                        if self.use_fsq:
+                            z_quantized, indices = self.raw_model.encode(params_padded, surface_type)
+                            z = z_quantized
                         else:
-                            z = mu
+                            mu, logvar = self.raw_model.encode(params_padded, surface_type)
+                            if self.use_logvar:
+                                z = self.raw_model.reparameterize(mu, logvar)
+                            else:
+                                z = mu
+                        
+                        # Classify
                         if self.pred_is_closed:
                             class_logits, surface_type_pred, is_closed_logits, is_closed = self.raw_model.classify(z)
                         else:
                             class_logits, surface_type_pred = self.raw_model.classify(z)
+                        
+                        # Decode
                         params_raw_recon, mask = self.raw_model.decode(z, surface_type)
-                        # print('Encode and decode time: ', f'{time.time() - t:.2f}s')
+                        
+                        # Compute losses
                         loss_recon = (self.loss_recon(params_raw_recon, params_padded) * mask.float()).mean()
                         loss_cls = self.loss_cls(class_logits, surface_type).mean()
                         loss_l2norm = torch.norm(z, p=2, dim=-1).mean()
+                        
                         if self.pred_is_closed:
-                            # is_closed_logits shape: [batch, 2], is_closed_gt shape: [batch, 2]
-                            # pos_weight is applied element-wise per position (u=0, v=1)
                             loss_is_closed = self.loss_is_closed(is_closed_logits, is_closed_gt.float()).mean()
                         else:
-                            loss_is_closed = 0.0
-                        # Compute KL loss with free bits (same as training)
-                        kl_per_dim = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp())
-                        if self.kl_free_bits > 0:
-                            kl_per_dim = torch.clamp(kl_per_dim - self.kl_free_bits, min=0.0)
-                        loss_kl = torch.mean(kl_per_dim)
+                            loss_is_closed = torch.tensor(0.0, device=z.device)
+                        
+                        # Compute KL loss (only for VAE, not FSQ)
+                        if not self.use_fsq:
+                            kl_per_dim = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp())
+                            if self.kl_free_bits > 0:
+                                kl_per_dim = torch.clamp(kl_per_dim - self.kl_free_bits, min=0.0)
+                            loss_kl = torch.mean(kl_per_dim)
+                        else:
+                            loss_kl = torch.tensor(0.0, device=z.device)
                         
                         # Use current annealing beta for validation loss
                         val_kl_beta = self.compute_kl_annealing_beta(step)
-                        loss = loss_recon * self.loss_recon_weight + loss_cls * self.loss_cls_weight + loss_kl * self.loss_kl_weight * val_kl_beta + loss_l2norm * self.loss_l2norm_weight + self.loss_is_closed_weight * loss_is_closed
+                        loss = (loss_recon * self.loss_recon_weight + 
+                               loss_cls * self.loss_cls_weight + 
+                               loss_kl * self.loss_kl_weight * val_kl_beta + 
+                               loss_l2norm * self.loss_l2norm_weight + 
+                               self.loss_is_closed_weight * loss_is_closed)
 
                         accuracy = self.compute_accuracy(class_logits, surface_type)
 
                         if self.pred_is_closed:
                             accuracy_is_closed = self.compute_accuracy_is_closed(is_closed_logits, is_closed_gt)
                         else:
-                            accuracy_is_closed = 0.0
+                            accuracy_is_closed = torch.tensor(0.0, device=z.device)
 
                         total_val_loss += (loss / num_val_batches)
                         total_val_accuracy += (accuracy / num_val_batches)
                         total_val_accuracy_is_closed += (accuracy_is_closed / num_val_batches)
+                        
+                        # Collect FSQ indices
+                        if self.use_fsq:
+                            all_val_indices.append(indices)
+                
+                # Compute FSQ codebook usage for validation
+                val_codebook_usage = None
+                val_unique_codes = None
+                if self.use_fsq and len(all_val_indices) > 0:
+                    all_val_indices = torch.cat(all_val_indices)
+                    val_unique_codes_tensor = torch.unique(all_val_indices)
+                    val_unique_codes = val_unique_codes_tensor.numel()
+                    val_codebook_usage = val_unique_codes / self.raw_model.codebook_size
 
-                self.print(get_current_time() + f' valid loss: {total_val_loss:.3f} valid acc: {total_val_accuracy:.3f} valid acc_is_closed: {total_val_accuracy_is_closed:.3f} valid loss_recon: {loss_recon.item()} valid loss_cls: {loss_cls.item()} valid loss_kl: {loss_kl.item()}')
+                # Print validation results
+                print_msg = (f'{get_current_time()} valid loss: {total_val_loss:.3f} '
+                            f'acc: {total_val_accuracy:.3f} acc_closed: {total_val_accuracy_is_closed:.3f} '
+                            f'recon: {loss_recon.item():.4f} cls: {loss_cls.item():.4f} kl: {loss_kl.item():.4f}')
+                
+                if self.use_fsq and val_codebook_usage is not None:
+                    print_msg += f' CB_usage: {val_codebook_usage:.3f} codes: {val_unique_codes}'
+                
+                self.print(print_msg)
                 
                 # Calculate estimated finishing time
                 steps_remaining = self.num_train_steps - step
@@ -387,6 +475,13 @@ class Trainer_vae_v1(BaseTrainer):
                     "val_accuracy_is_closed": total_val_accuracy_is_closed,
                     "val_loss_l2norm": loss_l2norm.item()
                 }
+                
+                # Add FSQ-specific validation metrics
+                if val_codebook_usage is not None:
+                    val_log_dict['val_fsq/codebook_usage'] = val_codebook_usage
+                if val_unique_codes is not None:
+                    val_log_dict['val_fsq/unique_codes'] = val_unique_codes
+                
                 self.log(**val_log_dict)
 
             self.wait()
