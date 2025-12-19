@@ -39,6 +39,13 @@ from OCC.Core.BRep import BRep_Tool
 from OCC.Core.GeomLProp import GeomLProp_SLProps
 from OCC.Core.gp import gp_Pnt2d
 from OCC.Core.TopAbs import TopAbs_IN, TopAbs_ON, TopAbs_OUT
+from OCC.Core.GeomAbs import (
+    GeomAbs_Plane, GeomAbs_Cylinder, GeomAbs_Cone, 
+    GeomAbs_Sphere, GeomAbs_Torus, GeomAbs_BezierSurface, 
+    GeomAbs_BSplineSurface, GeomAbs_SurfaceOfRevolution, 
+    GeomAbs_SurfaceOfExtrusion, GeomAbs_OffsetSurface, GeomAbs_OtherSurface
+)
+from OCC.Core.BRepAdaptor import BRepAdaptor_Surface
 
 from icecream import ic
 from logan_process_brep_data import BRepDataProcessor
@@ -217,6 +224,169 @@ def strip_features_and_make_undirected(G: nx.DiGraph) -> nx.Graph:
     return H
 
 
+def get_surface_type_name(surface_type):
+    """
+    将曲面类型枚举值转换为可读的名称
+    
+    Args:
+        surface_type: GeomAbs_SurfaceType枚举值
+    
+    Returns:
+        str: 曲面类型名称
+    """
+    type_mapping = {
+        GeomAbs_Plane: "Plane",
+        GeomAbs_Cylinder: "Cylinder",
+        GeomAbs_Cone: "Cone",
+        GeomAbs_Sphere: "Sphere",
+        GeomAbs_Torus: "Torus",
+        GeomAbs_BezierSurface: "BezierSurface",
+        GeomAbs_BSplineSurface: "BSplineSurface",
+        GeomAbs_SurfaceOfRevolution: "SurfaceOfRevolution",
+        GeomAbs_SurfaceOfExtrusion: "SurfaceOfExtrusion",
+        GeomAbs_OffsetSurface: "OffsetSurface",
+        GeomAbs_OtherSurface: "OtherSurface"
+    }
+    return type_mapping.get(surface_type, f"Unknown({surface_type})")
+
+
+def get_solid_surface_statistics(solid):
+    """
+    获取solid的曲面统计信息
+    
+    Args:
+        solid: Solid对象（occwl.Solid）
+    
+    Returns:
+        dict: 包含曲面类型统计的字典，格式为 {surface_type: count}
+    """
+    surface_stats = {}
+    
+    # 遍历solid的所有面
+    for face in solid.faces():
+        # 创建表面适配器
+        adaptor = BRepAdaptor_Surface(face.topods_shape())
+        # 获取表面类型
+        surface_type = adaptor.GetType()
+        # 转换为可读名称
+        type_name = get_surface_type_name(surface_type)
+        
+        # 统计数量
+        if type_name in surface_stats:
+            surface_stats[type_name] += 1
+        else:
+            surface_stats[type_name] = 1
+    
+    return surface_stats
+
+
+def are_solids_identical(solid1, solid2, verbose=False):
+    """
+    判断两个solid是否一致
+    
+    判断标准：
+    1. 两个solid的曲面数量一致
+    2. 两个solid的每种不同种类曲面的数量一致
+    
+    Args:
+        solid1: 第一个Solid对象（occwl.Solid）
+        solid2: 第二个Solid对象（occwl.Solid）
+        verbose: 是否输出详细信息
+    
+    Returns:
+        bool: 如果两个solid一致返回True，否则返回False
+    """
+    # 获取两个solid的曲面统计信息
+    stats1 = get_solid_surface_statistics(solid1)
+    stats2 = get_solid_surface_statistics(solid2)
+    
+    # 计算总曲面数量
+    total_faces1 = sum(stats1.values())
+    total_faces2 = sum(stats2.values())
+    
+    if verbose:
+        print(f"Solid 1: {total_faces1} faces, distribution: {stats1}")
+        print(f"Solid 2: {total_faces2} faces, distribution: {stats2}")
+    
+    # 检查曲面总数是否相同
+    if total_faces1 != total_faces2:
+        if verbose:
+            print(f"Different number of faces: {total_faces1} vs {total_faces2}")
+        return False
+    
+    # 检查每种曲面类型的数量是否相同
+    if stats1 != stats2:
+        if verbose:
+            print(f"Different surface type distribution")
+            # 找出差异
+            all_types = set(stats1.keys()) | set(stats2.keys())
+            for stype in sorted(all_types):
+                count1 = stats1.get(stype, 0)
+                count2 = stats2.get(stype, 0)
+                if count1 != count2:
+                    print(f"  {stype}: {count1} vs {count2}")
+        return False
+    
+    if verbose:
+        print("Solids are identical")
+    
+    return True
+
+
+def filter_unique_solids(solids, verbose=False):
+    """
+    从solids列表中过滤出唯一的solid
+    
+    Args:
+        solids: Solid对象列表
+        verbose: 是否输出详细信息
+    
+    Returns:
+        list: 包含唯一solid的列表
+        list: 每个唯一solid对应的原始索引列表
+    """
+    if len(solids) == 0:
+        return [], []
+    
+    unique_solids = []
+    unique_indices = []
+    duplicate_groups = []  # 记录每个unique solid对应的重复索引组
+    
+    for i, solid in enumerate(solids):
+        is_duplicate = False
+        
+        # 与已有的unique solids比较
+        for j, unique_solid in enumerate(unique_solids):
+            if are_solids_identical(solid, unique_solid, verbose=False):
+                is_duplicate = True
+                duplicate_groups[j].append(i)
+                if verbose:
+                    print(f"Solid {i} is identical to solid {unique_indices[j]}")
+                break
+        
+        # 如果不是重复的，添加到unique列表
+        if not is_duplicate:
+            unique_solids.append(solid)
+            unique_indices.append(i)
+            duplicate_groups.append([i])
+    
+    if verbose:
+        print(f"\n{'='*60}")
+        print(f"Deduplication Summary:")
+        print(f"{'='*60}")
+        print(f"Original solids count: {len(solids)}")
+        print(f"Unique solids count:   {len(unique_solids)}")
+        print(f"Duplicates removed:    {len(solids) - len(unique_solids)}")
+        print(f"{'='*60}")
+        
+        for i, (idx, group) in enumerate(zip(unique_indices, duplicate_groups)):
+            if len(group) > 1:
+                print(f"Unique solid {i} (original index {idx}) has {len(group)-1} duplicate(s): {group[1:]}")
+        print(f"{'='*60}\n")
+    
+    return unique_solids, unique_indices
+
+
 def step_to_pointcloud(step_filename, ply_filename, num_samples=1000, debug=False):
     """
     Convert STEP file to point cloud with normals
@@ -240,16 +410,28 @@ def step_to_pointcloud(step_filename, ply_filename, num_samples=1000, debug=Fals
     print(f"Number of solids: {len(solids)}")
 
     processor = BRepDataProcessor()
-
-    for index, solid in enumerate(solids):
-        print(f"\n--- Processing solid {index} ---")
+    
+    # Pre-filter solids with too many faces before deduplication
+    solids_filtered = []
+    for i, solid in enumerate(solids):
+        num_faces = len(list(solid.faces()))
+        if num_faces > 500:
+            print(f"[SKIP] Solid {i} has too many faces ({num_faces} > 500), skipping...")
+        else:
+            solids_filtered.append(solid)
+    
+    solids = solids_filtered
+    print(f"Number of solids after face count filtering: {len(solids)}")
+    
+    # Filter out duplicate solids
+    unique_solids, unique_indices = filter_unique_solids(solids, verbose=True)
+    
+    # Only process unique solids
+    for idx, (original_index, solid) in enumerate(zip(unique_indices, unique_solids)):
+        print(f"\n--- Processing unique solid {idx} (original index: {original_index}) ---")
         
         num_faces = len(list(solid.faces()))
         print(f"Number of faces: {num_faces}")
-        
-        if num_faces > 500:
-            print(f'Too many faces in the solid: {num_faces}')
-            raise ValueError("Too many faces in the solid.")
         
         solid = solid.topods_shape()
         solid = Solid(solid)
@@ -293,8 +475,8 @@ def step_to_pointcloud(step_filename, ply_filename, num_samples=1000, debug=Fals
 
         graph_undirected = strip_features_and_make_undirected(graph)
         
-        # Save to NPZ file with graph data
-        save_name = ply_filename.replace('.npz', f'_{index:03d}.npz')
+        # Save to NPZ file with graph data (use idx for unique solid indexing)
+        save_name = ply_filename.replace('.npz', f'_{idx:03d}.npz')
         np.savez(save_name, 
                  points=np.array(all_points, dtype=object), 
                  normals=np.array(all_normals, dtype=object), 
@@ -322,14 +504,19 @@ def process_file(args):
     # 在输出目录下创建相同的子目录结构
     npzfile = os.path.join(output_dir, rel_path.replace('.step', '.npz'))
     
-    # 检查文件是否已存在
-    if os.path.exists(npzfile):
-        print(f"[SKIP] {stepfile} already converted")
-        return {'status': 'skipped', 'file': stepfile}
+    # 获取输出文件的最小子文件夹路径
+    output_subdir = os.path.dirname(npzfile)
+    
+    # 检查输出文件夹是否已存在且包含处理结果
+    if os.path.exists(output_subdir):
+        # 检查文件夹中是否有 .npz 文件（表示已经处理过）
+        existing_npz_files = glob.glob(os.path.join(output_subdir, '*.npz'))
+        if existing_npz_files:
+            print(f"[SKIP] {stepfile} - output folder already exists with {len(existing_npz_files)} npz file(s)")
+            return {'status': 'skipped', 'file': stepfile}
     
     # 创建输出目录
-    dir = os.path.dirname(npzfile)
-    os.makedirs(dir, exist_ok=True)
+    os.makedirs(output_subdir, exist_ok=True)
     
     # 设置超时信号（仅在 Unix 系统上工作）
     if hasattr(signal, 'SIGALRM'):
@@ -372,7 +559,7 @@ def main(input_folder, output_dir, num_workers=4, timeout_seconds=300, num_sampl
         timeout_seconds: Timeout in seconds for each file processing
         num_samples: Number of random samples per face
     """
-    stepfiles = glob.glob(os.path.join(input_folder, "*/*.step"))
+    stepfiles = glob.glob(os.path.join(input_folder, "*.step"))
     stepfiles = sorted(stepfiles)
     
     if not stepfiles:

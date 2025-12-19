@@ -263,11 +263,11 @@ class TrainerFlowSurface(BaseTrainer):
 
                 forward_kwargs = self.next_data_to_forward_kwargs(self.train_dl_iter)
                 with self.accelerator.autocast(), maybe_no_sync():
-                    params_padded, rotations_padded, scales_padded, shifts_padded, surface_type, bbox_mins, bbox_maxs, masks = forward_kwargs
-
+                    sampled_points_tensor, shifts_padded, rotations, scales, params_padded, types, masks = forward_kwargs
                     # masks = masks.unsqueeze(-1)
 
-                    # Prepare the sampled points
+                    # Prepare the sampled points for loss calculation.
+                    # Condition use the sampled_points_tensor
                     with torch.no_grad():
 
                         gt_valid_surface_params = decode_only(self.vae, params_padded[masks.bool()])
@@ -317,7 +317,7 @@ class TrainerFlowSurface(BaseTrainer):
                     assert not torch.isnan(noisy_sample).any(), "noisy_sample contains inf/nan" + str(noisy_sample)
                     assert not torch.isnan(gt_sampled_points).any(), "gt_sampled_points contains inf/nan" + str(gt_sampled_points)
                     # assert not torch.isnan(masks).any(), "masks contains inf/nan" + str(masks)
-                    output = self.model(sample=noisy_sample, timestep = timesteps, cond=gt_sampled_points, tgt_key_padding_mask=~masks.bool().squeeze(-1), memory_key_padding_mask=~masks.bool().squeeze(-1))
+                    output = self.model(sample=noisy_sample, timestep = timesteps, cond=sampled_points_tensor, tgt_key_padding_mask=~masks.bool().squeeze(-1), memory_key_padding_mask=~masks.bool().squeeze(-1))
 
 
 
