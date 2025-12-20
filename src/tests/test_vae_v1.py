@@ -214,6 +214,13 @@ show_resampled = False
 pred_is_closed = False
 show_closed_colors = True  # Toggle for showing is_closed coloring
 model_name = 'vae_v1'  # Default model name
+use_fsq = False  # Whether using FSQ-based model
+config_args = None  # Config object for FSQ parameters
+
+# Dataset and checkpoint paths
+dataset_path = ''
+checkpoint_path = ''
+canonical = False
 
 # Transformation variables
 _rotation_euler = [0.0, 0.0, 0.0]  # [roll, pitch, yaw] in degrees
@@ -247,23 +254,58 @@ def apply_closed_colors_to_surfaces(surfaces_dict, is_u_closed_list, is_v_closed
                 print(f"Warning: Could not set color for surface {i}: {e}")
 
 def load_model_and_dataset():
-    global dataset, model, max_idx, pred_is_closed, model_name
+    global dataset, model, max_idx, pred_is_closed, model_name, use_fsq, dataset_path, canonical, checkpoint_path, config_args
     
     dataset = dataset_compound(dataset_path, canonical=canonical, detect_closed=pred_is_closed)
     max_idx = len(dataset) - 1
     
-    # Load model based on model_name (vae_v1 or vae_v2)
-    if model_name == 'vae_v2':
+    # Load model based on model_name (vae_v1, vae_v2, or vae_v3_fsq)
+    if model_name == 'vae_v3_fsq':
+        from src.vae.vae_v3 import SurfaceVAE_FSQ
+        print('Using model: vae_v3 (FSQ-based, with is_closed prediction support)')
+        use_fsq = True
+        # Get FSQ parameters from config if available
+        if config_args is not None and hasattr(config_args, 'model') and hasattr(config_args.model, 'params'):
+            fsq_levels = getattr(config_args.model.params, 'fsq_levels', [8, 5, 5, 5])
+            num_codebooks = getattr(config_args.model.params, 'num_codebooks', 1)
+            latent_dim = getattr(config_args.model.params, 'latent_dim', 128)
+            param_dim = getattr(config_args.model.params, 'param_dim', 32)
+            emb_dim = getattr(config_args.model.params, 'emb_dim', 16)
+        else:
+            # Default FSQ parameters if no config provided
+            fsq_levels = [8, 5, 5, 5]
+            num_codebooks = 1
+            latent_dim = 128
+            param_dim = 32
+            emb_dim = 16
+            print("Warning: No config file provided, using default FSQ parameters")
+        
+        model = SurfaceVAE_FSQ(
+            param_raw_dim=[17, 18, 19, 18, 19],
+            param_dim=param_dim,
+            latent_dim=latent_dim,
+            n_surface_types=5,
+            emb_dim=emb_dim,
+            fsq_levels=fsq_levels,
+            num_codebooks=num_codebooks
+        )
+        print(f"FSQ config: latent_dim={latent_dim}, fsq_levels={fsq_levels}, num_codebooks={num_codebooks}")
+        print(f"  Codebook size: {model.codebook_size}")
+        print(f"  Effective dimension: {model.effective_codebook_dim}")
+    elif model_name == 'vae_v2':
         from src.vae.vae_v2 import SurfaceVAE
         print('Using model: vae_v2 (with is_closed prediction support)')
+        use_fsq = False
+        model = SurfaceVAE(param_raw_dim=[17, 18, 19, 18, 19])
     else:
         from src.vae.vae_v1 import SurfaceVAE
         print('Using model: vae_v1')
+        use_fsq = False
         if pred_is_closed:
             print("Warning: vae_v1 does not support pred_is_closed, disabling it")
             pred_is_closed = False
+        model = SurfaceVAE(param_raw_dim=[17, 18, 19, 18, 19])
     
-    model = SurfaceVAE(param_raw_dim=[17, 18, 19, 18, 19])
     checkpoint = torch.load(checkpoint_path, map_location="cpu")
     if 'ema_model' in checkpoint:
         ema_model = checkpoint['ema']
@@ -280,11 +322,14 @@ def load_model_and_dataset():
     if pred_is_closed:
         print("pred_is_closed is enabled - model will predict surface closure status")
     
+    if use_fsq:
+        print("FSQ mode enabled - using quantized latent codes instead of VAE reparameterization")
+    
     model.eval()
 
 def process_sample(idx):
     """Process a single sample and return both GT and recovered data"""
-    global dataset, model, pred_is_closed
+    global dataset, model, pred_is_closed, use_fsq
     
     if pred_is_closed:
         params_tensor, types_tensor, mask_tensor, shift, rotation, scale, is_u_closed_tensor, is_v_closed_tensor = dataset[idx]
@@ -352,17 +397,22 @@ def process_sample(idx):
 
     # print('-' * 10 + 'gt_json_data' + '-' * 10)
     # print(gt_json_data)
-    # Run VAE inference
+    # Run VAE/FSQ inference
     pred_is_u_closed = None
     pred_is_v_closed = None
     is_closed_accuracy = None
     
     with torch.no_grad():
-        mu, logvar = model.encode(valid_params, valid_types)
-        
-        z = model.reparameterize(mu, logvar)
-        print('Difference between mu and z: ', (mu - z).abs().mean())
-        # z = mu
+        # Encode based on model type
+        if use_fsq:
+            z_quantized, indices = model.encode(valid_params, valid_types)
+            z = z_quantized
+            print(f'FSQ indices shape: {indices.shape}, unique codes: {torch.unique(indices.flatten() if indices.ndim > 1 else indices).numel()}')
+        else:
+            mu, logvar = model.encode(valid_params, valid_types)
+            z = model.reparameterize(mu, logvar)
+            print('Difference between mu and z: ', (mu - z).abs().mean())
+            # z = mu
         
         if pred_is_closed:
             type_logits_pred, types_pred, is_closed_logits, is_closed_pred = model.classify(z)
@@ -421,7 +471,7 @@ def process_sample(idx):
 
 def resample_model(canonical):
     """Generate new samples from the VAE's latent space"""
-    global model, resampled_surfaces, current_idx, pred_is_closed, show_closed_colors
+    global model, resampled_surfaces, current_idx, pred_is_closed, show_closed_colors, use_fsq
     
     if model is None:
         print("Model not loaded yet!")
@@ -454,12 +504,17 @@ def resample_model(canonical):
         valid_params = torch.tensor(np.array(transformed_params_list), dtype=valid_params.dtype, device=valid_params.device)
     
     with torch.no_grad():
-        # Sample random latent vectors
-
-        mu, logvar = model.encode(valid_params, valid_types)
-        z_random = model.reparameterize(mu, logvar)
-        # z_random = mu
-        # Classify the random latent vectors to get surface types
+        # Encode to get latent vectors
+        if use_fsq:
+            z_quantized, indices = model.encode(valid_params, valid_types)
+            z_random = z_quantized
+            print(f'Resampled FSQ indices: unique codes = {torch.unique(indices.flatten() if indices.ndim > 1 else indices).numel()}')
+        else:
+            mu, logvar = model.encode(valid_params, valid_types)
+            z_random = model.reparameterize(mu, logvar)
+            # z_random = mu
+        
+        # Classify the latent vectors to get surface types
         if pred_is_closed:
             type_logits_pred, types_pred, is_closed_logits, is_closed_pred = model.classify(z_random)
             pred_is_u_closed = is_closed_pred[:, 0].cpu().numpy()
@@ -786,18 +841,33 @@ if __name__ == '__main__':
     checkpoint_path = args.checkpoint_path
     canonical = args.canonical
     
-    # Load pred_is_closed and model_name from config file if provided
+    # Load pred_is_closed, model_name, and FSQ parameters from config file if provided
     if args.config:
         try:
             cfg = load_config(args.config)
             config_args = NestedDictToClass(cfg)
             pred_is_closed = getattr(config_args.model, 'pred_is_closed', False)
-            model_name = getattr(config_args.model, 'name', 'vae_v1')
+            
+            # Extract model name from full path if needed
+            model_full_name = getattr(config_args.model, 'name', 'vae_v1')
+            if 'vae_v3' in model_full_name.lower() or 'fsq' in model_full_name.lower():
+                model_name = 'vae_v3_fsq'
+            elif 'vae_v2' in model_full_name.lower():
+                model_name = 'vae_v2'
+            else:
+                model_name = 'vae_v1'
+            
             print(f"Loaded from config: pred_is_closed={pred_is_closed}, model_name={model_name}")
+            if model_name == 'vae_v3_fsq':
+                fsq_levels = getattr(config_args.model.params, 'fsq_levels', [8, 5, 5, 5])
+                num_codebooks = getattr(config_args.model.params, 'num_codebooks', 1)
+                latent_dim = getattr(config_args.model.params, 'latent_dim', 128)
+                print(f"FSQ parameters: latent_dim={latent_dim}, fsq_levels={fsq_levels}, num_codebooks={num_codebooks}")
         except Exception as e:
             print(f"Warning: Could not load config file: {e}")
             pred_is_closed = False
             model_name = 'vae_v1'
+            config_args = None
     
     # Command line argument overrides config
     if args.pred_is_closed:

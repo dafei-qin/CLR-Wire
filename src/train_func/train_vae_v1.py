@@ -5,10 +5,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from argparse import ArgumentParser
 from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
+from omegaconf import OmegaConf
 
 from src.dataset.dataset_v1 import  dataset_compound, dataset_compound_cache
 from src.trainer.trainer_vae_v1 import Trainer_vae_v1 
 from src.utils.config import NestedDictToClass, load_config
+from src.utils.import_tools import load_model_from_config, load_dataset_from_config
 
 from icecream import ic
 ic.disable()
@@ -20,44 +22,36 @@ cli_args, unknown = program_parser.parse_known_args()
 
 cfg = load_config(cli_args.config)
 args = NestedDictToClass(cfg)
+config = OmegaConf.load(cli_args.config)
 
 isDebug = True if sys.gettrace() else False
 
 if isDebug:
     args.use_wandb_tracking = True
-    args.batch_size = 2
-    args.num_workers = 1
-
-transform = getattr(args.data, 'transform', None)
-if transform is None:
-    transform = None
-
+    # args.batch_size = 2
+    # args.num_workers = 1
 
 
 train_sampler = None
-use_cache = getattr(args.data, 'use_cache', False)
-if use_cache:
-    print('load cache from ', args.data.cache_path)
-    assert args.data.cache_path != ''
-    train_dataset = dataset_compound_cache(cache_path=args.data.cache_path, detect_closed=args.model.pred_is_closed)
-else:
-    train_dataset = dataset_compound(json_dir=args.data.train_json_dir, max_num_surfaces=args.data.max_num_surfaces, canonical=args.data.canonical, detect_closed=args.model.pred_is_closed)
 
-val_dataset = dataset_compound(json_dir=args.data.val_json_dir, max_num_surfaces=args.data.max_num_surfaces, canonical=args.data.canonical, detect_closed=args.model.pred_is_closed)
+# Load datasets using dynamic loading from config
+# Check if using separate data_train/data_val sections or unified data section
 
+
+train_dataset = load_dataset_from_config(config, section='data_train')
+val_dataset = load_dataset_from_config(config, section='data_val')
+
+
+# Load model dynamically from config
 model_name = getattr(args.model, 'name', 'vae_v1')
+print(f'Loading model: {model_name}')
 
-if model_name == 'vae_v2':
-    from src.vae.vae_v2 import SurfaceVAE 
-    print('Use the model: vae_v2')
-else:
-    from src.vae.vae_v1 import SurfaceVAE 
-    print('Use the model: vae_v1')
+# Detect if using FSQ based on model name or fsq_levels parameter
+use_fsq = cfg['use_fsq']
+
+model = load_model_from_config(config)
 
 
-model = SurfaceVAE(
-    param_raw_dim=args.model.param_raw_dim,
-)
 
 epochs = args.epochs
 batch_size = args.batch_size
@@ -103,7 +97,8 @@ trainer = Trainer_vae_v1(
     val_every_step=int(args.val_every_epoch * num_step_per_epoch),
     use_logvar=args.trainer.use_logvar,
     num_workers_val=args.num_workers_val,
-    train_sampler=train_sampler
+    train_sampler=train_sampler,
+    use_fsq=use_fsq  # Add FSQ flag
 )
 
 if args.resume_training and cli_args.resume_lr is not None:
