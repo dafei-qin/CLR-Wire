@@ -18,6 +18,7 @@ from src.dataset.dataset_v1 import dataset_compound, SURFACE_TYPE_MAP, SCALAR_DI
 from src.tools.surface_to_canonical_space import to_canonical, from_canonical
 from src.utils.numpy_tools import orthonormal_basis_from_normal
 from src.utils.config import NestedDictToClass, load_config
+from src.utils.import_tools import load_model_from_config, load_dataset_from_config
 
 from utils.surface import visualize_json_interset
 
@@ -184,7 +185,7 @@ def to_json(params_tensor, types_tensor, mask_tensor):
         # (types_tensor[i].item(), mask_tensor[i].sum())
         params = params_tensor[i][mask_tensor[i]]
         # surface_type = SURFACE_TYPE_MAP_INVERSE[types_tensor[i].item()]
-        print('surface index: ',i)
+        # print('surface index: ',i)
         recovered_surface = dataset._recover_surface(params, types_tensor[i].item())
 
         recovered_surface['idx'] = [i, i]
@@ -253,79 +254,7 @@ def apply_closed_colors_to_surfaces(surfaces_dict, is_u_closed_list, is_v_closed
             except Exception as e:
                 print(f"Warning: Could not set color for surface {i}: {e}")
 
-def load_model_and_dataset():
-    global dataset, model, max_idx, pred_is_closed, model_name, use_fsq, dataset_path, canonical, checkpoint_path, config_args
-    
-    dataset = dataset_compound(dataset_path, canonical=canonical, detect_closed=pred_is_closed)
-    max_idx = len(dataset) - 1
-    
-    # Load model based on model_name (vae_v1, vae_v2, or vae_v3_fsq)
-    if model_name == 'vae_v3_fsq':
-        from src.vae.vae_v3 import SurfaceVAE_FSQ
-        print('Using model: vae_v3 (FSQ-based, with is_closed prediction support)')
-        use_fsq = True
-        # Get FSQ parameters from config if available
-        if config_args is not None and hasattr(config_args, 'model') and hasattr(config_args.model, 'params'):
-            fsq_levels = getattr(config_args.model.params, 'fsq_levels', [8, 5, 5, 5])
-            num_codebooks = getattr(config_args.model.params, 'num_codebooks', 1)
-            latent_dim = getattr(config_args.model.params, 'latent_dim', 128)
-            param_dim = getattr(config_args.model.params, 'param_dim', 32)
-            emb_dim = getattr(config_args.model.params, 'emb_dim', 16)
-        else:
-            # Default FSQ parameters if no config provided
-            fsq_levels = [8, 5, 5, 5]
-            num_codebooks = 1
-            latent_dim = 128
-            param_dim = 32
-            emb_dim = 16
-            print("Warning: No config file provided, using default FSQ parameters")
-        
-        model = SurfaceVAE_FSQ(
-            param_raw_dim=[17, 18, 19, 18, 19],
-            param_dim=param_dim,
-            latent_dim=latent_dim,
-            n_surface_types=5,
-            emb_dim=emb_dim,
-            fsq_levels=fsq_levels,
-            num_codebooks=num_codebooks
-        )
-        print(f"FSQ config: latent_dim={latent_dim}, fsq_levels={fsq_levels}, num_codebooks={num_codebooks}")
-        print(f"  Codebook size: {model.codebook_size}")
-        print(f"  Effective dimension: {model.effective_codebook_dim}")
-    elif model_name == 'vae_v2':
-        from src.vae.vae_v2 import SurfaceVAE
-        print('Using model: vae_v2 (with is_closed prediction support)')
-        use_fsq = False
-        model = SurfaceVAE(param_raw_dim=[17, 18, 19, 18, 19])
-    else:
-        from src.vae.vae_v1 import SurfaceVAE
-        print('Using model: vae_v1')
-        use_fsq = False
-        if pred_is_closed:
-            print("Warning: vae_v1 does not support pred_is_closed, disabling it")
-            pred_is_closed = False
-        model = SurfaceVAE(param_raw_dim=[17, 18, 19, 18, 19])
-    
-    checkpoint = torch.load(checkpoint_path, map_location="cpu")
-    if 'ema_model' in checkpoint:
-        ema_model = checkpoint['ema']
-        ema_model = {k.replace("ema_model.", ""): v for k, v in ema_model.items()}
-        model.load_state_dict(ema_model, strict=False)
-        print("Loaded EMA model weights for classification.")
-    elif 'model' in checkpoint:
-        model.load_state_dict(checkpoint['model'])
-        print("Loaded model weights for classification.")
-    else:
-        model.load_state_dict(checkpoint)
-        print("Loaded raw model state_dict for classification.")
-    
-    if pred_is_closed:
-        print("pred_is_closed is enabled - model will predict surface closure status")
-    
-    if use_fsq:
-        print("FSQ mode enabled - using quantized latent codes instead of VAE reparameterization")
-    
-    model.eval()
+
 
 def process_sample(idx):
     """Process a single sample and return both GT and recovered data"""
@@ -793,6 +722,7 @@ def callback():
 
 if __name__ == '__main__':
     import argparse
+    from omegaconf import OmegaConf
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset_path', type=str, default='', help='Path to the dataset')
     parser.add_argument('--checkpoint_path', type=str, default='', help='Path to the checkpoint')
@@ -842,32 +772,38 @@ if __name__ == '__main__':
     canonical = args.canonical
     
     # Load pred_is_closed, model_name, and FSQ parameters from config file if provided
-    if args.config:
-        try:
-            cfg = load_config(args.config)
-            config_args = NestedDictToClass(cfg)
-            pred_is_closed = getattr(config_args.model, 'pred_is_closed', False)
-            
-            # Extract model name from full path if needed
-            model_full_name = getattr(config_args.model, 'name', 'vae_v1')
-            if 'vae_v3' in model_full_name.lower() or 'fsq' in model_full_name.lower():
-                model_name = 'vae_v3_fsq'
-            elif 'vae_v2' in model_full_name.lower():
-                model_name = 'vae_v2'
-            else:
-                model_name = 'vae_v1'
-            
-            print(f"Loaded from config: pred_is_closed={pred_is_closed}, model_name={model_name}")
-            if model_name == 'vae_v3_fsq':
-                fsq_levels = getattr(config_args.model.params, 'fsq_levels', [8, 5, 5, 5])
-                num_codebooks = getattr(config_args.model.params, 'num_codebooks', 1)
-                latent_dim = getattr(config_args.model.params, 'latent_dim', 128)
-                print(f"FSQ parameters: latent_dim={latent_dim}, fsq_levels={fsq_levels}, num_codebooks={num_codebooks}")
-        except Exception as e:
-            print(f"Warning: Could not load config file: {e}")
-            pred_is_closed = False
-            model_name = 'vae_v1'
-            config_args = None
+
+
+    config = OmegaConf.load(args.config)
+    # config_args = NestedDictToClass(cfg)
+    dataset = load_dataset_from_config(config, section='data_val')
+    max_idx = len(dataset) - 1
+    model = load_model_from_config(config)
+
+    pred_is_closed = config.data_val['params']['detect_closed']
+    use_fsq = 'fsq' in config.model.name.lower()
+    print(f"Using FSQ: {use_fsq}")
+    print(f"Pred is closed: {pred_is_closed}")
+
+
+    if args.checkpoint_path:
+        checkpoint = torch.load(args.checkpoint_path, map_location='cpu')
+        if 'ema_model' in checkpoint or 'ema' in checkpoint:
+            ema_key = 'ema' if 'ema' in checkpoint else 'ema_model'
+            ema_model = checkpoint[ema_key]
+            ema_model = {k.replace("ema_model.", "").replace("ema.", ""): v for k, v in ema_model.items()}
+            model.load_state_dict(ema_model, strict=False)
+            print("Loaded DiT EMA model weights.")
+        elif 'model' in checkpoint:
+            model.load_state_dict(checkpoint['model'])
+            print("Loaded DiT model weights.")
+        else:
+            model.load_state_dict(checkpoint)
+            print("Loaded DiT raw model state_dict.")
+    
+    model.eval()
+
+
     
     # Command line argument overrides config
     if args.pred_is_closed:
@@ -900,7 +836,7 @@ if __name__ == '__main__':
         print("Shift is enabled by default.")
     
     # Initialize
-    load_model_and_dataset()
+
     
     # Initialize polyscope
     ps.init()

@@ -37,7 +37,7 @@ data_train:
 data_val:
     name: src.dataset.dataset_v1.dataset_compound
     params:
-        json_dir: ../data/logan_jsons/abc_test/  # Use full test set, not just 0009
+        json_dir: ../data/logan_jsons/abc_test/0009  # Use full test set, not just 0009
         max_num_surfaces: 500
         canonical: true
         detect_closed: true
