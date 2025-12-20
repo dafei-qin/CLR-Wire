@@ -95,10 +95,9 @@ def recover_bspline_from_canonical(shift, rotation, scale, params, surface_type_
     control_points_canonical = scalar_params.reshape(4, 4, 3)
     
     # Recover to original space: Scale -> Rotate -> Translate
-    # control_points_scaled = apply_scale_to_control_points(control_points_canonical, scale)
-    # control_points_rotated = apply_rotation_to_control_points(control_points_scaled, rotation)
-    # control_points_original = apply_shift_to_control_points(control_points_rotated, shift)
+
     control_points_original = (control_points_canonical * scale) @ rotation + shift
+    
     # Build bspline surface dict
     u_degree = 3
     v_degree = 3

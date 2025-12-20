@@ -55,6 +55,7 @@ class Trainer_vae_v1(BaseTrainer):
         is_closed_weight = 1.0,
         u_closed_pos_weight: float = 1.0,
         v_closed_pos_weight: float = 1.0,
+        type_weight: Optional[dict] = None,  # Per-type reconstruction weight
         use_fsq: bool = False,  # Whether to use FSQ instead of VAE
         **kwargs
     ):
@@ -91,7 +92,7 @@ class Trainer_vae_v1(BaseTrainer):
         )
         
         self.loss_cls = nn.CrossEntropyLoss()
-        self.loss_recon = nn.MSELoss()
+        self.loss_recon = nn.MSELoss(reduction='none')  # Use 'none' for per-sample weighting
         self.loss_recon_weight = loss_recon_weight
         self.loss_cls_weight = loss_cls_weight
         self.loss_kl_weight = loss_kl_weight
@@ -100,6 +101,27 @@ class Trainer_vae_v1(BaseTrainer):
         self.pred_is_closed = pred_is_closed
         self.u_closed_pos_weight = u_closed_pos_weight
         self.v_closed_pos_weight = v_closed_pos_weight
+
+        # Convert type_weight dict to tensor
+        # Map: plane(0), cylinder(1), cone(2), sphere(3), torus(4), bspline_surface(5)
+        if type_weight is not None:
+            type_name_to_idx = {
+                'plane': 0,
+                'cylinder': 1, 
+                'cone': 2,
+                'sphere': 3,
+                'torus': 4,
+                'bspline_surface': 5,
+            }
+            # Create weight tensor indexed by surface type
+            type_weight_tensor = torch.ones(6, dtype=torch.float32)
+            for type_name, weight in type_weight.items():
+                if type_name in type_name_to_idx:
+                    type_weight_tensor[type_name_to_idx[type_name]] = weight
+            self.type_weight = nn.Parameter(type_weight_tensor.cuda(), requires_grad=False)
+            print(f"✓ Per-type reconstruction weights: {type_weight}")
+        else:
+            self.type_weight = None
 
         if self.pred_is_closed:
             self.pos_weight = nn.Parameter(torch.tensor([u_closed_pos_weight, v_closed_pos_weight], dtype=torch.float32).unsqueeze(0).cuda(), requires_grad=False
@@ -245,7 +267,16 @@ class Trainer_vae_v1(BaseTrainer):
 
                     params_raw_recon, mask = self.raw_model.decode(z, surface_type)
                     
-                    loss_recon = (self.loss_recon(params_raw_recon, params_padded) * mask.float()).mean() * self.loss_recon_weight
+                    # Compute per-sample reconstruction loss: (B, D) → (B,)
+                    recon_loss_per_sample = (self.loss_recon(params_raw_recon, params_padded) * mask.float()).mean(dim=-1)
+                    
+                    # Apply per-type weighting if configured
+                    if self.type_weight is not None:
+                        sample_weights = self.type_weight[surface_type]  # (B,)
+                        loss_recon = (recon_loss_per_sample * sample_weights).mean()
+                    else:
+                        loss_recon = recon_loss_per_sample.mean()
+                    
                     loss_cls = self.loss_cls(class_logits, surface_type).mean()
                     loss_l2norm = torch.norm(z, p=2, dim=-1).mean() 
                     if self.pred_is_closed:
@@ -408,8 +439,16 @@ class Trainer_vae_v1(BaseTrainer):
                         # Decode
                         params_raw_recon, mask = self.raw_model.decode(z, surface_type)
                         
-                        # Compute losses
-                        loss_recon = (self.loss_recon(params_raw_recon, params_padded) * mask.float()).mean()
+                        # Compute per-sample reconstruction loss: (B, D) → (B,)
+                        recon_loss_per_sample = (self.loss_recon(params_raw_recon, params_padded) * mask.float()).mean(dim=-1)
+                        
+                        # Apply per-type weighting if configured
+                        if self.type_weight is not None:
+                            sample_weights = self.type_weight[surface_type]  # (B,)
+                            loss_recon = (recon_loss_per_sample * sample_weights).mean()
+                        else:
+                            loss_recon = recon_loss_per_sample.mean()
+                        
                         loss_cls = self.loss_cls(class_logits, surface_type).mean()
                         loss_l2norm = torch.norm(z, p=2, dim=-1).mean()
                         

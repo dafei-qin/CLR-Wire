@@ -79,6 +79,7 @@ trainer = Trainer_vae_v1(
     kl_free_bits=getattr(args.loss, 'kl_free_bits', 0.0),
     u_closed_pos_weight=getattr(args.trainer, 'u_closed_pos_weight', 1.0),
     v_closed_pos_weight=getattr(args.trainer, 'v_closed_pos_weight', 1.0),
+    type_weight=getattr(args.trainer, 'type_weight', None),
     grad_accum_every=args.grad_accum_every,
     ema_update_every=args.ema_update_every,
     learning_rate=initial_lr,

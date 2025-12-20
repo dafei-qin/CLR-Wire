@@ -945,7 +945,7 @@ class dataset_compound(Dataset):
             try:
                 fitted_control_points = get_approx_face(sampled_points)
             except AssertionError as e:
-                print('Bspline surface too complex, drop')
+                print(f'Bspline surface too complex, drop: {e}')
                 if self.detect_closed:
                     return None, -1, None, None
                 else:
