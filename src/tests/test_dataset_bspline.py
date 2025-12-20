@@ -16,7 +16,9 @@ if str(project_root) not in sys.path:
 
 from src.dataset.dataset_bspline import dataset_bspline  # noqa: E402
 
-from utils.surface import build_bspline_surface  # noqa: E402
+from utils.surface import build_bspline_surface, get_approx_face  # noqa: E402
+from OCC.Core.BRep import BRep_Tool
+from OCC.Core.GeomAdaptor import GeomAdaptor_Surface
 
 _dataset_raw = None
 _dataset_canonical = None
@@ -28,6 +30,7 @@ _FACE_COLORS = {
     "original": (0.2, 0.7, 0.3),
     "canonical": (0.2, 0.4, 0.8),
     "reconstructed": (0.9, 0.4, 0.2),
+    "approx_fitted": (0.9, 0.2, 0.9),
 }
 
 
@@ -133,10 +136,42 @@ def invert_canonical_poles(
 ) -> np.ndarray:
     coords = canonical_poles[..., :3].reshape(-1, 3)
     restored = coords @ rotation + shift
-    restored = restored * length
+    # restored = restored * length
     result = canonical_poles.copy()
     result[..., :3] = restored.reshape(canonical_poles.shape[0], canonical_poles.shape[1], 3)
     return result
+
+
+def sample_bspline_surface_32x32(face_dict: Dict[str, Any]) -> np.ndarray:
+    """Sample 32x32 points from a bspline surface."""
+    # Build the surface first
+    occ_face, _, _, _ = build_bspline_surface(
+        face_dict,
+        tol=1e-2,
+        normalize_surface=False,
+        normalize_knots=False,
+    )
+    
+    # Get the surface from the face
+    surface_handle = BRep_Tool.Surface(occ_face)
+    adaptor = GeomAdaptor_Surface(surface_handle)
+    
+    # Get parameter bounds
+    u_min = adaptor.FirstUParameter()
+    u_max = adaptor.LastUParameter()
+    v_min = adaptor.FirstVParameter()
+    v_max = adaptor.LastVParameter()
+    
+    # Sample 32x32 points
+    points = np.zeros((32, 32, 3), dtype=np.float64)
+    for u_idx in range(32):
+        u = u_min + (u_max - u_min) * u_idx / 31.0
+        for v_idx in range(32):
+            v = v_min + (v_max - v_min) * v_idx / 31.0
+            pnt = adaptor.Value(u, v)
+            points[u_idx, v_idx, :] = [pnt.X(), pnt.Y(), pnt.Z()]
+    
+    return points
 
 
 def _set_status(message: str):
@@ -200,7 +235,7 @@ def register_unit_cube():
             cube_faces,
             color=(0.9, 0.9, 0.9),
             smooth_shade=False,
-            transparency=0.7,
+            transparency=0.1,
         )
         if hasattr(cube, "set_edge_color"):
             cube.set_edge_color((0.2, 0.2, 0.2))
@@ -241,11 +276,60 @@ def _update_visualization(idx: int):
         (restored_poles[..., :3] - raw_data["poles"][: raw_data["num_poles_u"], : raw_data["num_poles_v"], :3]) ** 2
     )
 
-    faces = [
-        ("original", build_bspline_face(raw_data, idx)),
-        ("canonical", build_bspline_face(canonical_data, idx + 1000)),
-        ("reconstructed", build_bspline_face(canonical_data, idx + 2000, poles_override=restored_poles)),
-    ]
+    # Sample canonical surface and fit with get_approx_face
+    canonical_face_dict = build_bspline_face(canonical_data, idx + 1000)
+    try:
+        sampled_points = sample_bspline_surface_32x32(canonical_face_dict)
+        fitted_control_points = get_approx_face(sampled_points)
+        
+        # Build fitted poles array (4x4x4 with weights=1.0)
+        fitted_poles = np.array(fitted_control_points).reshape(4, 4, 3)
+        fitted_poles_with_weights = np.concatenate(
+            [fitted_poles, np.ones((4, 4, 1))], axis=-1
+        )
+        
+        # Create face dict for fitted surface
+        fitted_data = {
+            "u_degree": 3,
+            "v_degree": 3,
+            "num_poles_u": 4,
+            "num_poles_v": 4,
+            "num_knots_u": 2,
+            "num_knots_v": 2,
+            "is_u_periodic": False,
+            "is_v_periodic": False,
+            "u_knots": np.array([0.0, 1.0]),
+            "v_knots": np.array([0.0, 1.0]),
+            "u_mults": np.array([4, 4]),
+            "v_mults": np.array([4, 4]),
+            "poles": fitted_poles_with_weights,
+            "valid": True,
+        }
+        fitted_face_dict = build_bspline_face(fitted_data, idx + 3000)
+        
+        # Compute approximation error by sampling both surfaces
+        canonical_samples = sample_bspline_surface_32x32(canonical_face_dict)
+        fitted_samples = sample_bspline_surface_32x32(fitted_face_dict)
+        approx_error = np.mean((canonical_samples - fitted_samples) ** 2)
+        
+        faces = [
+            ("original", build_bspline_face(raw_data, idx)),
+            ("canonical", canonical_face_dict),
+            ("reconstructed", build_bspline_face(canonical_data, idx + 2000, poles_override=restored_poles)),
+            ("approx_fitted", fitted_face_dict),
+        ]
+        
+        status_msg = f"Index {idx}: valid · Reconstruction MSE {recon_error:.6e} · Approx MSE {approx_error:.6e}"
+    except Exception as exc:
+        # If approximation fails, fall back to original visualization
+        print(f"Approximation failed for index {idx}: {exc}")
+        faces = [
+            ("original", build_bspline_face(raw_data, idx)),
+            ("canonical", canonical_face_dict),
+            ("reconstructed", build_bspline_face(canonical_data, idx + 2000, poles_override=restored_poles)),
+        ]
+        status_msg = f"Index {idx}: valid · Reconstruction MSE {recon_error:.6e} · Approx failed"
+    
     # print(raw_data['poles'] - restored_poles)
     # print(np.linalg.norm(raw_data['poles'] - restored_poles))
     try:
@@ -253,7 +337,7 @@ def _update_visualization(idx: int):
 
         register_unit_cube()
 
-        _set_status(f"Index {idx}: valid · Reconstruction MSE {recon_error:.6e}")
+        _set_status(status_msg)
     except ValueError as exc:
         ps.remove_all_structures()
         _set_status(f"Visualization failed for index {idx}: {exc}")

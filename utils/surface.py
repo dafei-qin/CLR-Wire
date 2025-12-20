@@ -18,7 +18,7 @@ from OCC.Core.TopExp import TopExp_Explorer
 from OCC.Core.Poly import Poly_Triangulation
 from OCC.Core.TColgp import TColgp_Array1OfPnt
 from OCC.Core.TColStd import TColStd_Array1OfReal, TColStd_Array1OfInteger, TColStd_Array2OfReal
-from OCC.Core.GeomAPI import GeomAPI_ProjectPointOnCurve, GeomAPI_IntSS
+from OCC.Core.GeomAPI import GeomAPI_ProjectPointOnCurve, GeomAPI_IntSS, GeomAPI_PointsToBSplineSurface
 from OCC.Core.GeomInt import GeomInt_IntSS 
 from OCC.Core.BRep import BRep_Tool, BRep_Builder
 from OCC.Core.BRepTools import breptools_UVBounds
@@ -33,7 +33,7 @@ from OCC.Core.BRepCheck import BRepCheck_Analyzer
 from OCC.Core.BRepOffsetAPI import BRepOffsetAPI_ThruSections
 from OCC.Core.ShapeAnalysis import ShapeAnalysis_Wire, ShapeAnalysis_FreeBounds
 from OCC.Core.TopAbs import TopAbs_Orientation
-from OCC.Core.GeomAbs import GeomAbs_CurveType, GeomAbs_SurfaceType
+from OCC.Core.GeomAbs import GeomAbs_CurveType, GeomAbs_SurfaceType, GeomAbs_C2
 import sys
 from OCC.Core.TopOpeBRep import TopOpeBRep_FacesIntersector
 from OCC.Core.BRepAdaptor import BRepAdaptor_Curve
@@ -63,6 +63,32 @@ def Compound(faces):
             explorer.Next()
 
     return compound
+
+
+def get_approx_face(points):
+    uv_points_array = TColgp_Array2OfPnt(1, 32, 1, 32)
+    for u_index in range(1, 32 + 1):
+        for v_index in range(1, 32 + 1):
+            pt = points[u_index - 1, v_index - 1]
+            point_3d = gp_Pnt(float(pt[0]), float(pt[1]), float(pt[2]))
+            uv_points_array.SetValue(u_index, v_index, point_3d)
+    approx_face = GeomAPI_PointsToBSplineSurface(uv_points_array, 3, 3, GeomAbs_C2, 5e-2).Surface()
+    num_u_poles = approx_face.NbUPoles()
+    num_v_poles = approx_face.NbVPoles()
+    control_points = np.zeros((num_u_poles * num_v_poles, 3))
+    assert approx_face.UDegree() == approx_face.VDegree() == 3
+    assert num_u_poles == num_v_poles == 4
+    assert (not approx_face.IsUPeriodic() and not approx_face.IsVPeriodic() and not approx_face.IsVRational()
+            and not approx_face.IsVPeriodic())
+    poles = approx_face.Poles()
+    idx = 0
+    for u in range(1, num_u_poles + 1):
+        for v in range(1, num_v_poles + 1):
+            point = poles.Value(u, v)
+            control_points[idx, :] = [point.X(), point.Y(), point.Z()]
+            idx += 1
+    return control_points.tolist()
+
 
 def sample_line(line, num_points=32):
     start = line.FirstParameter()
