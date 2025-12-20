@@ -41,7 +41,7 @@ def scan_npz_files(folder_path: str) -> List[str]:
         print(f"Warning: Folder '{folder_path}' does not exist or is not a directory")
         return []
     
-    npz_files = sorted(folder.glob("*.npz"))
+    npz_files = sorted(folder.rglob("*.npz"))
     npz_files = [str(f) for f in npz_files]
     
     print(f"Found {len(npz_files)} .npz files in {folder_path}")
