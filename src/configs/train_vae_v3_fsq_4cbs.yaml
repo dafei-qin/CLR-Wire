@@ -18,7 +18,7 @@ log_every_step: 50
 
 use_wandb_tracking: true
 wandb_project_name: VAE_V1
-wandb_run_name: train_1219_vae_v3_latent_64_fsq_1k
+wandb_run_name: train_1219_vae_v3_fsq_4cbs
 
 use_fsq: true
 
@@ -53,7 +53,7 @@ model:
         param_raw_dim: [17, 18, 19, 18, 19]
         latent_dim: 64
         fsq_levels: [8,5,5,5]  # Each codebook: 8*5*5*5 = 1000 codes
-        num_codebooks: 1  # 1 codebooks × 4D = 4D (perfect match, no bottleneck!)
+        num_codebooks: 4  # 16 codebooks × 4D = 64D (perfect match, no bottleneck!)
         # With 11 codebooks: each sample uses 11 independent codes
         # Total capacity: much larger than single codebook
         # Reduces information bottleneck: 64D → 1×4D → 1×4D → 64D
@@ -61,7 +61,7 @@ model:
         n_surface_types: 5
         emb_dim: 16
     
-    checkpoint_folder: checkpoints/train_1219_vae_v3_latent_64_fsq_1k
+    checkpoint_folder: checkpoints/train_1219_vae_v3_fsq_4cbs
     checkpoint_file_name: model-03.pt
 
 loss:

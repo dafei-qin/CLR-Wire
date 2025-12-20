@@ -31,7 +31,8 @@ class SurfaceVAE_FSQ(nn.Module):
                  latent_dim=128,         # 潜空间维度
                  n_surface_types=5,      # 曲面种类数
                  emb_dim=16,             # embedding维度
-                 fsq_levels=[8,5,5,5]):  # FSQ量化级别
+                 fsq_levels=[8,5,5,5],   # FSQ量化级别
+                 num_codebooks=1):       # Number of codebooks (for reducing bottleneck)
         super().__init__()
         assert len(param_raw_dim) == n_surface_types
         self.param_raw_dim = param_raw_dim # Input raw parameter dimension for each surface type
@@ -39,6 +40,14 @@ class SurfaceVAE_FSQ(nn.Module):
         self.max_raw_dim = max(param_raw_dim)
         self.latent_dim = latent_dim
         self.fsq_levels = fsq_levels
+        self.num_codebooks = num_codebooks
+        
+        # Validate num_codebooks
+        codebook_dim = len(fsq_levels)
+        effective_dim = codebook_dim * num_codebooks
+        if latent_dim % effective_dim != 0 and latent_dim != effective_dim:
+            print(f"⚠️  Warning: latent_dim ({latent_dim}) is not divisible by "
+                  f"effective_codebook_dim ({effective_dim}). FSQ will add projection layers.")
         
         # 曲面类型 embedding
         self.type_emb = nn.Embedding(n_surface_types, emb_dim)
@@ -58,13 +67,25 @@ class SurfaceVAE_FSQ(nn.Module):
             nn.Linear(128, latent_dim)
         )
         
-        # FSQ量化器
-        # FSQ会自动处理维度投影：latent_dim -> len(fsq_levels) -> latent_dim
-        self.fsq = FSQ(levels=fsq_levels, dim=latent_dim)
+        # FSQ量化器 with multiple codebooks
+        # num_codebooks > 1: splits latent into groups, reducing bottleneck
+        # Example: latent_dim=64, levels=[8,5,5,5] (4D), num_codebooks=16
+        #   → 64D split into 16 groups of 4D each
+        #   → Each group independently quantized with FSQ
+        #   → No projection needed! (64 = 16 * 4)
+        self.fsq = FSQ(levels=fsq_levels, dim=latent_dim, num_codebooks=num_codebooks)
         
         # Codebook信息（用于分析和调试）
         self.codebook_size = self.fsq.codebook_size
-        ic(f"FSQ codebook size: {self.codebook_size}")
+        self.effective_codebook_dim = self.fsq.effective_codebook_dim
+        ic(f"FSQ config: levels={fsq_levels}, num_codebooks={num_codebooks}")
+        ic(f"  Single codebook size: {self.codebook_size}")
+        ic(f"  Effective dimension: {self.effective_codebook_dim}")
+        ic(f"  Total capacity: {self.codebook_size}^{num_codebooks} (independent groups)")
+        if self.fsq.has_projections:
+            ic(f"  Using projections: {latent_dim} ↔ {self.effective_codebook_dim}")
+        else:
+            ic(f"  No projection needed (perfect fit!)")
         
         # Decoder
         self.decoder = nn.Sequential(
@@ -121,9 +142,16 @@ class SurfaceVAE_FSQ(nn.Module):
         # FSQ expects at least 3D input (batch, seq, dim) or 4D for images
         # For 1D latent vectors, we add a dummy sequence dimension
         z_continuous = z_continuous.unsqueeze(1)  # (B, 1, latent_dim)
-        z_quantized, indices = self.fsq(z_continuous)  # (B, 1, latent_dim), (B, 1)
+        z_quantized, indices = self.fsq(z_continuous)  # (B, 1, latent_dim), (B, 1) or (B, 1, num_codebooks)
         z_quantized = z_quantized.squeeze(1)  # (B, latent_dim)
-        indices = indices.squeeze(1)  # (B,)
+        
+        # Handle indices shape based on num_codebooks
+        if self.num_codebooks > 1:
+            # indices: (B, 1, num_codebooks) → (B, num_codebooks)
+            indices = indices.squeeze(1)  # (B, num_codebooks)
+        else:
+            # indices: (B, 1) → (B,)
+            indices = indices.squeeze(1)  # (B,)
         
         return z_quantized, indices
 
@@ -232,14 +260,25 @@ class SurfaceVAE_FSQ(nn.Module):
         计算codebook利用率
         
         Args:
-            indices: (B,) or (N,) codebook indices from a batch or dataset
+            indices: (B,) or (B, num_codebooks) codebook indices from a batch or dataset
             
         Returns:
             usage_ratio: float, proportion of codebook entries used
             unique_codes: int, number of unique codes used
         """
-        unique_codes = torch.unique(indices).numel()
-        usage_ratio = unique_codes / self.codebook_size
+        # Handle multiple codebooks: indices shape is (B, num_codebooks)
+        if indices.ndim == 2:
+            # For each codebook, count unique codes
+            usage_per_codebook = []
+            for i in range(indices.shape[1]):
+                unique_codes = torch.unique(indices[:, i]).numel()
+                usage_per_codebook.append(unique_codes / self.codebook_size)
+            usage_ratio = sum(usage_per_codebook) / len(usage_per_codebook)
+            unique_codes = int(sum([torch.unique(indices[:, i]).numel() for i in range(indices.shape[1])]) / indices.shape[1])
+        else:
+            # Single codebook
+            unique_codes = torch.unique(indices).numel()
+            usage_ratio = unique_codes / self.codebook_size
         return usage_ratio, unique_codes
 
     def indices_to_latent(self, indices):
@@ -247,15 +286,20 @@ class SurfaceVAE_FSQ(nn.Module):
         从codebook索引恢复latent code
         
         Args:
-            indices: (B,) codebook indices
+            indices: (B,) or (B, num_codebooks) codebook indices
             
         Returns:
             z: (B, latent_dim) latent codes
         """
         # FSQ的indices_to_codes方法可以从索引恢复codes
-        indices = indices.unsqueeze(1)  # (B, 1)
-        z = self.fsq.indices_to_codes(indices, project_out=True)  # (B, 1, latent_dim)
-        z = z.squeeze(1)  # (B, latent_dim)
+        if indices.ndim == 1:
+            indices = indices.unsqueeze(1)  # (B, 1)
+        z = self.fsq.indices_to_codes(indices, project_out=True)  # (B, num_codebooks, latent_dim) or (B, 1, latent_dim)
+        if z.ndim == 3 and z.shape[1] == 1:
+            z = z.squeeze(1)  # (B, latent_dim)
+        elif z.ndim == 3:
+            # Multiple codebooks, z is already in correct shape from FSQ
+            pass
         return z
 
 
@@ -265,48 +309,45 @@ if __name__ == "__main__":
     print("Testing SurfaceVAE_FSQ with different configurations")
     print("=" * 60)
     
-    # 配置1：小codebook (快速实验)
-    print("\n[Config 1] Small codebook")
-    fsq_levels_small = [8, 6, 5, 4]  # codebook_size = 960
+    # 配置1：单codebook + 小levels（会有瓶颈）
+    print("\n[Config 1] Single codebook (has bottleneck)")
     model1 = SurfaceVAE_FSQ(
-        param_raw_dim=[17, 18, 19, 19, 18],  # plane, cylinder, cone, torus, sphere
+        param_raw_dim=[17, 18, 19, 19, 18],
         param_dim=32, 
-        latent_dim=128, 
+        latent_dim=64, 
         n_surface_types=5, 
         emb_dim=16,
-        fsq_levels=fsq_levels_small
+        fsq_levels=[8, 5, 5, 5],  # 4D
+        num_codebooks=1  # 64 → 4 → 64 (huge bottleneck!)
     )
-    print(f"Codebook size: {model1.codebook_size}")
     
-    # 配置2：中等codebook (推荐)
-    print("\n[Config 2] Medium codebook (recommended)")
-    fsq_levels_medium = [8, 8, 8, 5, 5, 5]  # codebook_size = 128,000
+    # 配置2：Multiple codebooks - 完美匹配（推荐）⭐
+    print("\n[Config 2] Multiple codebooks - Perfect fit (RECOMMENDED)")
     model2 = SurfaceVAE_FSQ(
         param_raw_dim=[17, 18, 19, 19, 18],
         param_dim=32, 
-        latent_dim=128, 
+        latent_dim=64, 
         n_surface_types=5, 
         emb_dim=16,
-        fsq_levels=fsq_levels_medium
+        fsq_levels=[8, 5, 5, 5],  # 4D per codebook
+        num_codebooks=16  # 16 * 4 = 64, perfect match!
     )
-    print(f"Codebook size: {model2.codebook_size}")
     
-    # 配置3：大codebook (高精度)
-    print("\n[Config 3] Large codebook")
-    fsq_levels_large = [8, 8, 8, 8, 5, 5, 5, 5]  # codebook_size = 2,560,000
+    # 配置3：Multiple codebooks - 更大latent
+    print("\n[Config 3] Multiple codebooks - Larger latent")
     model3 = SurfaceVAE_FSQ(
         param_raw_dim=[17, 18, 19, 19, 18],
         param_dim=32, 
         latent_dim=128, 
         n_surface_types=5, 
         emb_dim=16,
-        fsq_levels=fsq_levels_large
+        fsq_levels=[8, 5, 5, 5],  # 4D per codebook
+        num_codebooks=32  # 32 * 4 = 128
     )
-    print(f"Codebook size: {model3.codebook_size}")
     
-    # 测试前向传播
+    # 测试前向传播 - 使用Config 2 (recommended)
     print("\n" + "=" * 60)
-    print("Testing forward pass")
+    print("Testing forward pass with Config 2")
     print("=" * 60)
     
     batch_size = 4
@@ -316,6 +357,7 @@ if __name__ == "__main__":
     print(f"\nInput shape: {params.shape}")
     print(f"Surface types: {surface_type}")
     
+    print("\n--- Testing Config 2 (Multiple Codebooks) ---")
     with torch.no_grad():
         recon, mask, class_logits, is_closed_logits, z_quantized, indices = model2(params, surface_type)
     

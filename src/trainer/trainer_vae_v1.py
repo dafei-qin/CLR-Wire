@@ -311,10 +311,21 @@ class Trainer_vae_v1(BaseTrainer):
                 codebook_usage = None
                 unique_codes = None
                 if self.use_fsq and 'indices' in locals():
-                    unique_codes_tensor = torch.unique(indices)
-                    unique_codes = unique_codes_tensor.numel()
-                    codebook_size = self.raw_model.codebook_size
-                    codebook_usage = unique_codes / codebook_size
+                    # Handle both single and multiple codebooks
+                    # indices can be (B,) or (B, num_codebooks)
+                    if indices.ndim == 1:
+                        unique_codes_tensor = torch.unique(indices)
+                        unique_codes = unique_codes_tensor.numel()
+                        codebook_size = self.raw_model.codebook_size
+                        codebook_usage = unique_codes / codebook_size
+                    else:
+                        # Multiple codebooks: average usage across all codebooks
+                        usage_per_cb = []
+                        for i in range(indices.shape[1]):
+                            unique_codes_tensor = torch.unique(indices[:, i])
+                            usage_per_cb.append(unique_codes_tensor.numel() / self.raw_model.codebook_size)
+                        codebook_usage = sum(usage_per_cb) / len(usage_per_cb)
+                        unique_codes = int(sum([torch.unique(indices[:, i]).numel() for i in range(indices.shape[1])]) / indices.shape[1])
                                                         
                 self.log_loss(total_loss, total_accuracy, accuracy_is_closed, loss_recon.item(), 
                             loss_cls.item(), loss_kl.item(), loss_l2norm.item(), 
@@ -444,9 +455,20 @@ class Trainer_vae_v1(BaseTrainer):
                 val_unique_codes = None
                 if self.use_fsq and len(all_val_indices) > 0:
                     all_val_indices = torch.cat(all_val_indices)
-                    val_unique_codes_tensor = torch.unique(all_val_indices)
-                    val_unique_codes = val_unique_codes_tensor.numel()
-                    val_codebook_usage = val_unique_codes / self.raw_model.codebook_size
+                    
+                    # Handle both single and multiple codebooks
+                    if all_val_indices.ndim == 1:
+                        val_unique_codes_tensor = torch.unique(all_val_indices)
+                        val_unique_codes = val_unique_codes_tensor.numel()
+                        val_codebook_usage = val_unique_codes / self.raw_model.codebook_size
+                    else:
+                        # Multiple codebooks: average usage across all codebooks
+                        usage_per_cb = []
+                        for i in range(all_val_indices.shape[1]):
+                            unique_codes_tensor = torch.unique(all_val_indices[:, i])
+                            usage_per_cb.append(unique_codes_tensor.numel() / self.raw_model.codebook_size)
+                        val_codebook_usage = sum(usage_per_cb) / len(usage_per_cb)
+                        val_unique_codes = int(sum([torch.unique(all_val_indices[:, i]).numel() for i in range(all_val_indices.shape[1])]) / all_val_indices.shape[1])
 
                 # Print validation results
                 print_msg = (f'{get_current_time()} valid loss: {total_val_loss:.3f} '

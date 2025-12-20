@@ -28,8 +28,8 @@ isDebug = True if sys.gettrace() else False
 
 if isDebug:
     args.use_wandb_tracking = True
-    args.batch_size = 2
-    args.num_workers = 1
+    # args.batch_size = 2
+    # args.num_workers = 1
 
 
 train_sampler = None
