@@ -76,10 +76,10 @@ def get_approx_face(points):
     num_u_poles = approx_face.NbUPoles()
     num_v_poles = approx_face.NbVPoles()
     control_points = np.zeros((num_u_poles * num_v_poles, 3))
-    assert approx_face.UDegree() == approx_face.VDegree() == 3
-    assert num_u_poles == num_v_poles == 4
+    assert approx_face.UDegree() == approx_face.VDegree() == 3, f'UDegree: {approx_face.UDegree()}, VDegree: {approx_face.VDegree()}'
+    assert num_u_poles == num_v_poles == 4, f'num_u_poles: {num_u_poles}, num_v_poles: {num_v_poles}'
     assert (not approx_face.IsUPeriodic() and not approx_face.IsVPeriodic() and not approx_face.IsVRational()
-            and not approx_face.IsVPeriodic())
+            and not approx_face.IsVPeriodic()), f'IsUPeriodic: {approx_face.IsUPeriodic()}, IsVPeriodic: {approx_face.IsVPeriodic()}, IsVRational: {approx_face.IsVRational()}'
     poles = approx_face.Poles()
     idx = 0
     for u in range(1, num_u_poles + 1):
