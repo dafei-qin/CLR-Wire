@@ -124,19 +124,6 @@ SURFACE_TYPE_MAP_INV = {
 }
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 def decode_sample(sample: torch.Tensor):
     global _log_scale
     valid_tensor = sample[..., 0]

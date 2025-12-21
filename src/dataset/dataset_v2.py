@@ -624,7 +624,7 @@ class dataset_compound(Dataset):
         
         # Step 2: Rotate to canonical orientation
         reshaped = poles_xyz.reshape(-1, 3)
-        rotated = reshaped @ rotation.T
+        rotated = rotation[None] @ reshaped[..., None]
         rotated_poles = rotated.reshape(poles_xyz.shape)
         
         # Step 3: Compute scale (max dimension of bounding box)
@@ -994,12 +994,6 @@ class dataset_compound(Dataset):
             
             # For bspline, we store transformation info in P, D, X, UV positions
             # This allows us to recover the original surface later
-            # P: shift (centroid)
-            # D: rotation matrix row 0
-            # X: rotation matrix row 1  
-            # UV[0:3]: rotation matrix row 2
-            # UV[3]: scale
-            # UV[4:8]: padding
             P = shift
             D = rotation[0, :]
             X = rotation[1, :]
@@ -1007,22 +1001,10 @@ class dataset_compound(Dataset):
             UV[0:3] = rotation[2, :]
             UV[3] = scale
                 
-                
-            # except Exception as e:
-            #     # Failed to process bspline, skip
-            #     print(f"Failed to process bspline_surface: {e}")
-            #     if self.detect_closed:
-            #         return None, -1, None, None
-            #     else:
-            #         return None, -1
-        
+
         scalar_params = np.array(scalar_params, dtype=np.float64)
         
-        # Pad scalar parameters to max_scalar_dim
-        # if len(scalar_params) < self.max_scalar_dim:
-        #     padding = np.zeros(self.max_scalar_dim - len(scalar_params), dtype=np.float64)
-        #     scalar_params = np.concatenate([scalar_params, padding])
-        
+
         # Concatenate all parameters: P + D + UV + scalar
         params = np.concatenate([P, D, X, UV, scalar_params])
         # Just control the max value of params to be 10

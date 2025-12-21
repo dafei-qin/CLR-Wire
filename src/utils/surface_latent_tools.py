@@ -62,10 +62,12 @@ def decode_only(model, latent_params):
     assert not torch.isnan(params_raw_recon).any(), "params_raw_recon contains inf/nan" + str(params_raw_recon)
     ordered_params = None
     # Class of params: Location, Direction, uv, scalar
+    # Note: For bspline_surface, scalar has 48 dims (control points), so we need max(2, 48) = 48
+    max_scalar_dim = 48  # To accommodate bspline_surface control points
     ordered_locations = torch.zeros((params_raw_recon.shape[0], 3), device=params_raw_recon.device, dtype=params_raw_recon.dtype)
     ordered_directions = torch.zeros((params_raw_recon.shape[0], 3, 3), device=params_raw_recon.device, dtype=params_raw_recon.dtype)
     ordered_uvs = torch.zeros((params_raw_recon.shape[0], 4), device=params_raw_recon.device, dtype=params_raw_recon.dtype)
-    ordered_scalars = torch.zeros((params_raw_recon.shape[0], 2), device=params_raw_recon.device, dtype=params_raw_recon.dtype)
+    ordered_scalars = torch.zeros((params_raw_recon.shape[0], max_scalar_dim), device=params_raw_recon.device, dtype=params_raw_recon.dtype)
 
     for surface_type in surface_type_pred.unique():
         type_mask = surface_type_pred == surface_type
@@ -82,15 +84,23 @@ def decode_only(model, latent_params):
         ordered_directions[type_mask] = surface_params['direction']
         # ordered_uvs.masked_scatter(type_mask, surface_params['uv'])
         ordered_uvs[type_mask] = surface_params['uv']
-        if surface_type == 0: # No scalar
+        
+        # Handle different surface types
+        if surface_type == 0:  # plane: No scalar
             pass
-        elif surface_type == 2 or surface_type == 4:
+        elif surface_type == 5:  # bspline_surface: 48D control points
+            ordered_scalars[type_mask, :48] = surface_params['scalar']
+        elif surface_type == 2 or surface_type == 4:  # cone, torus: 2D scalar
             # ordered_scalars.masked_scatter(type_mask, surface_params['scalar'])
-            ordered_scalars[type_mask] = surface_params['scalar']
-        elif surface_type == 1 or surface_type == 3:
-            surface_params['scalar'] = torch.cat([surface_params['scalar'], torch.zeros((surface_params['scalar'].shape[0], 1), device=surface_params['scalar'].device, dtype=surface_params['scalar'].dtype)], dim=-1)
-            # ordered_scalars.masked_scatter(type_mask, surface_params['scalar'])
-            ordered_scalars[type_mask] = surface_params['scalar']
+            ordered_scalars[type_mask, :2] = surface_params['scalar']
+        elif surface_type == 1 or surface_type == 3:  # cylinder, sphere: 1D scalar (pad to 2D)
+            surface_params_scalar_padded = torch.cat([
+                surface_params['scalar'], 
+                torch.zeros((surface_params['scalar'].shape[0], 1), 
+                           device=surface_params['scalar'].device, 
+                           dtype=surface_params['scalar'].dtype)
+            ], dim=-1)
+            ordered_scalars[type_mask, :2] = surface_params_scalar_padded
 
 
         

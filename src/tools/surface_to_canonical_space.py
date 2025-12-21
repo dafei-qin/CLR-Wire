@@ -333,7 +333,11 @@ def from_canonical(surface_canonical: Dict, shift: np.ndarray, rotation: np.ndar
     
     # Skip bspline surfaces
     if surface_type == 'bspline_surface':
-        raise NotImplementedError("B-spline surfaces are not supported yet")
+        poles = np.array(surface_canonical['poles'])
+        poles[..., :3] = (poles[..., :3] * scale) @ rotation + shift
+        surface = copy.deepcopy(surface_canonical)
+        surface['poles'] = poles.tolist()
+        return surface
     
     # Create a deep copy
     surface = copy.deepcopy(surface_canonical)

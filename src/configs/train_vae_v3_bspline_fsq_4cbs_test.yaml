@@ -43,10 +43,12 @@ data_train:
         detect_closed: true
 
 data_val:
-    name: src.dataset.dataset_v2.dataset_compound_cache
+    name: src.dataset.dataset_v2.dataset_compound
     params:
-        cache_path: ../data/logan_jsons_cache_2/abc_cache_2_test.npz
+        json_dir: ../data/logan_jsons/abc_test/0009
+        canonical: true
         detect_closed: true
+        bspline_fit_threshold: 1e-3
 
 
 

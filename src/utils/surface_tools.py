@@ -1,5 +1,68 @@
 import torch
 
+def cubic_bspline_basis(t):
+    """
+    Compute cubic B-spline basis functions (Bernstein polynomials) for parameter t.
+    For uniform open knot vector [0,0,0,0,1,1,1,1], this gives standard cubic Bezier basis.
+    
+    Args:
+        t: (N,) Parameter values in [0, 1]
+    
+    Returns:
+        basis: (N, 4) Basis function values, each row sums to 1
+    """
+    # Precompute powers for efficiency
+    t2 = t * t
+    t3 = t2 * t
+    one_minus_t = 1.0 - t
+    one_minus_t2 = one_minus_t * one_minus_t
+    one_minus_t3 = one_minus_t2 * one_minus_t
+    
+    # Bernstein basis functions (cubic)
+    b0 = one_minus_t3                          # (1-t)^3
+    b1 = 3.0 * t * one_minus_t2                # 3t(1-t)^2
+    b2 = 3.0 * t2 * one_minus_t                # 3t^2(1-t)
+    b3 = t3                                     # t^3
+    
+    return torch.stack([b0, b1, b2, b3], dim=-1)
+
+def sample_bspline_surface(control_points, num_u, num_v):
+    """
+    Sample a cubic B-spline surface with 4x4 control points.
+    Uses tensor product of cubic Bernstein basis functions.
+    
+    Args:
+        control_points: (..., 4, 4, 3) Control points in any shape
+                       Last 3 dims must be (4, 4, 3) for 4x4 grid with xyz coords
+        num_u: Number of samples in u direction
+        num_v: Number of samples in v direction
+    
+    Returns:
+        points: (..., num_u, num_v, 3) Sampled surface points
+    """
+    device = control_points.device
+    dtype = control_points.dtype
+    
+    # Generate parameter values in [0, 1]
+    u = torch.linspace(0, 1, num_u, device=device, dtype=dtype)
+    v = torch.linspace(0, 1, num_v, device=device, dtype=dtype)
+    
+    # Compute basis functions: (num_u, 4) and (num_v, 4)
+    Bu = cubic_bspline_basis(u)  # (num_u, 4)
+    Bv = cubic_bspline_basis(v)  # (num_v, 4)
+    
+    # Tensor product evaluation: points = Bu @ control_points @ Bv^T
+    # This computes: sum_i sum_j Bu[u,i] * Bv[v,j] * control_points[i,j,:]
+    # 
+    # Using einsum for efficient batch computation:
+    # 'ui' : (num_u, 4) - u basis
+    # '...ijk' : (..., 4, 4, 3) - control points (batch, i_poles, j_poles, xyz)
+    # 'vj' : (num_v, 4) - v basis
+    # Output: (..., num_u, num_v, 3)
+    points = torch.einsum('ui,...ijk,vj->...uvk', Bu, control_points, Bv)
+    
+    return points
+
 def plane_d0(u, v, location, X, Y, Z):
     """Plane: P(u,v) = Location + u*X + v*Y"""
     return location + u[..., None] * X + v[..., None] * Y
@@ -30,7 +93,7 @@ def torus_d0(u, v, location, X, Y, Z, major_radius, minor_radius):
     return location + (R * cos_u)[..., None] * X + (R * sin_u)[..., None] * Y + (minor_radius * torch.sin(v))[..., None] * Z
 
 
-SURFACE_TYPE_MAP = {'plane': 0, 'cylinder': 1, 'cone': 2, 'sphere': 3, 'torus': 4}
+SURFACE_TYPE_MAP = {'plane': 0, 'cylinder': 1, 'cone': 2, 'sphere': 3, 'torus': 4, 'bspline_surface': 5}
 SURFACE_TYPE_MAP_INV = {v: k for k, v in SURFACE_TYPE_MAP.items()}
 
 
@@ -50,6 +113,24 @@ def safe_normalize(v, dim=-1, eps=1e-6):
 def recover_surface_from_params(params, surface_type_idx):
     """Recover surface parameters from parameter vector (torch, differentiable)"""
     surface_type = SURFACE_TYPE_MAP_INV.get(surface_type_idx.item() if isinstance(surface_type_idx, torch.Tensor) else surface_type_idx, 'plane')
+    
+    # Special handling for bspline_surface
+    if surface_type == 'bspline_surface':
+        # For bspline, params[17:65] are control points (48 dims)
+        # Return them flattened as 'scalar' for consistency
+        
+        # For bspline, we return control points as 'scalar'
+        control_points = params[..., 17:65]  # (batch, 48)
+        
+        # Dummy UV (not meaningful for bspline in canonical space)
+        
+        return {
+            'location': [],
+            'direction': [],
+            'uv': torch.stack([0, 1, 0, 1], dim=-1),
+            'scalar': control_points.numpy().tolist(),  # 48D control points
+            'type': surface_type,
+        }
     
     P = params[..., :3]
     D = safe_normalize(params[..., 3:6])
@@ -124,9 +205,43 @@ def recover_surface_from_params(params, surface_type_idx):
         'type': surface_type,
     }
 
+def params_to_samples_with_rts(rotations, scales, shifts, params, surface_type_idx,  num_samples_u, num_samples_v):
+    points = params_to_samples(params, surface_type_idx, num_samples_u, num_samples_v)
+    if points.shape[0] == 1:
+        rotations = rotations.unsqueeze(0)
+        scales = scales.unsqueeze(0)
+        shifts = shifts.unsqueeze(0)
+    
+    points = (rotations.transpose(-1, -2)[:, None, None] @ points[..., None])[..., 0] * scales[:, None, None, None] + shifts[:, None, None]
+    return points
+
 def params_to_samples(params, surface_type_idx, num_samples_u, num_samples_v):
     """Sample points from surface parameters"""
     assert torch.isfinite(params).all(), "params contains inf/nan" + str(params)
+    
+    # Get surface type string
+    surface_type_idx_scalar = surface_type_idx.item() if isinstance(surface_type_idx, torch.Tensor) else surface_type_idx
+    surface_type = SURFACE_TYPE_MAP_INV.get(surface_type_idx_scalar, 'plane')
+    
+    # Special handling for bspline_surface
+    if surface_type == 'bspline_surface':
+        # Extract 4x4x3 control points from params[17:65] (48 dimensions)
+        # params structure for bspline: [P(3), D(3), X(3), UV(8), control_points(48)]
+        control_points_flat = params[..., 17:65]  # (..., 48)
+        
+        # Reshape to 4x4x3 grid
+        # Handle both single sample (..., 48) and batch (..., N, 48) cases
+        original_shape = control_points_flat.shape[:-1]  # Get all dims except last
+        control_points = control_points_flat.reshape(*original_shape, 4, 4, 3)
+        
+        # Sample the B-spline surface
+        # Output: (..., num_samples_u, num_samples_v, 3)
+        points = sample_bspline_surface(control_points, num_samples_u, num_samples_v)
+        
+        assert torch.isfinite(points).all(), "bspline points contains inf/nan"
+        return points
+    
+    # Standard parametric surface handling
     surface_params = recover_surface_from_params(params, surface_type_idx)
     
     location = surface_params['location']
@@ -135,7 +250,6 @@ def params_to_samples(params, surface_type_idx, num_samples_u, num_samples_v):
     scalar = surface_params['scalar']
     # Note, perform exp on all scalars to follow the pre-process function in dataset_v1 L36: SURFACE_PARAM_SCHEMAS
     # scalar = torch.exp(scalar)
-    surface_type = surface_params['type']
     
     assert torch.isfinite(surface_params['uv']).all(), "uv contains inf/nan" + str(surface_params['uv'])
     device = params.device
