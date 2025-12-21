@@ -37,17 +37,15 @@ trainer:
 
 # Dataset configuration using dynamic loading
 data_train:
-    name: src.dataset.dataset_v1.dataset_compound_cache
+    name: src.dataset.dataset_v2.dataset_compound_cache
     params:
-        cache_path: ../data/logan_jsons_cache/abc_cache_w_closed.npz
+        cache_path: ../data/logan_jsons_cache_2/abc_cache_2.npz
         detect_closed: true
 
 data_val:
-    name: src.dataset.dataset_v1.dataset_compound
+    name: src.dataset.dataset_v2.dataset_compound_cache
     params:
-        json_dir: ../data/logan_jsons/abc_test/  # Use full test set, not just 0009
-        max_num_surfaces: 500
-        canonical: true
+        cache_path: ../data/logan_jsons_cache_2/abc_cache_2.npz
         detect_closed: true
 
 

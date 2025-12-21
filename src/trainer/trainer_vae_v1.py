@@ -115,11 +115,19 @@ class Trainer_vae_v1(BaseTrainer):
             }
             # Create weight tensor indexed by surface type
             type_weight_tensor = torch.ones(6, dtype=torch.float32)
-            for type_name, weight in type_weight.items():
+            # Convert NestedDictToClass to dict if needed
+            if hasattr(type_weight, '__dict__'):
+                type_weight_dict = vars(type_weight)
+            elif isinstance(type_weight, dict):
+                type_weight_dict = type_weight
+            else:
+                type_weight_dict = dict(type_weight)
+            
+            for type_name, weight in type_weight_dict.items():
                 if type_name in type_name_to_idx:
                     type_weight_tensor[type_name_to_idx[type_name]] = weight
             self.type_weight = nn.Parameter(type_weight_tensor.cuda(), requires_grad=False)
-            print(f"✓ Per-type reconstruction weights: {type_weight}")
+            print(f"✓ Per-type reconstruction weights: {type_weight_dict}")
         else:
             self.type_weight = None
 

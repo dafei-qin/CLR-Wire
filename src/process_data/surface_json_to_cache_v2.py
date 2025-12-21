@@ -82,6 +82,7 @@ def main():
        if len(params_tensor) == 0:
            continue
        
+       assert params_tensor.shape[0] == types_tensor.shape[0] == shifts.shape[0] == rotations.shape[0] == scales.shape[0] == is_u_closed_tensor.shape[0] == is_v_closed_tensor.shape[0]
        # Count types
        for type_idx in types_tensor.numpy():
            type_counter[int(type_idx)] += 1

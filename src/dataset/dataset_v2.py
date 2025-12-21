@@ -929,7 +929,14 @@ class dataset_compound(Dataset):
             )
             
             # Transform to canonical space
-            poles_canonical, rotation, shift, scale = self._canonicalize_bspline_poles(poles.copy(), surface)
+            try:
+                poles_canonical, rotation, shift, scale = self._canonicalize_bspline_poles(poles.copy(), surface)
+            except Exception as e:
+                print(f'Canonicalize bspline poles failed: {e}')
+                if self.detect_closed:
+                    return None, -1, None, None
+                else:
+                    return None, -1
             
             # Rebuild surface with canonical poles (now in [-1, 1] range)
             surface_canonical = self._build_occ_bspline_surface(
