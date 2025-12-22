@@ -37,6 +37,7 @@ from OCC.Core.GeomAbs import GeomAbs_CurveType, GeomAbs_SurfaceType, GeomAbs_C2
 import sys
 from OCC.Core.TopOpeBRep import TopOpeBRep_FacesIntersector
 from OCC.Core.BRepAdaptor import BRepAdaptor_Curve
+from OCC.Extend.DataExchange import write_step_file
 
 # from occwl.face import Face
 import polyscope as ps
@@ -63,6 +64,53 @@ def Compound(faces):
             explorer.Next()
 
     return compound
+
+
+def write_to_step(surfaces_dict, output_path, verbose=True):
+    """
+    Write surfaces to a STEP file.
+    
+    Args:
+        surfaces_dict: Dictionary of surfaces with 'surface' key containing TopoDS_Face objects
+        output_path: Path to output STEP file
+        verbose: Whether to print status messages
+    
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        # Collect all valid faces
+        face_list = []
+        for surface_key, surface_data in surfaces_dict.items():
+            if 'surface' in surface_data and surface_data['surface'] is not None:
+                face_list.append(surface_data['surface'])
+        
+        if not face_list:
+            if verbose:
+                print(f"Warning: No valid surfaces to write to {output_path}")
+            return False
+        
+        # Build compound from faces
+        compound = Compound(face_list)
+        
+        # Write to STEP file
+        write_step_file(compound, str(output_path))
+        
+        if verbose:
+            print(f"Successfully wrote {len(face_list)} surfaces to {output_path}")
+        
+        return True
+        
+    except Exception as e:
+        if verbose:
+            print(f"Error writing STEP file {output_path}: {e}")
+            traceback.print_exc()
+        return False
+
+
+def write_to_step(faces, step_filename):
+    compound = Compound(faces)
+    write_step_file(compound, step_filename)
 
 
 def get_approx_face(points):

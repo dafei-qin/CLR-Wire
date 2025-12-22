@@ -9,6 +9,7 @@ import polyscope.imgui as psim
 import sys
 import json
 import os
+import traceback
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 sys.path.append('/home/qindafei/CAD/CLR-Wire')
 sys.path.append(r'C:\drivers\CAD\CLR-Wire')
@@ -20,6 +21,7 @@ from src.utils.config import NestedDictToClass, load_config
 from src.utils.import_tools import load_model_from_config, load_dataset_from_config
 from src.utils.surface_tools import params_to_samples_with_rts
 from src.utils.rts_tools import RotationCodebook, TranslationCodebook, ScaleCodebook
+from utils.surface import write_to_step
 from utils.surface import visualize_json_interset
 from pathlib import Path
 
@@ -107,6 +109,9 @@ rotation_codebook = None
 translation_codebook = None
 scale_codebook = None
 rts_quantization_errors = {}  # Store quantization error statistics
+
+# STEP export configuration
+export_folder_path = "./assets/temp/step_exports"  # Default export folder path
 
 
 def process_sample(idx):
@@ -493,6 +498,47 @@ def resample_model():
         return resampled_json_data, resampled_surfaces
 
 
+def export_surfaces_to_step():
+    """Export current GT, dataset GT, and recovered surfaces to STEP files"""
+    global gt_surfaces, pipeline_surfaces, recovered_surfaces, export_folder_path, current_idx, dataset
+    
+    try:
+        # Create export folder if it doesn't exist
+        export_path = Path(export_folder_path)
+        export_path.mkdir(parents=True, exist_ok=True)
+        
+        # Get the current file name (without extension)
+        json_path = Path(dataset.json_names[current_idx])
+        file_stem = json_path.stem
+        
+        # Export GT surfaces
+        gt_output = export_path / f"{file_stem}_gt.step"
+        success_gt = write_to_step(gt_surfaces, gt_output, verbose=True)
+        
+        # Export dataset GT (pipeline) surfaces
+        pipeline_output = export_path / f"{file_stem}_dataset_gt.step"
+        success_pipeline = write_to_step(pipeline_surfaces, pipeline_output, verbose=True)
+        
+        # Export recovered surfaces
+        recovered_output = export_path / f"{file_stem}_reconstructed.step"
+        success_recovered = write_to_step(recovered_surfaces, recovered_output, verbose=True)
+        
+        # Print summary
+        print(f"\n{'='*70}")
+        print(f"STEP Export Summary (Index {current_idx}):")
+        print(f"  GT: {'✓' if success_gt else '✗'} {gt_output}")
+        print(f"  Dataset GT: {'✓' if success_pipeline else '✗'} {pipeline_output}")
+        print(f"  Reconstructed: {'✓' if success_recovered else '✗'} {recovered_output}")
+        print(f"{'='*70}\n")
+        
+        return success_gt and success_pipeline and success_recovered
+        
+    except Exception as e:
+        print(f"Error during STEP export: {e}")
+        traceback.print_exc()
+        return False
+
+
 def update_visualization():
     """Update the visualization with current index"""
     global current_idx, pending_idx, gt_group, recovered_group, pipeline_group
@@ -625,6 +671,7 @@ def callback():
     global resampled_surfaces, pred_is_closed, show_closed_colors, pending_idx
     global show_gt_samples, show_pred_samples, show_pipeline_samples, num_samples
     global tokenize_rts, use_tokenized_rts, rts_quantization_errors
+    global export_folder_path
     
     psim.Text("VAE V2 Surface Reconstruction Test")
     psim.Separator()
@@ -657,6 +704,16 @@ def callback():
         ps.remove_all_structures()
         resampled_surfaces = {}
         resample_model()
+    
+    # STEP export controls
+    psim.Separator()
+    psim.Text("=== STEP Export ===")
+    changed, export_folder_path = psim.InputText("Export Folder", export_folder_path)
+    
+    if psim.Button("Export to STEP"):
+        export_surfaces_to_step()
+    
+    psim.TextWrapped(f"Will export: *_gt.step, *_dataset_gt.step, *_reconstructed.step")
     
     # Group visibility controls
     if gt_group is not None:
