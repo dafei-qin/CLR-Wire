@@ -144,6 +144,12 @@ def process_sample(idx):
     scale_quantized = None
     
     if tokenize_rts and rotation_codebook is not None:
+        # Debug: print shapes
+        if False:  # Set to True for debugging
+            print(f"  rotation shape: {rotation.shape}")
+            print(f"  shift shape: {shift.shape}")
+            print(f"  scale shape: {scale.shape}")
+        
         # Encode RTS to indices
         rot_indices = rotation_codebook.encode(rotation, batch_size=10000, verbose=False)
         trans_indices = translation_codebook.encode(shift, batch_size=10000, verbose=False)

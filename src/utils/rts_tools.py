@@ -338,6 +338,16 @@ class RotationCodebook:
         if not self.is_fitted:
             raise RuntimeError("Codebook not fitted yet!")
         
+        # Ensure rotations has correct shape
+        if rotations.ndim == 2:
+            # Single rotation matrix (3, 3) -> add batch dimension
+            rotations = rotations.reshape(1, 3, 3)
+        elif rotations.ndim != 3:
+            raise ValueError(f"Expected rotations to have shape (N, 3, 3), got {rotations.shape}")
+        
+        assert rotations.shape[1] == 3 and rotations.shape[2] == 3, \
+            f"Expected rotations to have shape (N, 3, 3), got {rotations.shape}"
+        
         N = rotations.shape[0]
         quats = self._rotation_to_quat(rotations)
         
@@ -662,6 +672,16 @@ class TranslationCodebook:
         if not self.is_fitted:
             raise RuntimeError("Codebook not fitted yet!")
         
+        # Ensure translations has correct shape
+        if translations.ndim == 1:
+            # If 1D, reshape to (N, 1) and replicate to (N, 3)
+            translations = np.tile(translations.reshape(-1, 1), (1, 3))
+        elif translations.ndim > 2:
+            # If more than 2D, flatten and reshape
+            translations = translations.reshape(-1, 3)
+        
+        assert translations.shape[1] == 3, f"Expected translations to have 3 dimensions, got shape {translations.shape}"
+        
         N = translations.shape[0]
         
         # Clip to bounds
@@ -959,6 +979,16 @@ class ScaleCodebook:
         """
         if not self.is_fitted:
             raise RuntimeError("Codebook not fitted yet!")
+        
+        # Ensure scales has correct shape
+        if scales.ndim == 1:
+            # If 1D, reshape to (N, 1) and replicate to (N, 3)
+            scales = np.tile(scales.reshape(-1, 1), (1, 3))
+        elif scales.ndim > 2:
+            # If more than 2D, flatten and reshape
+            scales = scales.reshape(-1, 3)
+        
+        assert scales.shape[1] == 3, f"Expected scales to have 3 dimensions, got shape {scales.shape}"
         
         N = scales.shape[0]
         
