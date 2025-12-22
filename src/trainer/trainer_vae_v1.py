@@ -478,7 +478,7 @@ class Trainer_vae_v1(BaseTrainer):
                         # Apply per-type weighting if configured
                         if self.type_weight is not None:
                             sample_weights = self.type_weight[surface_type]  # (B,)
-                            loss_recon = (recon_loss_per_sample * sample_weights)
+                            loss_recon = (recon_loss_per_sample * sample_weights).mean()
                         else:
                             loss_recon = recon_loss_per_sample.mean()
                         

@@ -204,25 +204,51 @@ class RotationCodebook:
         if not self.is_fitted:
             raise RuntimeError("Codebook not fitted yet!")
         
+        if verbose:
+            print("Computing reconstruction statistics...")
+        
         quats = self._rotation_to_quat(rotations)
         
-        # Compute distances and assignments
-        distances = self._quaternion_distance(quats, self.centroids)
-        assignments = np.argmin(distances, axis=1)
-        min_distances = distances[np.arange(len(quats)), assignments]
+        # Compute distances and assignments in batches
+        N = len(quats)
+        batch_size = 10000
+        num_batches = (N + batch_size - 1) // batch_size
+        
+        assignments = np.zeros(N, dtype=np.int32)
+        min_distances = np.zeros(N, dtype=np.float64)
+        
+        iterator = range(num_batches)
+        if verbose:
+            iterator = tqdm(iterator, desc="Computing distances")
+        
+        for i in iterator:
+            start_idx = i * batch_size
+            end_idx = min((i + 1) * batch_size, N)
+            batch_quats = quats[start_idx:end_idx]
+            
+            distances = self._quaternion_distance(batch_quats, self.centroids)
+            assignments[start_idx:end_idx] = np.argmin(distances, axis=1)
+            min_distances[start_idx:end_idx] = distances[np.arange(len(batch_quats)), assignments[start_idx:end_idx]]
         
         # Angular errors in degrees
         angular_errors_deg = np.rad2deg(min_distances)
         
-        # Reconstruction: encode -> decode
-        reconstructed_rots = self.decode(self.encode(rotations))
+        # Reconstruction: encode -> decode with batching
+        if verbose:
+            print("Encoding and decoding for reconstruction...")
+        reconstructed_rots = self.decode(self.encode(rotations, batch_size=batch_size, verbose=verbose))
         
         # Compute rotation error using Frobenius norm
         frobenius_errors = np.linalg.norm(rotations - reconstructed_rots, axis=(1, 2))
         
         # Compute geodesic distance on SO(3)
+        if verbose:
+            print("Computing geodesic distances...")
         geodesic_errors = []
-        for i in range(len(rotations)):
+        iterator = range(len(rotations))
+        if verbose:
+            iterator = tqdm(iterator, desc="Geodesic distances")
+        for i in iterator:
             R_diff = rotations[i].T @ reconstructed_rots[i]
             trace = np.trace(R_diff)
             # theta = arccos((trace - 1) / 2)
@@ -297,12 +323,14 @@ class RotationCodebook:
         
         return stats
     
-    def encode(self, rotations: np.ndarray) -> np.ndarray:
+    def encode(self, rotations: np.ndarray, batch_size: int = 10000, verbose: bool = False) -> np.ndarray:
         """
         Encode rotation matrices to codebook indices.
         
         Args:
             rotations: (N, 3, 3) rotation matrices
+            batch_size: Process in batches to avoid memory issues
+            verbose: Show progress bar
             
         Returns:
             indices: (N,) codebook indices
@@ -310,9 +338,25 @@ class RotationCodebook:
         if not self.is_fitted:
             raise RuntimeError("Codebook not fitted yet!")
         
+        N = rotations.shape[0]
         quats = self._rotation_to_quat(rotations)
-        distances = self._quaternion_distance(quats, self.centroids)
-        indices = np.argmin(distances, axis=1)
+        
+        # Process in batches
+        indices = np.zeros(N, dtype=np.int32)
+        num_batches = (N + batch_size - 1) // batch_size
+        
+        iterator = range(num_batches)
+        if verbose:
+            iterator = tqdm(iterator, desc="Encoding rotations")
+        
+        for i in iterator:
+            start_idx = i * batch_size
+            end_idx = min((i + 1) * batch_size, N)
+            batch_quats = quats[start_idx:end_idx]
+            
+            # Compute distances for this batch
+            distances = self._quaternion_distance(batch_quats, self.centroids)
+            indices[start_idx:end_idx] = np.argmin(distances, axis=1)
         
         return indices
     
@@ -468,6 +512,16 @@ class TranslationCodebook:
         Returns:
             stats: Dictionary with statistics
         """
+        # Ensure translations has correct shape
+        if translations.ndim == 1:
+            # If 1D, reshape to (N, 1) and replicate to (N, 3)
+            translations = np.tile(translations.reshape(-1, 1), (1, 3))
+        elif translations.ndim > 2:
+            # If more than 2D, flatten and reshape
+            translations = translations.reshape(-1, 3)
+        
+        assert translations.shape[1] == 3, f"Expected translations to have 3 dimensions, got shape {translations.shape}"
+        
         N = translations.shape[0]
         if verbose:
             print(f"Fitting translation codebook with {N} samples, {self.actual_codebook_size} bins...")
@@ -478,6 +532,10 @@ class TranslationCodebook:
         
         self.min_vals = np.percentile(translations, lower_percentile, axis=0)  # (3,)
         self.max_vals = np.percentile(translations, upper_percentile, axis=0)  # (3,)
+        
+        # Ensure they are arrays, not scalars
+        self.min_vals = np.atleast_1d(self.min_vals)
+        self.max_vals = np.atleast_1d(self.max_vals)
         
         if verbose:
             print(f"Translation ranges (covering {percentile}% of data):")
@@ -514,8 +572,11 @@ class TranslationCodebook:
         if not self.is_fitted:
             raise RuntimeError("Codebook not fitted yet!")
         
-        # Encode and decode
-        indices = self.encode(translations)
+        if verbose:
+            print("Computing reconstruction statistics...")
+        
+        # Encode and decode with batching
+        indices = self.encode(translations, batch_size=10000, verbose=verbose)
         reconstructed = self.decode(indices)
         
         # Compute errors
@@ -586,12 +647,14 @@ class TranslationCodebook:
         
         return stats
     
-    def encode(self, translations: np.ndarray) -> np.ndarray:
+    def encode(self, translations: np.ndarray, batch_size: int = 10000, verbose: bool = False) -> np.ndarray:
         """
         Encode translation vectors to codebook indices.
         
         Args:
             translations: (N, 3) translation vectors
+            batch_size: Process in batches to avoid memory issues
+            verbose: Show progress bar
             
         Returns:
             indices: (N,) codebook indices
@@ -604,15 +667,28 @@ class TranslationCodebook:
         # Clip to bounds
         translations_clipped = np.clip(translations, self.min_vals, self.max_vals)
         
-        # Compute distances to all codebook entries
-        # Broadcasting: (N, 1, 3) - (1, K, 3) = (N, K, 3)
-        distances = np.linalg.norm(
-            translations_clipped[:, np.newaxis, :] - self.codebook[np.newaxis, :, :],
-            axis=2
-        )  # (N, K)
+        # Process in batches
+        indices = np.zeros(N, dtype=np.int32)
+        num_batches = (N + batch_size - 1) // batch_size
         
-        # Find nearest codebook entry
-        indices = np.argmin(distances, axis=1)  # (N,)
+        iterator = range(num_batches)
+        if verbose:
+            iterator = tqdm(iterator, desc="Encoding translations")
+        
+        for i in iterator:
+            start_idx = i * batch_size
+            end_idx = min((i + 1) * batch_size, N)
+            batch = translations_clipped[start_idx:end_idx]
+            
+            # Compute distances to all codebook entries for this batch
+            # Broadcasting: (B, 1, 3) - (1, K, 3) = (B, K, 3)
+            distances = np.linalg.norm(
+                batch[:, np.newaxis, :] - self.codebook[np.newaxis, :, :],
+                axis=2
+            )  # (B, K)
+            
+            # Find nearest codebook entry
+            indices[start_idx:end_idx] = np.argmin(distances, axis=1)
         
         return indices
     
@@ -714,6 +790,16 @@ class ScaleCodebook:
         Returns:
             stats: Dictionary with statistics
         """
+        # Ensure scales has correct shape
+        if scales.ndim == 1:
+            # If 1D, reshape to (N, 1) and replicate to (N, 3)
+            scales = np.tile(scales.reshape(-1, 1), (1, 3))
+        elif scales.ndim > 2:
+            # If more than 2D, flatten and reshape
+            scales = scales.reshape(-1, 3)
+        
+        assert scales.shape[1] == 3, f"Expected scales to have 3 dimensions, got shape {scales.shape}"
+        
         N = scales.shape[0]
         if verbose:
             print(f"Fitting scale codebook with {N} samples, {self.actual_codebook_size} bins...")
@@ -730,6 +816,10 @@ class ScaleCodebook:
         
         self.log_min_vals = np.percentile(log_scales, lower_percentile, axis=0)  # (3,)
         self.log_max_vals = np.percentile(log_scales, upper_percentile, axis=0)  # (3,)
+        
+        # Ensure they are arrays, not scalars
+        self.log_min_vals = np.atleast_1d(self.log_min_vals)
+        self.log_max_vals = np.atleast_1d(self.log_max_vals)
         
         if verbose:
             print(f"Scale ranges in log-space (covering {percentile}% of data):")
@@ -770,8 +860,11 @@ class ScaleCodebook:
         if not self.is_fitted:
             raise RuntimeError("Codebook not fitted yet!")
         
-        # Encode and decode
-        indices = self.encode(scales, eps=eps)
+        if verbose:
+            print("Computing reconstruction statistics...")
+        
+        # Encode and decode with batching
+        indices = self.encode(scales, eps=eps, batch_size=10000, verbose=verbose)
         reconstructed = self.decode(indices)
         
         # Compute errors in original scale space
@@ -851,13 +944,15 @@ class ScaleCodebook:
         
         return stats
     
-    def encode(self, scales: np.ndarray, eps: float = 1e-8) -> np.ndarray:
+    def encode(self, scales: np.ndarray, eps: float = 1e-8, batch_size: int = 10000, verbose: bool = False) -> np.ndarray:
         """
         Encode scale factors to codebook indices.
         
         Args:
             scales: (N, 3) scale factors
             eps: Small epsilon to avoid log(0)
+            batch_size: Process in batches to avoid memory issues
+            verbose: Show progress bar
             
         Returns:
             indices: (N,) codebook indices
@@ -874,14 +969,27 @@ class ScaleCodebook:
         # Clip to bounds in log-space
         log_scales_clipped = np.clip(log_scales, self.log_min_vals, self.log_max_vals)
         
-        # Compute distances to all codebook entries in log-space
-        distances = np.linalg.norm(
-            log_scales_clipped[:, np.newaxis, :] - self.log_codebook[np.newaxis, :, :],
-            axis=2
-        )  # (N, K)
+        # Process in batches
+        indices = np.zeros(N, dtype=np.int32)
+        num_batches = (N + batch_size - 1) // batch_size
         
-        # Find nearest codebook entry
-        indices = np.argmin(distances, axis=1)  # (N,)
+        iterator = range(num_batches)
+        if verbose:
+            iterator = tqdm(iterator, desc="Encoding scales")
+        
+        for i in iterator:
+            start_idx = i * batch_size
+            end_idx = min((i + 1) * batch_size, N)
+            batch = log_scales_clipped[start_idx:end_idx]
+            
+            # Compute distances to all codebook entries in log-space for this batch
+            distances = np.linalg.norm(
+                batch[:, np.newaxis, :] - self.log_codebook[np.newaxis, :, :],
+                axis=2
+            )  # (B, K)
+            
+            # Find nearest codebook entry
+            indices[start_idx:end_idx] = np.argmin(distances, axis=1)
         
         return indices
     
@@ -976,7 +1084,8 @@ def build_translation_codebook_from_cache(
         raise KeyError(f"Cache file does not contain 'shifts' key. Available keys: {list(data.keys())}")
     
     translations = data['shifts']
-    print(f"Loaded {len(translations)} translation vectors")
+    print(f"Loaded translations with shape: {translations.shape}")
+    print(f"Number of translation vectors: {len(translations)}")
     
     # Create and fit codebook
     codebook = TranslationCodebook(codebook_size)
@@ -1025,7 +1134,8 @@ def build_scale_codebook_from_cache(
         raise KeyError(f"Cache file does not contain 'scales' key. Available keys: {list(data.keys())}")
     
     scales = data['scales']
-    print(f"Loaded {len(scales)} scale vectors")
+    print(f"Loaded scales with shape: {scales.shape}")
+    print(f"Number of scale vectors: {len(scales)}")
     
     # Create and fit codebook
     codebook = ScaleCodebook(codebook_size)
