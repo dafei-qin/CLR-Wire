@@ -145,7 +145,8 @@ def process_sample(idx):
     
     if tokenize_rts and rotation_codebook is not None:
         # Debug: print shapes
-        if False:  # Set to True for debugging
+        debug_rts = False  # Set to True for debugging
+        if debug_rts:
             print(f"  rotation shape: {rotation.shape}")
             print(f"  shift shape: {shift.shape}")
             print(f"  scale shape: {scale.shape}")
@@ -154,6 +155,11 @@ def process_sample(idx):
         rot_indices = rotation_codebook.encode(rotation, batch_size=10000, verbose=False)
         trans_indices = translation_codebook.encode(shift, batch_size=10000, verbose=False)
         scale_indices = scale_codebook.encode(scale, batch_size=10000, verbose=False)
+        
+        if debug_rts:
+            print(f"  rot_indices shape: {rot_indices.shape}")
+            print(f"  trans_indices shape: {trans_indices.shape}")
+            print(f"  scale_indices shape: {scale_indices.shape}")
         
         # Decode back to get quantized RTS
         rotation_quantized = rotation_codebook.decode(rot_indices)
@@ -786,7 +792,7 @@ if __name__ == '__main__':
         
         print(f"\n✓ RTS Codebooks loaded successfully!")
         print(f"  Rotation: {rotation_codebook.codebook_size} entries")
-        print(f"  Translation: {translation_codebook.actual_codebook_size} entries ({translation_codebook.bins_per_dim}^3)")
+        print(f"  Translation: {translation_codebook.bins_per_dim} bins per dimension → {translation_codebook.actual_codebook_size} total entries ({translation_codebook.bins_per_dim}³)")
         print(f"  Scale (scalar): {scale_codebook.codebook_size} entries")
         print(f"{'='*70}\n")
     else:

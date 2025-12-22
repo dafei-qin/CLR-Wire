@@ -489,22 +489,23 @@ class TranslationCodebook:
     """
     Linear quantization for translation vectors.
     
-    Creates uniform grid in 3D space covering 95% of the data range.
-    All dimensions share the same bin structure (same number of bins and normalization range).
+    Uses independent per-dimension quantization with shared bins across all dimensions.
+    Each dimension is quantized independently using the same bin structure (global range).
+    This is memory-efficient: stores only N bins instead of N^3 3D grid points.
     """
     
     def __init__(self, codebook_size: int):
         """
         Args:
-            codebook_size: Number of bins per dimension (total codebook entries will be codebook_size^3)
+            codebook_size: Number of bins per dimension
         """
         self.bins_per_dim = codebook_size  # Number of bins per dimension
-        # Actual codebook size is bins_per_dim^3
+        # Theoretical codebook size if all combinations were stored (for reference)
         self.actual_codebook_size = self.bins_per_dim ** 3
         
         self.global_min = None  # Global minimum value across all dimensions
         self.global_max = None  # Global maximum value across all dimensions
-        self.codebook = None  # (actual_codebook_size, 3) codebook entries
+        self.bins = None  # (bins_per_dim,) bin centers shared across all dimensions
         self.is_fitted = False
         
     def fit(self, translations: np.ndarray, percentile: float = 95.0, verbose: bool = True) -> Dict:
@@ -554,12 +555,9 @@ class TranslationCodebook:
                 dim_max = translations[:, i].max()
                 print(f"  {dim}: min={dim_min:.4f}, max={dim_max:.4f}")
         
-        # Create uniform bins using global range (same for all dimensions)
-        bins = np.linspace(self.global_min, self.global_max, self.bins_per_dim)
-        
-        # Create 3D grid using the same bins for all dimensions
-        xx, yy, zz = np.meshgrid(bins, bins, bins, indexing='ij')
-        self.codebook = np.stack([xx.flatten(), yy.flatten(), zz.flatten()], axis=1)  # (K, 3)
+        # Create uniform bins using global range (shared across all dimensions)
+        # Store only the 1D bins, not the full 3D grid (memory efficient)
+        self.bins = np.linspace(self.global_min, self.global_max, self.bins_per_dim)
         
         self.is_fitted = True
         
@@ -602,16 +600,26 @@ class TranslationCodebook:
         in_bounds = np.all((translations >= self.global_min) & (translations <= self.global_max), axis=1)
         coverage = in_bounds.mean() * 100
         
-        # Compute codebook utilization
-        unique_indices = np.unique(indices)
-        utilization = len(unique_indices) / self.actual_codebook_size * 100
+        # Compute codebook utilization (per-dimension)
+        # For independent dimension quantization, we track unique bins per dimension
+        unique_bins_per_dim = [len(np.unique(indices[:, dim])) for dim in range(3)]
+        avg_utilization = np.mean([u / self.bins_per_dim * 100 for u in unique_bins_per_dim])
+        
+        # Compute unique 3D combinations (for comparison with theoretical max)
+        unique_combinations = len(np.unique(indices, axis=0))
+        combination_utilization = unique_combinations / self.actual_codebook_size * 100
         
         stats = {
             'codebook_size': self.actual_codebook_size,
             'bins_per_dim': self.bins_per_dim,
             'n_samples': len(translations),
             'coverage_percent': float(coverage),
-            'codebook_utilization_percent': float(utilization),
+            'bins_utilization_x': int(unique_bins_per_dim[0]),
+            'bins_utilization_y': int(unique_bins_per_dim[1]),
+            'bins_utilization_z': int(unique_bins_per_dim[2]),
+            'avg_bins_utilization_percent': float(avg_utilization),
+            'unique_combinations': int(unique_combinations),
+            'combination_utilization_percent': float(combination_utilization),
             # L2 error stats
             'l2_error_mean': float(l2_errors.mean()),
             'l2_error_std': float(l2_errors.std()),
@@ -637,10 +645,18 @@ class TranslationCodebook:
             print("\n" + "="*70)
             print("TRANSLATION CODEBOOK STATISTICS")
             print("="*70)
-            print(f"Codebook size: {stats['codebook_size']} ({self.bins_per_dim}^3)")
+            print(f"Bins per dimension: {self.bins_per_dim}")
+            print(f"Theoretical codebook size: {stats['codebook_size']} ({self.bins_per_dim}³)")
             print(f"Number of samples: {stats['n_samples']}")
             print(f"Coverage: {stats['coverage_percent']:.2f}%")
-            print(f"Codebook utilization: {stats['codebook_utilization_percent']:.2f}%")
+            print()
+            print("Per-dimension bin utilization:")
+            print(f"  X: {stats['bins_utilization_x']}/{self.bins_per_dim} bins")
+            print(f"  Y: {stats['bins_utilization_y']}/{self.bins_per_dim} bins")
+            print(f"  Z: {stats['bins_utilization_z']}/{self.bins_per_dim} bins")
+            print(f"  Average: {stats['avg_bins_utilization_percent']:.2f}%")
+            print()
+            print(f"Unique 3D combinations: {stats['unique_combinations']} ({stats['combination_utilization_percent']:.4f}% of theoretical max)")
             print()
             print("L2 Reconstruction Errors:")
             print(f"  Mean:   {stats['l2_error_mean']:.6f}")
@@ -659,15 +675,15 @@ class TranslationCodebook:
     
     def encode(self, translations: np.ndarray, batch_size: int = 10000, verbose: bool = False) -> np.ndarray:
         """
-        Encode translation vectors to codebook indices.
+        Encode translation vectors to per-dimension bin indices.
         
         Args:
             translations: (N, 3) translation vectors
-            batch_size: Process in batches to avoid memory issues
-            verbose: Show progress bar
+            batch_size: Not used (kept for API compatibility)
+            verbose: Show progress bar (not used for this fast operation)
             
         Returns:
-            indices: (N,) codebook indices
+            indices: (N, 3) per-dimension bin indices, each in range [0, bins_per_dim)
         """
         if not self.is_fitted:
             raise RuntimeError("Codebook not fitted yet!")
@@ -687,37 +703,24 @@ class TranslationCodebook:
         # Clip to bounds (same bounds for all dimensions)
         translations_clipped = np.clip(translations, self.global_min, self.global_max)
         
-        # Process in batches
-        indices = np.zeros(N, dtype=np.int32)
-        num_batches = (N + batch_size - 1) // batch_size
+        # Quantize each dimension independently using the shared bins
+        # For each dimension, find the nearest bin
+        indices = np.zeros((N, 3), dtype=np.int32)
         
-        iterator = range(num_batches)
-        if verbose:
-            iterator = tqdm(iterator, desc="Encoding translations")
-        
-        for i in iterator:
-            start_idx = i * batch_size
-            end_idx = min((i + 1) * batch_size, N)
-            batch = translations_clipped[start_idx:end_idx]
-            
-            # Compute distances to all codebook entries for this batch
-            # Broadcasting: (B, 1, 3) - (1, K, 3) = (B, K, 3)
-            distances = np.linalg.norm(
-                batch[:, np.newaxis, :] - self.codebook[np.newaxis, :, :],
-                axis=2
-            )  # (B, K)
-            
-            # Find nearest codebook entry
-            indices[start_idx:end_idx] = np.argmin(distances, axis=1)
+        for dim in range(3):
+            # Compute distances to all bins for this dimension: (N, bins_per_dim)
+            distances = np.abs(translations_clipped[:, dim:dim+1] - self.bins[np.newaxis, :])
+            # Find nearest bin for each sample
+            indices[:, dim] = np.argmin(distances, axis=1)
         
         return indices
     
     def decode(self, indices: np.ndarray) -> np.ndarray:
         """
-        Decode codebook indices to translation vectors.
+        Decode per-dimension bin indices to translation vectors.
         
         Args:
-            indices: (N,) codebook indices
+            indices: (N, 3) per-dimension bin indices
             
         Returns:
             translations: (N, 3) translation vectors
@@ -725,7 +728,19 @@ class TranslationCodebook:
         if not self.is_fitted:
             raise RuntimeError("Codebook not fitted yet!")
         
-        translations = self.codebook[indices]
+        # Ensure indices has correct shape
+        if indices.ndim == 1:
+            # If 1D with length 3, treat as single sample
+            if len(indices) == 3:
+                indices = indices.reshape(1, 3)
+            else:
+                raise ValueError(f"Cannot decode 1D indices with length {len(indices)}, expected (N, 3)")
+        
+        assert indices.shape[1] == 3, f"Expected indices to have shape (N, 3), got {indices.shape}"
+        
+        # Look up bin centers for each dimension
+        translations = self.bins[indices]  # (N, 3)
+        
         return translations
     
     def save(self, save_path: Union[str, Path]):
@@ -741,7 +756,7 @@ class TranslationCodebook:
             'actual_codebook_size': self.actual_codebook_size,
             'global_min': self.global_min,
             'global_max': self.global_max,
-            'codebook': self.codebook,
+            'bins': self.bins,
             'is_fitted': self.is_fitted,
         }
         
@@ -764,12 +779,12 @@ class TranslationCodebook:
         self.actual_codebook_size = data['actual_codebook_size']
         self.global_min = data['global_min']
         self.global_max = data['global_max']
-        self.codebook = data['codebook']
+        self.bins = data['bins']
         self.is_fitted = data['is_fitted']
         
         print(f"Translation codebook loaded from: {load_path}")
         print(f"  Bins per dimension: {self.bins_per_dim}")
-        print(f"  Total codebook entries: {self.actual_codebook_size} ({self.bins_per_dim}^3)")
+        print(f"  Total possible combinations: {self.actual_codebook_size} ({self.bins_per_dim}³)")
         print(f"  Global range: [{self.global_min:.4f}, {self.global_max:.4f}]")
 
 
