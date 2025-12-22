@@ -14,179 +14,92 @@ from tqdm import tqdm
 
 class RotationCodebook:
     """
-    Spherical K-means clustering for rotation matrices using quaternions.
+    Uniform rotation quantization using Euler angles.
     
-    Quaternions lie on a 4D unit sphere, and q and -q represent the same rotation.
-    This class handles the double-cover property and provides rotation quantization.
+    Divides each Euler angle (roll, pitch, yaw) uniformly into bins.
+    Uses independent per-angle quantization to avoid memory issues.
+    Internally uses quaternions to avoid gimbal lock issues during conversion.
     """
     
     def __init__(self, codebook_size: int):
         """
         Args:
-            codebook_size: Number of cluster centers (codebook entries)
+            codebook_size: Number of bins per Euler angle (each angle divided into this many bins)
         """
-        self.codebook_size = codebook_size
-        self.centroids = None  # Shape: (codebook_size, 4), unit quaternions
+        self.bins_per_angle = codebook_size  # Number of bins per Euler angle
+        # Theoretical codebook size if all combinations were stored
+        self.codebook_size = self.bins_per_angle ** 3
+        
+        self.angle_bins = None  # (bins_per_angle,) bin centers for each angle in radians
         self.is_fitted = False
         
-    def _rotation_to_quat(self, rotations: np.ndarray) -> np.ndarray:
+    def _rotation_to_euler(self, rotations: np.ndarray) -> np.ndarray:
         """
-        Convert rotation matrices to quaternions using scipy.
+        Convert rotation matrices to Euler angles (XYZ convention).
         
         Args:
             rotations: (N, 3, 3) rotation matrices
             
         Returns:
-            quaternions: (N, 4) unit quaternions in [w, x, y, z] format
+            euler_angles: (N, 3) Euler angles in radians [roll, pitch, yaw] (XYZ)
         """
-        N = rotations.shape[0]
         scipy_rots = R.from_matrix(rotations)
-        quats = scipy_rots.as_quat()  # Returns [x, y, z, w] format
-        
-        # Convert to [w, x, y, z] format (scalar first)
-        quats = np.concatenate([quats[:, 3:4], quats[:, :3]], axis=1)
-        
-        # Ensure consistent hemisphere: make w >= 0
-        # This handles the q/-q ambiguity
-        mask = quats[:, 0] < 0
-        quats[mask] = -quats[mask]
-        
-        return quats
+        # Use 'xyz' convention (roll-pitch-yaw)
+        euler_angles = scipy_rots.as_euler('xyz', degrees=False)
+        return euler_angles
     
-    def _quat_to_rotation(self, quats: np.ndarray) -> np.ndarray:
+    def _euler_to_rotation(self, euler_angles: np.ndarray) -> np.ndarray:
         """
-        Convert quaternions to rotation matrices.
+        Convert Euler angles to rotation matrices.
         
         Args:
-            quats: (N, 4) quaternions in [w, x, y, z] format
+            euler_angles: (N, 3) Euler angles in radians [roll, pitch, yaw] (XYZ)
             
         Returns:
             rotations: (N, 3, 3) rotation matrices
         """
-        # Convert [w, x, y, z] to [x, y, z, w] for scipy
-        quats_scipy = np.concatenate([quats[:, 1:4], quats[:, 0:1]], axis=1)
-        scipy_rots = R.from_quat(quats_scipy)
+        scipy_rots = R.from_euler('xyz', euler_angles, degrees=False)
         return scipy_rots.as_matrix()
     
-    def _quaternion_distance(self, q1: np.ndarray, q2: np.ndarray) -> np.ndarray:
-        """
-        Compute angular distance between quaternions on the hypersphere.
-        Handles the double-cover property: distance is min(d(q1, q2), d(q1, -q2)).
-        
-        Args:
-            q1: (N, 4) quaternions
-            q2: (M, 4) quaternions (typically centroids)
-            
-        Returns:
-            distances: (N, M) angular distances in radians
-        """
-        # Compute dot products: (N, M)
-        dot_products = np.abs(q1 @ q2.T)  # abs handles q/-q symmetry
-        
-        # Clip to [-1, 1] to avoid numerical errors in arccos
-        dot_products = np.clip(dot_products, -1.0, 1.0)
-        
-        # Angular distance on unit sphere
-        distances = np.arccos(dot_products)
-        
-        return distances
-    
-    def _spherical_mean(self, quats: np.ndarray, weights: Optional[np.ndarray] = None) -> np.ndarray:
-        """
-        Compute the spherical mean of quaternions.
-        
-        Args:
-            quats: (N, 4) quaternions
-            weights: (N,) optional weights
-            
-        Returns:
-            mean_quat: (4,) unit quaternion
-        """
-        if weights is None:
-            weights = np.ones(len(quats))
-        
-        # Weighted average (not normalized)
-        weighted_sum = (quats.T * weights).T.sum(axis=0)
-        
-        # Project back to unit sphere
-        mean_quat = weighted_sum / (np.linalg.norm(weighted_sum) + 1e-10)
-        
-        # Ensure w >= 0
-        if mean_quat[0] < 0:
-            mean_quat = -mean_quat
-            
-        return mean_quat
-    
-    def fit(self, rotations: np.ndarray, max_iter: int = 100, 
+    def fit(self, rotations: np.ndarray = None, max_iter: int = 100, 
             tol: float = 1e-4, random_seed: int = 42, verbose: bool = True) -> Dict:
         """
-        Fit spherical k-means on rotation matrices.
+        Create uniform rotation codebook by dividing Euler angles uniformly.
         
         Args:
-            rotations: (N, 3, 3) rotation matrices
-            max_iter: Maximum number of iterations
-            tol: Convergence tolerance (change in objective)
-            random_seed: Random seed for initialization
+            rotations: (N, 3, 3) rotation matrices (optional, only used for statistics)
+            max_iter: Not used (kept for API compatibility)
+            tol: Not used (kept for API compatibility)
+            random_seed: Not used (kept for API compatibility)
             verbose: Print progress
             
         Returns:
-            stats: Dictionary with training statistics
+            stats: Dictionary with training statistics (if rotations provided)
         """
-        np.random.seed(random_seed)
-        
-        N = rotations.shape[0]
         if verbose:
-            print(f"Fitting rotation codebook with {N} samples, {self.codebook_size} clusters...")
+            print(f"Creating uniform rotation codebook...")
+            print(f"Bins per Euler angle: {self.bins_per_angle}")
+            print(f"Theoretical codebook size: {self.codebook_size} ({self.bins_per_angle}³)")
         
-        # Convert to quaternions
+        # Create uniform bins for each Euler angle in range [0, 2π)
+        # We use [0, 2π) instead of [-π, π) to cover the full rotation space uniformly
+        self.angle_bins = np.linspace(0, 2 * np.pi, self.bins_per_angle, endpoint=False)
+        
         if verbose:
-            print("Converting rotation matrices to quaternions...")
-        quats = self._rotation_to_quat(rotations)
-        
-        # Initialize centroids: random selection from data
-        indices = np.random.choice(N, self.codebook_size, replace=False)
-        self.centroids = quats[indices].copy()
-        
-        # K-means iteration
-        prev_objective = float('inf')
-        history = []
-        
-        iterator = tqdm(range(max_iter), desc="K-means") if verbose else range(max_iter)
-        
-        for iter_idx in iterator:
-            # E-step: Assign each quaternion to nearest centroid
-            distances = self._quaternion_distance(quats, self.centroids)  # (N, K)
-            assignments = np.argmin(distances, axis=1)  # (N,)
-            
-            # Compute objective (average distance)
-            objective = distances[np.arange(N), assignments].mean()
-            history.append(objective)
-            
-            if verbose and isinstance(iterator, tqdm):
-                iterator.set_postfix({'objective': f'{objective:.6f}'})
-            
-            # Check convergence
-            if abs(prev_objective - objective) < tol:
-                if verbose:
-                    print(f"Converged at iteration {iter_idx + 1}")
-                break
-            prev_objective = objective
-            
-            # M-step: Update centroids as spherical mean
-            for k in range(self.codebook_size):
-                mask = assignments == k
-                if mask.sum() == 0:
-                    # Empty cluster: reinitialize randomly
-                    self.centroids[k] = quats[np.random.randint(N)]
-                else:
-                    self.centroids[k] = self._spherical_mean(quats[mask])
+            print(f"Euler angle bins: [{np.rad2deg(self.angle_bins[0]):.2f}°, "
+                  f"{np.rad2deg(self.angle_bins[-1]):.2f}°] with {self.bins_per_angle} bins")
+            print(f"Bin spacing: {np.rad2deg(self.angle_bins[1] - self.angle_bins[0]):.2f}°")
         
         self.is_fitted = True
         
-        # Compute final statistics
-        stats = self._compute_statistics(rotations, verbose=verbose)
-        stats['training_history'] = history
-        stats['n_iterations'] = len(history)
+        # Compute statistics if rotations provided
+        if rotations is not None:
+            stats = self._compute_statistics(rotations, verbose=verbose)
+        else:
+            stats = {
+                'codebook_size': self.codebook_size,
+                'bins_per_angle': self.bins_per_angle,
+            }
         
         return stats
     
@@ -207,36 +120,9 @@ class RotationCodebook:
         if verbose:
             print("Computing reconstruction statistics...")
         
-        quats = self._rotation_to_quat(rotations)
-        
-        # Compute distances and assignments in batches
-        N = len(quats)
-        batch_size = 10000
-        num_batches = (N + batch_size - 1) // batch_size
-        
-        assignments = np.zeros(N, dtype=np.int32)
-        min_distances = np.zeros(N, dtype=np.float64)
-        
-        iterator = range(num_batches)
-        if verbose:
-            iterator = tqdm(iterator, desc="Computing distances")
-        
-        for i in iterator:
-            start_idx = i * batch_size
-            end_idx = min((i + 1) * batch_size, N)
-            batch_quats = quats[start_idx:end_idx]
-            
-            distances = self._quaternion_distance(batch_quats, self.centroids)
-            assignments[start_idx:end_idx] = np.argmin(distances, axis=1)
-            min_distances[start_idx:end_idx] = distances[np.arange(len(batch_quats)), assignments[start_idx:end_idx]]
-        
-        # Angular errors in degrees
-        angular_errors_deg = np.rad2deg(min_distances)
-        
-        # Reconstruction: encode -> decode with batching
-        if verbose:
-            print("Encoding and decoding for reconstruction...")
-        reconstructed_rots = self.decode(self.encode(rotations, batch_size=batch_size, verbose=verbose))
+        # Encode and decode
+        indices = self.encode(rotations, verbose=verbose)
+        reconstructed_rots = self.decode(indices)
         
         # Compute rotation error using Frobenius norm
         frobenius_errors = np.linalg.norm(rotations - reconstructed_rots, axis=(1, 2))
@@ -257,20 +143,18 @@ class RotationCodebook:
         geodesic_errors = np.array(geodesic_errors)
         geodesic_errors_deg = np.rad2deg(geodesic_errors)
         
-        # Cluster size distribution
-        unique, counts = np.unique(assignments, return_counts=True)
-        cluster_sizes = np.zeros(self.codebook_size)
-        cluster_sizes[unique] = counts
+        # Compute Euler angle utilization
+        unique_bins_per_angle = [len(np.unique(indices[:, dim])) for dim in range(3)]
+        avg_utilization = np.mean([u / self.bins_per_angle * 100 for u in unique_bins_per_angle])
+        
+        # Compute unique 3D combinations
+        unique_combinations = len(np.unique(indices, axis=0))
+        combination_utilization = unique_combinations / self.codebook_size * 100
         
         stats = {
             'codebook_size': self.codebook_size,
+            'bins_per_angle': self.bins_per_angle,
             'n_samples': len(rotations),
-            # Quaternion distance stats
-            'quat_angular_error_mean_deg': float(angular_errors_deg.mean()),
-            'quat_angular_error_std_deg': float(angular_errors_deg.std()),
-            'quat_angular_error_median_deg': float(np.median(angular_errors_deg)),
-            'quat_angular_error_max_deg': float(angular_errors_deg.max()),
-            'quat_angular_error_95th_deg': float(np.percentile(angular_errors_deg, 95)),
             # SO(3) geodesic distance stats
             'geodesic_error_mean_deg': float(geodesic_errors_deg.mean()),
             'geodesic_error_std_deg': float(geodesic_errors_deg.std()),
@@ -280,27 +164,30 @@ class RotationCodebook:
             # Frobenius norm stats
             'frobenius_error_mean': float(frobenius_errors.mean()),
             'frobenius_error_std': float(frobenius_errors.std()),
-            # Cluster distribution
-            'cluster_size_mean': float(cluster_sizes.mean()),
-            'cluster_size_std': float(cluster_sizes.std()),
-            'cluster_size_min': int(cluster_sizes.min()),
-            'cluster_size_max': int(cluster_sizes.max()),
-            'empty_clusters': int((cluster_sizes == 0).sum()),
+            # Utilization stats
+            'bins_utilization_roll': int(unique_bins_per_angle[0]),
+            'bins_utilization_pitch': int(unique_bins_per_angle[1]),
+            'bins_utilization_yaw': int(unique_bins_per_angle[2]),
+            'avg_bins_utilization_percent': float(avg_utilization),
+            'unique_combinations': int(unique_combinations),
+            'combination_utilization_percent': float(combination_utilization),
         }
         
         if verbose:
             print("\n" + "="*70)
-            print("ROTATION CODEBOOK STATISTICS")
+            print("ROTATION CODEBOOK STATISTICS (Uniform Euler Angle)")
             print("="*70)
-            print(f"Codebook size: {stats['codebook_size']}")
+            print(f"Bins per Euler angle: {self.bins_per_angle}")
+            print(f"Theoretical codebook size: {stats['codebook_size']} ({self.bins_per_angle}³)")
             print(f"Number of samples: {stats['n_samples']}")
             print()
-            print("Quaternion Angular Errors (degrees):")
-            print(f"  Mean:   {stats['quat_angular_error_mean_deg']:.4f}°")
-            print(f"  Std:    {stats['quat_angular_error_std_deg']:.4f}°")
-            print(f"  Median: {stats['quat_angular_error_median_deg']:.4f}°")
-            print(f"  95th:   {stats['quat_angular_error_95th_deg']:.4f}°")
-            print(f"  Max:    {stats['quat_angular_error_max_deg']:.4f}°")
+            print("Per-angle bin utilization:")
+            print(f"  Roll:  {stats['bins_utilization_roll']}/{self.bins_per_angle} bins")
+            print(f"  Pitch: {stats['bins_utilization_pitch']}/{self.bins_per_angle} bins")
+            print(f"  Yaw:   {stats['bins_utilization_yaw']}/{self.bins_per_angle} bins")
+            print(f"  Average: {stats['avg_bins_utilization_percent']:.2f}%")
+            print()
+            print(f"Unique 3D combinations: {stats['unique_combinations']} ({stats['combination_utilization_percent']:.4f}% of theoretical max)")
             print()
             print("SO(3) Geodesic Errors (degrees):")
             print(f"  Mean:   {stats['geodesic_error_mean_deg']:.4f}°")
@@ -312,28 +199,21 @@ class RotationCodebook:
             print("Frobenius Norm Errors:")
             print(f"  Mean: {stats['frobenius_error_mean']:.6f}")
             print(f"  Std:  {stats['frobenius_error_std']:.6f}")
-            print()
-            print("Cluster Distribution:")
-            print(f"  Mean size: {stats['cluster_size_mean']:.1f}")
-            print(f"  Std:       {stats['cluster_size_std']:.1f}")
-            print(f"  Min:       {stats['cluster_size_min']}")
-            print(f"  Max:       {stats['cluster_size_max']}")
-            print(f"  Empty:     {stats['empty_clusters']}")
             print("="*70 + "\n")
         
         return stats
     
     def encode(self, rotations: np.ndarray, batch_size: int = 10000, verbose: bool = False) -> np.ndarray:
         """
-        Encode rotation matrices to codebook indices.
+        Encode rotation matrices to per-angle bin indices.
         
         Args:
             rotations: (N, 3, 3) rotation matrices
-            batch_size: Process in batches to avoid memory issues
-            verbose: Show progress bar
+            batch_size: Not used (kept for API compatibility)
+            verbose: Show progress bar (not used for this fast operation)
             
         Returns:
-            indices: (N,) codebook indices
+            indices: (N, 3) per-angle bin indices [roll_idx, pitch_idx, yaw_idx]
         """
         if not self.is_fitted:
             raise RuntimeError("Codebook not fitted yet!")
@@ -349,33 +229,36 @@ class RotationCodebook:
             f"Expected rotations to have shape (N, 3, 3), got {rotations.shape}"
         
         N = rotations.shape[0]
-        quats = self._rotation_to_quat(rotations)
         
-        # Process in batches
-        indices = np.zeros(N, dtype=np.int32)
-        num_batches = (N + batch_size - 1) // batch_size
+        # Convert to Euler angles
+        euler_angles = self._rotation_to_euler(rotations)  # (N, 3)
         
-        iterator = range(num_batches)
-        if verbose:
-            iterator = tqdm(iterator, desc="Encoding rotations")
+        # Normalize to [0, 2π) range
+        euler_angles = np.mod(euler_angles, 2 * np.pi)
         
-        for i in iterator:
-            start_idx = i * batch_size
-            end_idx = min((i + 1) * batch_size, N)
-            batch_quats = quats[start_idx:end_idx]
+        # Quantize each angle independently
+        indices = np.zeros((N, 3), dtype=np.int32)
+        
+        for angle_idx in range(3):
+            # Compute distances to all bins for this angle: (N, bins_per_angle)
+            angles = euler_angles[:, angle_idx:angle_idx+1]  # (N, 1)
             
-            # Compute distances for this batch
-            distances = self._quaternion_distance(batch_quats, self.centroids)
-            indices[start_idx:end_idx] = np.argmin(distances, axis=1)
+            # Handle circular distance (shortest path on circle)
+            # Distance on circle: min(|a - b|, 2π - |a - b|)
+            diff = np.abs(angles - self.angle_bins[np.newaxis, :])  # (N, bins_per_angle)
+            circular_dist = np.minimum(diff, 2 * np.pi - diff)
+            
+            # Find nearest bin for each sample
+            indices[:, angle_idx] = np.argmin(circular_dist, axis=1)
         
         return indices
     
     def decode(self, indices: np.ndarray) -> np.ndarray:
         """
-        Decode codebook indices to rotation matrices.
+        Decode per-angle bin indices to rotation matrices.
         
         Args:
-            indices: (N,) codebook indices
+            indices: (N, 3) per-angle bin indices [roll_idx, pitch_idx, yaw_idx]
             
         Returns:
             rotations: (N, 3, 3) rotation matrices
@@ -383,8 +266,21 @@ class RotationCodebook:
         if not self.is_fitted:
             raise RuntimeError("Codebook not fitted yet!")
         
-        quats = self.centroids[indices]
-        rotations = self._quat_to_rotation(quats)
+        # Ensure indices has correct shape
+        if indices.ndim == 1:
+            # If 1D with length 3, treat as single sample
+            if len(indices) == 3:
+                indices = indices.reshape(1, 3)
+            else:
+                raise ValueError(f"Cannot decode 1D indices with length {len(indices)}, expected (N, 3)")
+        
+        assert indices.shape[1] == 3, f"Expected indices to have shape (N, 3), got {indices.shape}"
+        
+        # Look up bin centers for each angle
+        euler_angles = self.angle_bins[indices]  # (N, 3)
+        
+        # Convert Euler angles to rotation matrices (using quaternions internally to avoid gimbal lock)
+        rotations = self._euler_to_rotation(euler_angles)
         
         return rotations
     
@@ -402,15 +298,16 @@ class RotationCodebook:
         save_path.parent.mkdir(parents=True, exist_ok=True)
         
         data = {
+            'bins_per_angle': self.bins_per_angle,
             'codebook_size': self.codebook_size,
-            'centroids': self.centroids,
+            'angle_bins': self.angle_bins,
             'is_fitted': self.is_fitted,
         }
         
         with open(save_path, 'wb') as f:
             pickle.dump(data, f)
         
-        print(f"Codebook saved to: {save_path}")
+        print(f"Rotation codebook saved to: {save_path}")
     
     def load(self, load_path: Union[str, Path]):
         """
@@ -427,12 +324,14 @@ class RotationCodebook:
         with open(load_path, 'rb') as f:
             data = pickle.load(f)
         
+        self.bins_per_angle = data['bins_per_angle']
         self.codebook_size = data['codebook_size']
-        self.centroids = data['centroids']
+        self.angle_bins = data['angle_bins']
         self.is_fitted = data['is_fitted']
         
-        print(f"Codebook loaded from: {load_path}")
-        print(f"  Codebook size: {self.codebook_size}")
+        print(f"Rotation codebook loaded from: {load_path}")
+        print(f"  Bins per Euler angle: {self.bins_per_angle}")
+        print(f"  Theoretical codebook size: {self.codebook_size} ({self.bins_per_angle}³)")
 
 
 def build_rotation_codebook_from_cache(
@@ -443,30 +342,34 @@ def build_rotation_codebook_from_cache(
     random_seed: int = 42,
 ) -> RotationCodebook:
     """
-    Build rotation codebook from a dataset cache file.
+    Build uniform rotation codebook and optionally evaluate on dataset.
     
     Args:
-        cache_path: Path to .npz cache file containing 'rotations'
-        codebook_size: Number of cluster centers
+        cache_path: Path to .npz cache file containing 'rotations' (for evaluation only)
+        codebook_size: Number of bins per Euler angle
         output_path: Path to save the codebook
-        max_iter: Maximum k-means iterations
-        random_seed: Random seed
+        max_iter: Not used (kept for API compatibility)
+        random_seed: Not used (kept for API compatibility)
         
     Returns:
         codebook: Fitted RotationCodebook instance
     """
-    print(f"Loading rotations from: {cache_path}")
-    data = np.load(cache_path)
+    # Load rotations for evaluation
+    if cache_path:
+        print(f"Loading rotations from: {cache_path}")
+        data = np.load(cache_path)
+        
+        if 'rotations' not in data:
+            raise KeyError(f"Cache file does not contain 'rotations' key. Available keys: {list(data.keys())}")
+        
+        rotations = data['rotations']
+        print(f"Loaded {len(rotations)} rotation matrices")
+    else:
+        rotations = None
     
-    if 'rotations' not in data:
-        raise KeyError(f"Cache file does not contain 'rotations' key. Available keys: {list(data.keys())}")
-    
-    rotations = data['rotations']
-    print(f"Loaded {len(rotations)} rotation matrices")
-    
-    # Create and fit codebook
+    # Create and fit codebook (uniform, data-independent)
     codebook = RotationCodebook(codebook_size)
-    stats = codebook.fit(rotations, max_iter=max_iter, random_seed=random_seed, verbose=True)
+    stats = codebook.fit(rotations, verbose=True)
     
     # Save codebook
     codebook.save(output_path)
@@ -474,11 +377,10 @@ def build_rotation_codebook_from_cache(
     # Save statistics
     stats_path = Path(output_path).with_suffix('.stats.txt')
     with open(stats_path, 'w') as f:
-        f.write("ROTATION CODEBOOK STATISTICS\n")
+        f.write("ROTATION CODEBOOK STATISTICS (Uniform Euler Angle)\n")
         f.write("="*70 + "\n\n")
         for key, value in stats.items():
-            if key != 'training_history':
-                f.write(f"{key}: {value}\n")
+            f.write(f"{key}: {value}\n")
     
     print(f"Statistics saved to: {stats_path}")
     
