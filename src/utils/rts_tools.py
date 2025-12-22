@@ -490,29 +490,27 @@ class TranslationCodebook:
     Linear quantization for translation vectors.
     
     Creates uniform grid in 3D space covering 95% of the data range.
-    Each dimension is independently discretized into bins, then combined
-    to create codebook entries.
+    All dimensions share the same bin structure (same number of bins and normalization range).
     """
     
     def __init__(self, codebook_size: int):
         """
         Args:
-            codebook_size: Number of codebook entries (should be a perfect cube for balanced discretization)
+            codebook_size: Number of bins per dimension (total codebook entries will be codebook_size^3)
         """
-        self.codebook_size = codebook_size
-        # Compute bins per dimension (approximate cube root)
-        self.bins_per_dim = max(2, int(np.round(codebook_size ** (1/3))))
-        # Actual codebook size might differ slightly
+        self.bins_per_dim = codebook_size  # Number of bins per dimension
+        # Actual codebook size is bins_per_dim^3
         self.actual_codebook_size = self.bins_per_dim ** 3
         
-        self.min_vals = None  # (3,) minimum values per dimension (2.5th percentile)
-        self.max_vals = None  # (3,) maximum values per dimension (97.5th percentile)
-        self.codebook = None  # (codebook_size, 3) codebook entries
+        self.global_min = None  # Global minimum value across all dimensions
+        self.global_max = None  # Global maximum value across all dimensions
+        self.codebook = None  # (actual_codebook_size, 3) codebook entries
         self.is_fitted = False
         
     def fit(self, translations: np.ndarray, percentile: float = 95.0, verbose: bool = True) -> Dict:
         """
         Fit translation codebook by creating uniform grid covering specified percentile.
+        All dimensions share the same bin structure (same range and number of bins).
         
         Args:
             translations: (N, 3) translation vectors
@@ -534,31 +532,33 @@ class TranslationCodebook:
         
         N = translations.shape[0]
         if verbose:
-            print(f"Fitting translation codebook with {N} samples, {self.actual_codebook_size} bins...")
+            print(f"Fitting translation codebook with {N} samples...")
+            print(f"Bins per dimension: {self.bins_per_dim}")
+            print(f"Total codebook entries: {self.actual_codebook_size} ({self.bins_per_dim}^3)")
         
-        # Compute percentile bounds per dimension
+        # Compute global percentile bounds (same for all dimensions)
         lower_percentile = (100 - percentile) / 2
         upper_percentile = 100 - lower_percentile
         
-        self.min_vals = np.percentile(translations, lower_percentile, axis=0)  # (3,)
-        self.max_vals = np.percentile(translations, upper_percentile, axis=0)  # (3,)
-        
-        # Ensure they are arrays, not scalars
-        self.min_vals = np.atleast_1d(self.min_vals)
-        self.max_vals = np.atleast_1d(self.max_vals)
+        # Flatten all dimensions to compute global range
+        translations_flat = translations.flatten()
+        self.global_min = np.percentile(translations_flat, lower_percentile)
+        self.global_max = np.percentile(translations_flat, upper_percentile)
         
         if verbose:
-            print(f"Translation ranges (covering {percentile}% of data):")
+            print(f"Global translation range (covering {percentile}% of data):")
+            print(f"  All dimensions: [{self.global_min:.4f}, {self.global_max:.4f}]")
+            print(f"Per-dimension statistics:")
             for i, dim in enumerate(['X', 'Y', 'Z']):
-                print(f"  {dim}: [{self.min_vals[i]:.4f}, {self.max_vals[i]:.4f}]")
+                dim_min = translations[:, i].min()
+                dim_max = translations[:, i].max()
+                print(f"  {dim}: min={dim_min:.4f}, max={dim_max:.4f}")
         
-        # Create uniform grid for each dimension
-        x_bins = np.linspace(self.min_vals[0], self.max_vals[0], self.bins_per_dim)
-        y_bins = np.linspace(self.min_vals[1], self.max_vals[1], self.bins_per_dim)
-        z_bins = np.linspace(self.min_vals[2], self.max_vals[2], self.bins_per_dim)
+        # Create uniform bins using global range (same for all dimensions)
+        bins = np.linspace(self.global_min, self.global_max, self.bins_per_dim)
         
-        # Create 3D grid
-        xx, yy, zz = np.meshgrid(x_bins, y_bins, z_bins, indexing='ij')
+        # Create 3D grid using the same bins for all dimensions
+        xx, yy, zz = np.meshgrid(bins, bins, bins, indexing='ij')
         self.codebook = np.stack([xx.flatten(), yy.flatten(), zz.flatten()], axis=1)  # (K, 3)
         
         self.is_fitted = True
@@ -599,7 +599,7 @@ class TranslationCodebook:
         per_dim_errors = np.abs(errors)  # (N, 3)
         
         # Check coverage (percentage of data within bounds)
-        in_bounds = np.all((translations >= self.min_vals) & (translations <= self.max_vals), axis=1)
+        in_bounds = np.all((translations >= self.global_min) & (translations <= self.global_max), axis=1)
         coverage = in_bounds.mean() * 100
         
         # Compute codebook utilization
@@ -684,8 +684,8 @@ class TranslationCodebook:
         
         N = translations.shape[0]
         
-        # Clip to bounds
-        translations_clipped = np.clip(translations, self.min_vals, self.max_vals)
+        # Clip to bounds (same bounds for all dimensions)
+        translations_clipped = np.clip(translations, self.global_min, self.global_max)
         
         # Process in batches
         indices = np.zeros(N, dtype=np.int32)
@@ -737,11 +737,10 @@ class TranslationCodebook:
         save_path.parent.mkdir(parents=True, exist_ok=True)
         
         data = {
-            'codebook_size': self.codebook_size,
-            'actual_codebook_size': self.actual_codebook_size,
             'bins_per_dim': self.bins_per_dim,
-            'min_vals': self.min_vals,
-            'max_vals': self.max_vals,
+            'actual_codebook_size': self.actual_codebook_size,
+            'global_min': self.global_min,
+            'global_max': self.global_max,
             'codebook': self.codebook,
             'is_fitted': self.is_fitted,
         }
@@ -761,16 +760,17 @@ class TranslationCodebook:
         with open(load_path, 'rb') as f:
             data = pickle.load(f)
         
-        self.codebook_size = data['codebook_size']
-        self.actual_codebook_size = data['actual_codebook_size']
         self.bins_per_dim = data['bins_per_dim']
-        self.min_vals = data['min_vals']
-        self.max_vals = data['max_vals']
+        self.actual_codebook_size = data['actual_codebook_size']
+        self.global_min = data['global_min']
+        self.global_max = data['global_max']
         self.codebook = data['codebook']
         self.is_fitted = data['is_fitted']
         
         print(f"Translation codebook loaded from: {load_path}")
-        print(f"  Codebook size: {self.actual_codebook_size} ({self.bins_per_dim}^3)")
+        print(f"  Bins per dimension: {self.bins_per_dim}")
+        print(f"  Total codebook entries: {self.actual_codebook_size} ({self.bins_per_dim}^3)")
+        print(f"  Global range: [{self.global_min:.4f}, {self.global_max:.4f}]")
 
 
 class ScaleCodebook:
