@@ -11,7 +11,7 @@ from functools import partial
 from src.trainer.trainer_base import BaseTrainer
 from src.utils.helpers import divisible_by, get_current_time, get_lr
 from src.dataset.dataset_v1 import get_surface_type
-
+from src.utils.surface_tools import batch_params_to_samples
 class Trainer_vae_v1(BaseTrainer):
     def __init__(
         self,
@@ -57,6 +57,7 @@ class Trainer_vae_v1(BaseTrainer):
         v_closed_pos_weight: float = 1.0,
         type_weight: Optional[dict] = None,  # Per-type reconstruction weight
         use_fsq: bool = False,  # Whether to use FSQ instead of VAE
+        loss_sample_weight: float = 0.0,  # Weight for sample-space reconstruction loss
         **kwargs
     ):
         super().__init__(
@@ -98,6 +99,7 @@ class Trainer_vae_v1(BaseTrainer):
         self.loss_kl_weight = loss_kl_weight
         self.loss_l2norm_weight = loss_l2norm_weight
         self.loss_is_closed_weight = is_closed_weight
+        self.loss_sample_weight = loss_sample_weight
         self.pred_is_closed = pred_is_closed
         self.u_closed_pos_weight = u_closed_pos_weight
         self.v_closed_pos_weight = v_closed_pos_weight
@@ -178,7 +180,7 @@ class Trainer_vae_v1(BaseTrainer):
             return 1.0
         return min(1.0, step / self.kl_annealing_steps)
 
-    def log_loss(self, total_loss, accuracy, accuracy_is_closed, loss_recon, loss_cls, loss_kl, loss_l2norm, loss_is_closed, lr, total_norm, step, time_per_step, kl_beta=1.0, active_dims=None, codebook_usage=None, unique_codes=None):
+    def log_loss(self, total_loss, accuracy, accuracy_is_closed, loss_recon, loss_cls, loss_kl, loss_l2norm, loss_is_closed, loss_sample, lr, total_norm, step, time_per_step, kl_beta=1.0, active_dims=None, codebook_usage=None, unique_codes=None):
         if not self.use_wandb_tracking or not self.is_main:
             return
         
@@ -191,6 +193,7 @@ class Trainer_vae_v1(BaseTrainer):
             'loss_kl': loss_kl,
             'loss_l2norm': loss_l2norm,
             'loss_is_closed': loss_is_closed,
+            'loss_sample': loss_sample,
             'lr': lr,
             'grad_norm': total_norm,
             'step': step,
@@ -212,7 +215,7 @@ class Trainer_vae_v1(BaseTrainer):
         
         # Print statement
         print_msg = (f'{get_current_time()} loss: {total_loss:.3f} acc: {accuracy:.3f} recon: {loss_recon:.3f} '
-                    f'acc_closed: {accuracy_is_closed:.3f} lr: {lr:.6f} norm: {total_norm:.3f} '
+                    f'sample: {loss_sample:.3f} acc_closed: {accuracy_is_closed:.3f} lr: {lr:.6f} norm: {total_norm:.3f} '
                     f'kl_beta: {kl_beta:.3f} time: {time_per_step:.3f}')
         
         if self.use_fsq and codebook_usage is not None:
@@ -256,6 +259,12 @@ class Trainer_vae_v1(BaseTrainer):
                     if surface_type.shape[0] == 0:
                         continue
                     
+
+                    if self.loss_sample_weight != 0:
+                        # TODO: define loss_sample_weight in the init 
+                        with torch.no_grad():
+                            samples_gt = batch_params_to_samples(params_padded, surface_type, 16, 16)
+                        
                     # print('data prepare time: ', f'{time.time() - tt:.2f}s')
                     tt = time.time()
                     if self.use_fsq:
@@ -277,7 +286,7 @@ class Trainer_vae_v1(BaseTrainer):
                     
                     # Compute per-sample reconstruction loss: (B, D) → (B,)
                     recon_loss_per_sample = (self.loss_recon(params_raw_recon, params_padded) * mask.float()).mean(dim=-1)
-                    
+                
                     # Apply per-type weighting if configured
                     if self.type_weight is not None:
                         sample_weights = self.type_weight[surface_type]  # (B,)
@@ -293,6 +302,21 @@ class Trainer_vae_v1(BaseTrainer):
                         loss_is_closed = self.loss_is_closed(is_closed_logits, is_closed_gt.float())
                     else:
                         loss_is_closed = torch.tensor(0.0, device=z.device)
+
+                    if self.loss_sample_weight != 0:
+                        # TODO: define loss_sample_weight in the init 
+
+                        samples_pred = batch_params_to_samples(params_raw_recon, surface_type_pred, 16, 16)
+                        loss_sample = self.loss_recon(samples_gt, samples_pred).mean(dim=(1, 2, 3))
+                        if self.type_weight is not None:
+                            sample_weights = self.type_weight[surface_type]
+                            loss_sample = (loss_sample * sample_weights).mean()
+                        else:
+                            loss_sample = loss_sample.mean()
+                        loss_sample = loss_sample * self.loss_sample_weight
+
+                    else:
+                        loss_sample = torch.tensor(0.0, device=z.device)
 
                     if not self.use_fsq:
                         # Compute KL loss with free bits strategy
@@ -315,7 +339,7 @@ class Trainer_vae_v1(BaseTrainer):
                     kl_beta = self.compute_kl_annealing_beta(step)
                     
                     # Final loss with annealing
-                    loss = loss_recon * self.loss_recon_weight + loss_cls * self.loss_cls_weight + loss_kl * self.loss_kl_weight * kl_beta + loss_l2norm * self.loss_l2norm_weight  + self.loss_is_closed_weight * loss_is_closed
+                    loss = loss_recon * self.loss_recon_weight + loss_cls * self.loss_cls_weight + loss_kl * self.loss_kl_weight * kl_beta + loss_l2norm * self.loss_l2norm_weight  + self.loss_is_closed_weight * loss_is_closed + self.loss_sample_weight * loss_sample
                     
                     accuracy = self.compute_accuracy(class_logits, surface_type)
                     if self.pred_is_closed:
@@ -368,7 +392,7 @@ class Trainer_vae_v1(BaseTrainer):
                                                         
                 self.log_loss(total_loss, total_accuracy, accuracy_is_closed, loss_recon.item(), 
                             loss_cls.item(), loss_kl.item(), loss_l2norm.item(), 
-                            loss_is_closed.item(), cur_lr, total_norm, step, time_per_step, 
+                            loss_is_closed.item(), loss_sample.item(), cur_lr, total_norm, step, time_per_step, 
                             kl_beta, active_dims, codebook_usage, unique_codes)
                 
             step += 1
@@ -387,6 +411,7 @@ class Trainer_vae_v1(BaseTrainer):
                 total_val_loss = 0.
                 total_val_accuracy = 0.
                 total_val_accuracy_is_closed = 0.
+                total_val_loss_sample = 0.
                 device = next(self.model.parameters()).device
                 
                 # For FSQ: collect all indices to compute codebook usage
@@ -453,7 +478,7 @@ class Trainer_vae_v1(BaseTrainer):
                         # Apply per-type weighting if configured
                         if self.type_weight is not None:
                             sample_weights = self.type_weight[surface_type]  # (B,)
-                            loss_recon = (recon_loss_per_sample * sample_weights).mean()
+                            loss_recon = (recon_loss_per_sample * sample_weights)
                         else:
                             loss_recon = recon_loss_per_sample.mean()
                         
@@ -464,6 +489,19 @@ class Trainer_vae_v1(BaseTrainer):
                             loss_is_closed = self.loss_is_closed(is_closed_logits, is_closed_gt.float()).mean()
                         else:
                             loss_is_closed = torch.tensor(0.0, device=z.device)
+                        
+                        # Compute sample-space loss if enabled
+                        if self.loss_sample_weight != 0:
+                            samples_gt = batch_params_to_samples(params_padded, surface_type, 16, 16)
+                            samples_pred = batch_params_to_samples(params_raw_recon, surface_type_pred, 16, 16)
+                            loss_sample = self.loss_recon(samples_gt, samples_pred).mean(dim=(1, 2, 3))
+                            if self.type_weight is not None:
+                                sample_weights = self.type_weight[surface_type]
+                                loss_sample = (loss_sample * sample_weights).mean()
+                            else:
+                                loss_sample = loss_sample.mean()
+                        else:
+                            loss_sample = torch.tensor(0.0, device=z.device)
                         
                         # Compute KL loss (only for VAE, not FSQ)
                         if not self.use_fsq:
@@ -480,7 +518,8 @@ class Trainer_vae_v1(BaseTrainer):
                                loss_cls * self.loss_cls_weight + 
                                loss_kl * self.loss_kl_weight * val_kl_beta + 
                                loss_l2norm * self.loss_l2norm_weight + 
-                               self.loss_is_closed_weight * loss_is_closed)
+                               self.loss_is_closed_weight * loss_is_closed + 
+                               self.loss_sample_weight * loss_sample)
 
                         accuracy = self.compute_accuracy(class_logits, surface_type)
 
@@ -492,6 +531,7 @@ class Trainer_vae_v1(BaseTrainer):
                         total_val_loss += (loss / num_val_batches)
                         total_val_accuracy += (accuracy / num_val_batches)
                         total_val_accuracy_is_closed += (accuracy_is_closed / num_val_batches)
+                        total_val_loss_sample += (loss_sample / num_val_batches)
                         
                         # Collect FSQ indices
                         if self.use_fsq:
@@ -520,7 +560,8 @@ class Trainer_vae_v1(BaseTrainer):
                 # Print validation results
                 print_msg = (f'{get_current_time()} valid loss: {total_val_loss:.3f} '
                             f'acc: {total_val_accuracy:.3f} acc_closed: {total_val_accuracy_is_closed:.3f} '
-                            f'recon: {loss_recon.item():.4f} cls: {loss_cls.item():.4f} kl: {loss_kl.item():.4f}')
+                            f'recon: {loss_recon.item():.4f} sample: {total_val_loss_sample.item():.4f} '
+                            f'cls: {loss_cls.item():.4f} kl: {loss_kl.item():.4f}')
                 
                 if self.use_fsq and val_codebook_usage is not None:
                     print_msg += f' CB_usage: {val_codebook_usage:.3f} codes: {val_unique_codes}'
@@ -538,6 +579,7 @@ class Trainer_vae_v1(BaseTrainer):
                     "val_loss": total_val_loss,
                     "val_accuracy": total_val_accuracy,
                     "val_loss_recon": loss_recon.item(),
+                    "val_loss_sample": total_val_loss_sample.item(),
                     "val_loss_cls": loss_cls.item(),
                     "val_loss_kl": loss_kl.item(),
                     "val_kl_beta": val_kl_beta,

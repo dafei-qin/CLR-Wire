@@ -206,7 +206,7 @@ def recover_surface_from_params(params, surface_type_idx):
     }
 
 def params_to_samples_with_rts(rotations, scales, shifts, params, surface_type_idx,  num_samples_u, num_samples_v):
-    points = params_to_samples(params, surface_type_idx, num_samples_u, num_samples_v)
+    points = batch_params_to_samples(params, surface_type_idx, num_samples_u, num_samples_v)
     if points.shape[0] == 1:
         rotations = rotations.unsqueeze(0)
         scales = scales.unsqueeze(0)
@@ -290,4 +290,57 @@ def params_to_samples(params, surface_type_idx, num_samples_u, num_samples_v):
         points = torus_d0(u, v, loc_exp, X_exp, Y_exp, D_exp, major_radius, minor_radius)
     assert not torch.isnan(points).any(), "points contains inf/nan, surface_type: " + surface_type + str(surface_params)
     return points
+
+
+def batch_params_to_samples(params_batch, surface_type_batch, num_samples_u, num_samples_v):
+    """
+    Batch process surfaces with different types while preserving order.
+    Similar to decode_and_sample, processes each surface type separately and
+    maintains gradient flow.
+    
+    Args:
+        params_batch: (B, param_dim) Batched surface parameters
+        surface_type_batch: (B,) Batched surface type indices
+        num_samples_u: Number of samples in u direction
+        num_samples_v: Number of samples in v direction
+    
+    Returns:
+        ordered_samples: (B, num_samples_u, num_samples_v, 3) Sampled points in same order as input
+    """
+    assert torch.isfinite(params_batch).all(), "params_batch contains inf/nan"
+    assert params_batch.ndim == 2, f"Expected 2D params_batch, got shape {params_batch.shape}"
+    assert surface_type_batch.ndim == 1, f"Expected 1D surface_type_batch, got shape {surface_type_batch.shape}"
+    assert params_batch.shape[0] == surface_type_batch.shape[0], \
+        f"Batch size mismatch: params {params_batch.shape[0]} vs types {surface_type_batch.shape[0]}"
+    
+    batch_size = params_batch.shape[0]
+    device = params_batch.device
+    dtype = params_batch.dtype
+    
+    # Initialize output tensor (will be filled in per-type)
+    ordered_samples = None
+    
+    # Process each unique surface type separately
+    for surface_type in surface_type_batch.unique():
+        # Find all surfaces of this type
+        type_mask = surface_type_batch == surface_type
+        params_per_type = params_batch[type_mask]
+        
+        # Sample this type (all samples of same type processed together)
+        samples = params_to_samples(params_per_type, surface_type, num_samples_u, num_samples_v)
+        
+        # Initialize output tensor on first iteration
+        if ordered_samples is None:
+            sample_shape = samples.shape[1:]  # (num_samples_u, num_samples_v, 3)
+            ordered_samples = torch.zeros((batch_size,) + sample_shape, device=device, dtype=dtype)
+        
+        # Place samples back in original order
+        ordered_samples[type_mask] = samples
+    
+    # Handle empty batch case
+    if ordered_samples is None:
+        return torch.empty((0, num_samples_u, num_samples_v, 3), device=device, dtype=dtype)
+    
+    assert torch.isfinite(ordered_samples).all(), "ordered_samples contains inf/nan"
+    return ordered_samples
 

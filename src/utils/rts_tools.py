@@ -431,28 +431,663 @@ def build_rotation_codebook_from_cache(
     return codebook
 
 
+class TranslationCodebook:
+    """
+    Linear quantization for translation vectors.
+    
+    Creates uniform grid in 3D space covering 95% of the data range.
+    Each dimension is independently discretized into bins, then combined
+    to create codebook entries.
+    """
+    
+    def __init__(self, codebook_size: int):
+        """
+        Args:
+            codebook_size: Number of codebook entries (should be a perfect cube for balanced discretization)
+        """
+        self.codebook_size = codebook_size
+        # Compute bins per dimension (approximate cube root)
+        self.bins_per_dim = max(2, int(np.round(codebook_size ** (1/3))))
+        # Actual codebook size might differ slightly
+        self.actual_codebook_size = self.bins_per_dim ** 3
+        
+        self.min_vals = None  # (3,) minimum values per dimension (2.5th percentile)
+        self.max_vals = None  # (3,) maximum values per dimension (97.5th percentile)
+        self.codebook = None  # (codebook_size, 3) codebook entries
+        self.is_fitted = False
+        
+    def fit(self, translations: np.ndarray, percentile: float = 95.0, verbose: bool = True) -> Dict:
+        """
+        Fit translation codebook by creating uniform grid covering specified percentile.
+        
+        Args:
+            translations: (N, 3) translation vectors
+            percentile: Percentage of data to cover (default: 95%)
+            verbose: Print progress
+            
+        Returns:
+            stats: Dictionary with statistics
+        """
+        N = translations.shape[0]
+        if verbose:
+            print(f"Fitting translation codebook with {N} samples, {self.actual_codebook_size} bins...")
+        
+        # Compute percentile bounds per dimension
+        lower_percentile = (100 - percentile) / 2
+        upper_percentile = 100 - lower_percentile
+        
+        self.min_vals = np.percentile(translations, lower_percentile, axis=0)  # (3,)
+        self.max_vals = np.percentile(translations, upper_percentile, axis=0)  # (3,)
+        
+        if verbose:
+            print(f"Translation ranges (covering {percentile}% of data):")
+            for i, dim in enumerate(['X', 'Y', 'Z']):
+                print(f"  {dim}: [{self.min_vals[i]:.4f}, {self.max_vals[i]:.4f}]")
+        
+        # Create uniform grid for each dimension
+        x_bins = np.linspace(self.min_vals[0], self.max_vals[0], self.bins_per_dim)
+        y_bins = np.linspace(self.min_vals[1], self.max_vals[1], self.bins_per_dim)
+        z_bins = np.linspace(self.min_vals[2], self.max_vals[2], self.bins_per_dim)
+        
+        # Create 3D grid
+        xx, yy, zz = np.meshgrid(x_bins, y_bins, z_bins, indexing='ij')
+        self.codebook = np.stack([xx.flatten(), yy.flatten(), zz.flatten()], axis=1)  # (K, 3)
+        
+        self.is_fitted = True
+        
+        # Compute statistics
+        stats = self._compute_statistics(translations, verbose=verbose)
+        
+        return stats
+    
+    def _compute_statistics(self, translations: np.ndarray, verbose: bool = True) -> Dict:
+        """
+        Compute error statistics for the codebook.
+        
+        Args:
+            translations: (N, 3) translation vectors
+            verbose: Print statistics
+            
+        Returns:
+            stats: Dictionary with error statistics
+        """
+        if not self.is_fitted:
+            raise RuntimeError("Codebook not fitted yet!")
+        
+        # Encode and decode
+        indices = self.encode(translations)
+        reconstructed = self.decode(indices)
+        
+        # Compute errors
+        errors = translations - reconstructed  # (N, 3)
+        l2_errors = np.linalg.norm(errors, axis=1)  # (N,)
+        l1_errors = np.abs(errors).sum(axis=1)  # (N,)
+        linf_errors = np.abs(errors).max(axis=1)  # (N,)
+        
+        # Per-dimension errors
+        per_dim_errors = np.abs(errors)  # (N, 3)
+        
+        # Check coverage (percentage of data within bounds)
+        in_bounds = np.all((translations >= self.min_vals) & (translations <= self.max_vals), axis=1)
+        coverage = in_bounds.mean() * 100
+        
+        # Compute codebook utilization
+        unique_indices = np.unique(indices)
+        utilization = len(unique_indices) / self.actual_codebook_size * 100
+        
+        stats = {
+            'codebook_size': self.actual_codebook_size,
+            'bins_per_dim': self.bins_per_dim,
+            'n_samples': len(translations),
+            'coverage_percent': float(coverage),
+            'codebook_utilization_percent': float(utilization),
+            # L2 error stats
+            'l2_error_mean': float(l2_errors.mean()),
+            'l2_error_std': float(l2_errors.std()),
+            'l2_error_median': float(np.median(l2_errors)),
+            'l2_error_max': float(l2_errors.max()),
+            'l2_error_95th': float(np.percentile(l2_errors, 95)),
+            # L1 error stats
+            'l1_error_mean': float(l1_errors.mean()),
+            'l1_error_median': float(np.median(l1_errors)),
+            # Linf error stats
+            'linf_error_mean': float(linf_errors.mean()),
+            'linf_error_max': float(linf_errors.max()),
+            # Per-dimension error stats
+            'x_error_mean': float(per_dim_errors[:, 0].mean()),
+            'y_error_mean': float(per_dim_errors[:, 1].mean()),
+            'z_error_mean': float(per_dim_errors[:, 2].mean()),
+            'x_error_max': float(per_dim_errors[:, 0].max()),
+            'y_error_max': float(per_dim_errors[:, 1].max()),
+            'z_error_max': float(per_dim_errors[:, 2].max()),
+        }
+        
+        if verbose:
+            print("\n" + "="*70)
+            print("TRANSLATION CODEBOOK STATISTICS")
+            print("="*70)
+            print(f"Codebook size: {stats['codebook_size']} ({self.bins_per_dim}^3)")
+            print(f"Number of samples: {stats['n_samples']}")
+            print(f"Coverage: {stats['coverage_percent']:.2f}%")
+            print(f"Codebook utilization: {stats['codebook_utilization_percent']:.2f}%")
+            print()
+            print("L2 Reconstruction Errors:")
+            print(f"  Mean:   {stats['l2_error_mean']:.6f}")
+            print(f"  Std:    {stats['l2_error_std']:.6f}")
+            print(f"  Median: {stats['l2_error_median']:.6f}")
+            print(f"  95th:   {stats['l2_error_95th']:.6f}")
+            print(f"  Max:    {stats['l2_error_max']:.6f}")
+            print()
+            print("Per-Dimension Errors (mean):")
+            print(f"  X: {stats['x_error_mean']:.6f}")
+            print(f"  Y: {stats['y_error_mean']:.6f}")
+            print(f"  Z: {stats['z_error_mean']:.6f}")
+            print("="*70 + "\n")
+        
+        return stats
+    
+    def encode(self, translations: np.ndarray) -> np.ndarray:
+        """
+        Encode translation vectors to codebook indices.
+        
+        Args:
+            translations: (N, 3) translation vectors
+            
+        Returns:
+            indices: (N,) codebook indices
+        """
+        if not self.is_fitted:
+            raise RuntimeError("Codebook not fitted yet!")
+        
+        N = translations.shape[0]
+        
+        # Clip to bounds
+        translations_clipped = np.clip(translations, self.min_vals, self.max_vals)
+        
+        # Compute distances to all codebook entries
+        # Broadcasting: (N, 1, 3) - (1, K, 3) = (N, K, 3)
+        distances = np.linalg.norm(
+            translations_clipped[:, np.newaxis, :] - self.codebook[np.newaxis, :, :],
+            axis=2
+        )  # (N, K)
+        
+        # Find nearest codebook entry
+        indices = np.argmin(distances, axis=1)  # (N,)
+        
+        return indices
+    
+    def decode(self, indices: np.ndarray) -> np.ndarray:
+        """
+        Decode codebook indices to translation vectors.
+        
+        Args:
+            indices: (N,) codebook indices
+            
+        Returns:
+            translations: (N, 3) translation vectors
+        """
+        if not self.is_fitted:
+            raise RuntimeError("Codebook not fitted yet!")
+        
+        translations = self.codebook[indices]
+        return translations
+    
+    def save(self, save_path: Union[str, Path]):
+        """Save codebook to file."""
+        if not self.is_fitted:
+            raise RuntimeError("Codebook not fitted yet!")
+        
+        save_path = Path(save_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        data = {
+            'codebook_size': self.codebook_size,
+            'actual_codebook_size': self.actual_codebook_size,
+            'bins_per_dim': self.bins_per_dim,
+            'min_vals': self.min_vals,
+            'max_vals': self.max_vals,
+            'codebook': self.codebook,
+            'is_fitted': self.is_fitted,
+        }
+        
+        with open(save_path, 'wb') as f:
+            pickle.dump(data, f)
+        
+        print(f"Translation codebook saved to: {save_path}")
+    
+    def load(self, load_path: Union[str, Path]):
+        """Load codebook from file."""
+        load_path = Path(load_path)
+        
+        if not load_path.exists():
+            raise FileNotFoundError(f"Codebook file not found: {load_path}")
+        
+        with open(load_path, 'rb') as f:
+            data = pickle.load(f)
+        
+        self.codebook_size = data['codebook_size']
+        self.actual_codebook_size = data['actual_codebook_size']
+        self.bins_per_dim = data['bins_per_dim']
+        self.min_vals = data['min_vals']
+        self.max_vals = data['max_vals']
+        self.codebook = data['codebook']
+        self.is_fitted = data['is_fitted']
+        
+        print(f"Translation codebook loaded from: {load_path}")
+        print(f"  Codebook size: {self.actual_codebook_size} ({self.bins_per_dim}^3)")
+
+
+class ScaleCodebook:
+    """
+    Logarithmic quantization for scale factors.
+    
+    Applies log transform to scales, then creates uniform grid in log-space
+    covering 95% of the data range. Each dimension is independently discretized.
+    """
+    
+    def __init__(self, codebook_size: int):
+        """
+        Args:
+            codebook_size: Number of codebook entries
+        """
+        self.codebook_size = codebook_size
+        # Compute bins per dimension (approximate cube root)
+        self.bins_per_dim = max(2, int(np.round(codebook_size ** (1/3))))
+        # Actual codebook size might differ slightly
+        self.actual_codebook_size = self.bins_per_dim ** 3
+        
+        self.log_min_vals = None  # (3,) minimum log-scale values (2.5th percentile)
+        self.log_max_vals = None  # (3,) maximum log-scale values (97.5th percentile)
+        self.log_codebook = None  # (codebook_size, 3) codebook entries in log-space
+        self.is_fitted = False
+        
+    def fit(self, scales: np.ndarray, percentile: float = 95.0, eps: float = 1e-8, verbose: bool = True) -> Dict:
+        """
+        Fit scale codebook by creating uniform grid in log-space covering specified percentile.
+        
+        Args:
+            scales: (N, 3) scale factors (positive values)
+            percentile: Percentage of data to cover (default: 95%)
+            eps: Small epsilon to avoid log(0)
+            verbose: Print progress
+            
+        Returns:
+            stats: Dictionary with statistics
+        """
+        N = scales.shape[0]
+        if verbose:
+            print(f"Fitting scale codebook with {N} samples, {self.actual_codebook_size} bins...")
+        
+        # Take absolute value and add eps to avoid log(0)
+        scales_abs = np.abs(scales) + eps
+        
+        # Apply log transform
+        log_scales = np.log(scales_abs)
+        
+        # Compute percentile bounds per dimension in log-space
+        lower_percentile = (100 - percentile) / 2
+        upper_percentile = 100 - lower_percentile
+        
+        self.log_min_vals = np.percentile(log_scales, lower_percentile, axis=0)  # (3,)
+        self.log_max_vals = np.percentile(log_scales, upper_percentile, axis=0)  # (3,)
+        
+        if verbose:
+            print(f"Scale ranges in log-space (covering {percentile}% of data):")
+            for i, dim in enumerate(['X', 'Y', 'Z']):
+                min_scale = np.exp(self.log_min_vals[i])
+                max_scale = np.exp(self.log_max_vals[i])
+                print(f"  {dim}: log=[{self.log_min_vals[i]:.4f}, {self.log_max_vals[i]:.4f}] -> "
+                      f"scale=[{min_scale:.4f}, {max_scale:.4f}]")
+        
+        # Create uniform grid in log-space for each dimension
+        x_bins = np.linspace(self.log_min_vals[0], self.log_max_vals[0], self.bins_per_dim)
+        y_bins = np.linspace(self.log_min_vals[1], self.log_max_vals[1], self.bins_per_dim)
+        z_bins = np.linspace(self.log_min_vals[2], self.log_max_vals[2], self.bins_per_dim)
+        
+        # Create 3D grid in log-space
+        xx, yy, zz = np.meshgrid(x_bins, y_bins, z_bins, indexing='ij')
+        self.log_codebook = np.stack([xx.flatten(), yy.flatten(), zz.flatten()], axis=1)  # (K, 3)
+        
+        self.is_fitted = True
+        
+        # Compute statistics
+        stats = self._compute_statistics(scales, eps=eps, verbose=verbose)
+        
+        return stats
+    
+    def _compute_statistics(self, scales: np.ndarray, eps: float = 1e-8, verbose: bool = True) -> Dict:
+        """
+        Compute error statistics for the codebook.
+        
+        Args:
+            scales: (N, 3) scale factors
+            eps: Small epsilon to avoid log(0)
+            verbose: Print statistics
+            
+        Returns:
+            stats: Dictionary with error statistics
+        """
+        if not self.is_fitted:
+            raise RuntimeError("Codebook not fitted yet!")
+        
+        # Encode and decode
+        indices = self.encode(scales, eps=eps)
+        reconstructed = self.decode(indices)
+        
+        # Compute errors in original scale space
+        errors = scales - reconstructed  # (N, 3)
+        l2_errors = np.linalg.norm(errors, axis=1)  # (N,)
+        relative_errors = np.abs(errors) / (np.abs(scales) + eps)  # (N, 3)
+        relative_l2_errors = np.linalg.norm(relative_errors, axis=1)  # (N,)
+        
+        # Compute errors in log-space
+        scales_abs = np.abs(scales) + eps
+        reconstructed_abs = np.abs(reconstructed) + eps
+        log_errors = np.abs(np.log(scales_abs) - np.log(reconstructed_abs))  # (N, 3)
+        log_l2_errors = np.linalg.norm(log_errors, axis=1)  # (N,)
+        
+        # Check coverage (percentage of data within bounds in log-space)
+        log_scales = np.log(scales_abs)
+        in_bounds = np.all((log_scales >= self.log_min_vals) & (log_scales <= self.log_max_vals), axis=1)
+        coverage = in_bounds.mean() * 100
+        
+        # Compute codebook utilization
+        unique_indices = np.unique(indices)
+        utilization = len(unique_indices) / self.actual_codebook_size * 100
+        
+        stats = {
+            'codebook_size': self.actual_codebook_size,
+            'bins_per_dim': self.bins_per_dim,
+            'n_samples': len(scales),
+            'coverage_percent': float(coverage),
+            'codebook_utilization_percent': float(utilization),
+            # L2 error stats in original space
+            'l2_error_mean': float(l2_errors.mean()),
+            'l2_error_std': float(l2_errors.std()),
+            'l2_error_median': float(np.median(l2_errors)),
+            'l2_error_max': float(l2_errors.max()),
+            'l2_error_95th': float(np.percentile(l2_errors, 95)),
+            # Relative error stats
+            'relative_error_mean': float(relative_errors.mean()),
+            'relative_error_median': float(np.median(relative_errors)),
+            'relative_error_max': float(relative_errors.max()),
+            'relative_l2_error_mean': float(relative_l2_errors.mean()),
+            # Log-space error stats
+            'log_l2_error_mean': float(log_l2_errors.mean()),
+            'log_l2_error_median': float(np.median(log_l2_errors)),
+            'log_l2_error_max': float(log_l2_errors.max()),
+            # Per-dimension stats
+            'x_error_mean': float(np.abs(errors[:, 0]).mean()),
+            'y_error_mean': float(np.abs(errors[:, 1]).mean()),
+            'z_error_mean': float(np.abs(errors[:, 2]).mean()),
+        }
+        
+        if verbose:
+            print("\n" + "="*70)
+            print("SCALE CODEBOOK STATISTICS")
+            print("="*70)
+            print(f"Codebook size: {stats['codebook_size']} ({self.bins_per_dim}^3)")
+            print(f"Number of samples: {stats['n_samples']}")
+            print(f"Coverage: {stats['coverage_percent']:.2f}%")
+            print(f"Codebook utilization: {stats['codebook_utilization_percent']:.2f}%")
+            print()
+            print("L2 Reconstruction Errors (original space):")
+            print(f"  Mean:   {stats['l2_error_mean']:.6f}")
+            print(f"  Std:    {stats['l2_error_std']:.6f}")
+            print(f"  Median: {stats['l2_error_median']:.6f}")
+            print(f"  95th:   {stats['l2_error_95th']:.6f}")
+            print(f"  Max:    {stats['l2_error_max']:.6f}")
+            print()
+            print("Relative Errors:")
+            print(f"  Mean:   {stats['relative_error_mean']:.6f}")
+            print(f"  Median: {stats['relative_error_median']:.6f}")
+            print(f"  Max:    {stats['relative_error_max']:.6f}")
+            print()
+            print("Log-space L2 Errors:")
+            print(f"  Mean:   {stats['log_l2_error_mean']:.6f}")
+            print(f"  Median: {stats['log_l2_error_median']:.6f}")
+            print(f"  Max:    {stats['log_l2_error_max']:.6f}")
+            print("="*70 + "\n")
+        
+        return stats
+    
+    def encode(self, scales: np.ndarray, eps: float = 1e-8) -> np.ndarray:
+        """
+        Encode scale factors to codebook indices.
+        
+        Args:
+            scales: (N, 3) scale factors
+            eps: Small epsilon to avoid log(0)
+            
+        Returns:
+            indices: (N,) codebook indices
+        """
+        if not self.is_fitted:
+            raise RuntimeError("Codebook not fitted yet!")
+        
+        N = scales.shape[0]
+        
+        # Apply log transform
+        scales_abs = np.abs(scales) + eps
+        log_scales = np.log(scales_abs)
+        
+        # Clip to bounds in log-space
+        log_scales_clipped = np.clip(log_scales, self.log_min_vals, self.log_max_vals)
+        
+        # Compute distances to all codebook entries in log-space
+        distances = np.linalg.norm(
+            log_scales_clipped[:, np.newaxis, :] - self.log_codebook[np.newaxis, :, :],
+            axis=2
+        )  # (N, K)
+        
+        # Find nearest codebook entry
+        indices = np.argmin(distances, axis=1)  # (N,)
+        
+        return indices
+    
+    def decode(self, indices: np.ndarray) -> np.ndarray:
+        """
+        Decode codebook indices to scale factors.
+        
+        Args:
+            indices: (N,) codebook indices
+            
+        Returns:
+            scales: (N, 3) scale factors
+        """
+        if not self.is_fitted:
+            raise RuntimeError("Codebook not fitted yet!")
+        
+        # Get log-space values
+        log_scales = self.log_codebook[indices]
+        
+        # Transform back to original scale space
+        scales = np.exp(log_scales)
+        
+        return scales
+    
+    def save(self, save_path: Union[str, Path]):
+        """Save codebook to file."""
+        if not self.is_fitted:
+            raise RuntimeError("Codebook not fitted yet!")
+        
+        save_path = Path(save_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        data = {
+            'codebook_size': self.codebook_size,
+            'actual_codebook_size': self.actual_codebook_size,
+            'bins_per_dim': self.bins_per_dim,
+            'log_min_vals': self.log_min_vals,
+            'log_max_vals': self.log_max_vals,
+            'log_codebook': self.log_codebook,
+            'is_fitted': self.is_fitted,
+        }
+        
+        with open(save_path, 'wb') as f:
+            pickle.dump(data, f)
+        
+        print(f"Scale codebook saved to: {save_path}")
+    
+    def load(self, load_path: Union[str, Path]):
+        """Load codebook from file."""
+        load_path = Path(load_path)
+        
+        if not load_path.exists():
+            raise FileNotFoundError(f"Codebook file not found: {load_path}")
+        
+        with open(load_path, 'rb') as f:
+            data = pickle.load(f)
+        
+        self.codebook_size = data['codebook_size']
+        self.actual_codebook_size = data['actual_codebook_size']
+        self.bins_per_dim = data['bins_per_dim']
+        self.log_min_vals = data['log_min_vals']
+        self.log_max_vals = data['log_max_vals']
+        self.log_codebook = data['log_codebook']
+        self.is_fitted = data['is_fitted']
+        
+        print(f"Scale codebook loaded from: {load_path}")
+        print(f"  Codebook size: {self.actual_codebook_size} ({self.bins_per_dim}^3)")
+
+
+def build_translation_codebook_from_cache(
+    cache_path: str,
+    codebook_size: int,
+    output_path: str,
+    percentile: float = 95.0,
+) -> TranslationCodebook:
+    """
+    Build translation codebook from a dataset cache file.
+    
+    Args:
+        cache_path: Path to .npz cache file containing 'shifts'
+        codebook_size: Number of codebook entries (approximate, will be rounded to nearest cube)
+        output_path: Path to save the codebook
+        percentile: Percentage of data to cover (default: 95%)
+        
+    Returns:
+        codebook: Fitted TranslationCodebook instance
+    """
+    print(f"Loading translations from: {cache_path}")
+    data = np.load(cache_path)
+    
+    if 'shifts' not in data:
+        raise KeyError(f"Cache file does not contain 'shifts' key. Available keys: {list(data.keys())}")
+    
+    translations = data['shifts']
+    print(f"Loaded {len(translations)} translation vectors")
+    
+    # Create and fit codebook
+    codebook = TranslationCodebook(codebook_size)
+    stats = codebook.fit(translations, percentile=percentile, verbose=True)
+    
+    # Save codebook
+    codebook.save(output_path)
+    
+    # Save statistics
+    stats_path = Path(output_path).with_suffix('.stats.txt')
+    with open(stats_path, 'w') as f:
+        f.write("TRANSLATION CODEBOOK STATISTICS\n")
+        f.write("="*70 + "\n\n")
+        for key, value in stats.items():
+            f.write(f"{key}: {value}\n")
+    
+    print(f"Statistics saved to: {stats_path}")
+    
+    return codebook
+
+
+def build_scale_codebook_from_cache(
+    cache_path: str,
+    codebook_size: int,
+    output_path: str,
+    percentile: float = 95.0,
+    eps: float = 1e-8,
+) -> ScaleCodebook:
+    """
+    Build scale codebook from a dataset cache file.
+    
+    Args:
+        cache_path: Path to .npz cache file containing 'scales'
+        codebook_size: Number of codebook entries (approximate, will be rounded to nearest cube)
+        output_path: Path to save the codebook
+        percentile: Percentage of data to cover (default: 95%)
+        eps: Small epsilon to avoid log(0)
+        
+    Returns:
+        codebook: Fitted ScaleCodebook instance
+    """
+    print(f"Loading scales from: {cache_path}")
+    data = np.load(cache_path)
+    
+    if 'scales' not in data:
+        raise KeyError(f"Cache file does not contain 'scales' key. Available keys: {list(data.keys())}")
+    
+    scales = data['scales']
+    print(f"Loaded {len(scales)} scale vectors")
+    
+    # Create and fit codebook
+    codebook = ScaleCodebook(codebook_size)
+    stats = codebook.fit(scales, percentile=percentile, eps=eps, verbose=True)
+    
+    # Save codebook
+    codebook.save(output_path)
+    
+    # Save statistics
+    stats_path = Path(output_path).with_suffix('.stats.txt')
+    with open(stats_path, 'w') as f:
+        f.write("SCALE CODEBOOK STATISTICS\n")
+        f.write("="*70 + "\n\n")
+        for key, value in stats.items():
+            f.write(f"{key}: {value}\n")
+    
+    print(f"Statistics saved to: {stats_path}")
+    
+    return codebook
+
+
 if __name__ == '__main__':
     import argparse
     
-    parser = argparse.ArgumentParser(description='Build rotation codebook using spherical k-means')
+    parser = argparse.ArgumentParser(description='Build rotation/translation/scale codebooks')
+    parser.add_argument('--type', type=str, required=True, choices=['rotation', 'translation', 'scale'],
+                       help='Type of codebook to build')
     parser.add_argument('--cache_path', type=str, required=True,
-                       help='Path to .npz cache file with rotations')
+                       help='Path to .npz cache file with data')
     parser.add_argument('--codebook_size', type=int, required=True,
                        help='Number of codebook entries (clusters)')
     parser.add_argument('--output_path', type=str, required=True,
                        help='Path to save the codebook (.pkl)')
     parser.add_argument('--max_iter', type=int, default=100,
-                       help='Maximum k-means iterations')
+                       help='Maximum k-means iterations (rotation only)')
+    parser.add_argument('--percentile', type=float, default=95.0,
+                       help='Percentage of data to cover (translation/scale only)')
     parser.add_argument('--seed', type=int, default=42,
                        help='Random seed')
     
     args = parser.parse_args()
     
-    build_rotation_codebook_from_cache(
-        cache_path=args.cache_path,
-        codebook_size=args.codebook_size,
-        output_path=args.output_path,
-        max_iter=args.max_iter,
-        random_seed=args.seed,
-    )
+    if args.type == 'rotation':
+        build_rotation_codebook_from_cache(
+            cache_path=args.cache_path,
+            codebook_size=args.codebook_size,
+            output_path=args.output_path,
+            max_iter=args.max_iter,
+            random_seed=args.seed,
+        )
+    elif args.type == 'translation':
+        build_translation_codebook_from_cache(
+            cache_path=args.cache_path,
+            codebook_size=args.codebook_size,
+            output_path=args.output_path,
+            percentile=args.percentile,
+        )
+    elif args.type == 'scale':
+        build_scale_codebook_from_cache(
+            cache_path=args.cache_path,
+            codebook_size=args.codebook_size,
+            output_path=args.output_path,
+            percentile=args.percentile,
+        )
 

@@ -74,6 +74,7 @@ trainer = Trainer_vae_v1(
     loss_kl_weight=args.loss.kl_weight,
     loss_l2norm_weight=args.loss.l2norm_weight,
     loss_is_closed_weight=args.loss.is_closed_weight,
+    loss_sample_weight=getattr(args.loss, 'sample_weight', 0.0),
     pred_is_closed=args.model.pred_is_closed,
     kl_annealing_steps=getattr(args.loss, 'kl_annealing_steps', 0),
     kl_free_bits=getattr(args.loss, 'kl_free_bits', 0.0),
