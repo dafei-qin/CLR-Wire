@@ -673,12 +673,8 @@ def callback():
     global current_idx, max_idx, show_gt, show_pipeline, show_recovered, show_resampled
     global resampled_surfaces, pred_is_closed, show_closed_colors, pending_idx
     global show_gt_samples, show_pred_samples, show_pipeline_samples, num_samples
-<<<<<<< HEAD
     global tokenize_rts, use_tokenized_rts, rts_quantization_errors
     global export_folder_path
-=======
-    global tokenize_rts, use_tokenized_rts, rts_quantization_errors, current_json_path
->>>>>>> 61b75eca8a1d5f33a056161fc56c7972a189b537
     
     psim.Text("VAE V2 Surface Reconstruction Test")
     psim.Separator()
