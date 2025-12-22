@@ -19,7 +19,9 @@ from src.tools.surface_to_canonical_space import to_canonical, from_canonical
 from src.utils.config import NestedDictToClass, load_config
 from src.utils.import_tools import load_model_from_config, load_dataset_from_config
 from src.utils.surface_tools import params_to_samples_with_rts
+from src.utils.rts_tools import RotationCodebook, TranslationCodebook, ScaleCodebook
 from utils.surface import visualize_json_interset
+from pathlib import Path
 
 # Colors for is_closed visualization
 COLOR_BOTH_CLOSED = [0.2, 0.8, 0.2]      # Green - both u and v closed
@@ -98,10 +100,19 @@ gt_sample_points = None
 pred_sample_points = None
 pipeline_sample_points = None
 
+# RTS Codebook configuration
+tokenize_rts = False  # Whether to use RTS quantization
+use_tokenized_rts = False  # UI toggle for using quantized RTS
+rotation_codebook = None
+translation_codebook = None
+scale_codebook = None
+rts_quantization_errors = {}  # Store quantization error statistics
+
 
 def process_sample(idx):
     """Process a single sample and return both GT and recovered data"""
     global dataset, model, pred_is_closed, use_fsq, canonical, num_samples
+    global tokenize_rts, rotation_codebook, translation_codebook, scale_codebook, rts_quantization_errors
     
     # Load data from dataset
     if pred_is_closed:
@@ -127,14 +138,65 @@ def process_sample(idx):
     rotation = rotation.astype(np.float32)
     scale = scale.astype(np.float32)
     
+    # RTS Quantization (if enabled)
+    shift_quantized = None
+    rotation_quantized = None
+    scale_quantized = None
+    
+    if tokenize_rts and rotation_codebook is not None:
+        # Encode RTS to indices
+        rot_indices = rotation_codebook.encode(rotation, batch_size=10000, verbose=False)
+        trans_indices = translation_codebook.encode(shift, batch_size=10000, verbose=False)
+        scale_indices = scale_codebook.encode(scale, batch_size=10000, verbose=False)
+        
+        # Decode back to get quantized RTS
+        rotation_quantized = rotation_codebook.decode(rot_indices)
+        shift_quantized = translation_codebook.decode(trans_indices)
+        scale_quantized = scale_codebook.decode(scale_indices)
+        
+        # Compute quantization errors
+        rot_errors_deg = []
+        for i in range(len(rotation)):
+            R_diff = rotation[i].T @ rotation_quantized[i]
+            trace = np.trace(R_diff)
+            angle = np.arccos(np.clip((trace - 1) / 2, -1.0, 1.0))
+            rot_errors_deg.append(np.rad2deg(angle))
+        
+        trans_errors = np.linalg.norm(shift - shift_quantized, axis=1)
+        scale_errors_relative = np.abs(scale - scale_quantized) / (np.abs(scale) + 1e-8)
+        
+        rts_quantization_errors = {
+            'rotation_mean_deg': np.mean(rot_errors_deg),
+            'rotation_max_deg': np.max(rot_errors_deg),
+            'translation_mean': np.mean(trans_errors),
+            'translation_max': np.max(trans_errors),
+            'scale_relative_mean': np.mean(scale_errors_relative),
+            'scale_relative_max': np.max(scale_errors_relative),
+            'num_surfaces': len(rotation),
+        }
+        
+        print(f"RTS Quantization Errors:")
+        print(f"  Rotation: mean={rts_quantization_errors['rotation_mean_deg']:.4f}°, "
+              f"max={rts_quantization_errors['rotation_max_deg']:.4f}°")
+        print(f"  Translation: mean={rts_quantization_errors['translation_mean']:.6f}, "
+              f"max={rts_quantization_errors['translation_max']:.6f}")
+        print(f"  Scale: relative mean={rts_quantization_errors['scale_relative_mean']:.6f}, "
+              f"max={rts_quantization_errors['scale_relative_max']:.6f}")
+    
     # Sample GT surfaces (before VAE processing)
+    # Choose RTS based on tokenization setting
+    global use_tokenized_rts
+    rotation_to_use = rotation_quantized if (use_tokenized_rts and rotation_quantized is not None) else rotation
+    shift_to_use = shift_quantized if (use_tokenized_rts and shift_quantized is not None) else shift
+    scale_to_use = scale_quantized if (use_tokenized_rts and scale_quantized is not None) else scale
+    
     gt_sampled_points_list = []
     for i in range(len(valid_params)):
         try:
             samples = params_to_samples_with_rts(
-                torch.from_numpy(rotation[i]), 
-                torch.tensor(scale[i]), 
-                torch.from_numpy(shift[i]), 
+                torch.from_numpy(rotation_to_use[i]), 
+                torch.tensor(scale_to_use[i]), 
+                torch.from_numpy(shift_to_use[i]), 
                 valid_params[i].unsqueeze(0), 
                 valid_types[i], 
                 num_samples, 
@@ -200,14 +262,14 @@ def process_sample(idx):
         recon_loss = (recon_fn(params_pred, valid_params)) * mask.float().mean()
         accuracy = (types_pred == valid_types).float().mean()
         
-        # Sample predicted surfaces
+        # Sample predicted surfaces (use same RTS as GT for fair comparison)
         pred_sampled_points_list = []
         for i in range(len(params_pred)):
             try:
                 samples = params_to_samples_with_rts(
-                    torch.from_numpy(rotation[i]), 
-                    torch.tensor(scale[i]), 
-                    torch.from_numpy(shift[i]), 
+                    torch.from_numpy(rotation_to_use[i]), 
+                    torch.tensor(scale_to_use[i]), 
+                    torch.from_numpy(shift_to_use[i]), 
                     params_pred[i].unsqueeze(0), 
                     types_pred[i], 
                     num_samples, 
@@ -260,9 +322,9 @@ def process_sample(idx):
     for i in range(len(valid_params)):
         try:
             samples = params_to_samples_with_rts(
-                torch.from_numpy(rotation[i]), 
-                torch.tensor(scale[i]), 
-                torch.from_numpy(shift[i]), 
+                torch.from_numpy(rotation_to_use[i]), 
+                torch.tensor(scale_to_use[i]), 
+                torch.from_numpy(shift_to_use[i]), 
                 valid_params[i].unsqueeze(0), 
                 valid_types[i], 
                 num_samples, 
@@ -300,6 +362,7 @@ def process_sample(idx):
 def resample_model():
     """Generate new samples from the VAE's latent space"""
     global model, resampled_surfaces, current_idx, pred_is_closed, show_closed_colors, use_fsq, canonical, num_samples
+    global tokenize_rts, rotation_codebook, translation_codebook, scale_codebook, use_tokenized_rts
     
     if model is None:
         print("Model not loaded yet!")
@@ -316,6 +379,16 @@ def resample_model():
     shift = shift[mask_tensor.bool()]
     rotation = rotation[mask_tensor.bool()]
     scale = scale[mask_tensor.bool()]
+    
+    # Apply RTS quantization if enabled
+    if tokenize_rts and use_tokenized_rts and rotation_codebook is not None:
+        rot_indices = rotation_codebook.encode(rotation, batch_size=10000, verbose=False)
+        trans_indices = translation_codebook.encode(shift, batch_size=10000, verbose=False)
+        scale_indices = scale_codebook.encode(scale, batch_size=10000, verbose=False)
+        
+        rotation = rotation_codebook.decode(rot_indices)
+        shift = translation_codebook.decode(trans_indices)
+        scale = scale_codebook.decode(scale_indices)
     
     with torch.no_grad():
         # Encode to get latent vectors
@@ -527,6 +600,7 @@ def callback():
     global current_idx, max_idx, show_gt, show_pipeline, show_recovered, show_resampled
     global resampled_surfaces, pred_is_closed, show_closed_colors, pending_idx
     global show_gt_samples, show_pred_samples, show_pipeline_samples, num_samples
+    global tokenize_rts, use_tokenized_rts, rts_quantization_errors
     
     psim.Text("VAE V2 Surface Reconstruction Test")
     psim.Separator()
@@ -601,6 +675,24 @@ def callback():
         if changed:
             update_visualization()
         
+        # RTS Tokenization controls
+        if tokenize_rts:
+            psim.Separator()
+            psim.Text("=== RTS Tokenization ===")
+            changed, use_tokenized_rts = psim.Checkbox("Use Tokenized RTS", use_tokenized_rts)
+            if changed:
+                update_visualization()
+            
+            # Display quantization statistics
+            if rts_quantization_errors:
+                psim.Text(f"Quantization Errors ({rts_quantization_errors['num_surfaces']} surfaces):")
+                psim.Text(f"  Rotation: mean={rts_quantization_errors['rotation_mean_deg']:.4f}°, "
+                         f"max={rts_quantization_errors['rotation_max_deg']:.4f}°")
+                psim.Text(f"  Translation: mean={rts_quantization_errors['translation_mean']:.6f}, "
+                         f"max={rts_quantization_errors['translation_max']:.6f}")
+                psim.Text(f"  Scale: mean={rts_quantization_errors['scale_relative_mean']:.6f}, "
+                         f"max={rts_quantization_errors['scale_relative_max']:.6f}")
+        
         # is_closed visualization controls
         if pred_is_closed:
             psim.Separator()
@@ -628,6 +720,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, required=True, help='Path to config file')
     parser.add_argument('--checkpoint_path', type=str, default='', help='Path to the checkpoint')
+    parser.add_argument('--tokenize_rts', action='store_true', help='Enable RTS tokenization')
+    parser.add_argument('--codebook_dir', type=str, default='', help='Directory containing RTS codebooks')
     args = parser.parse_args()
     
     # Load configuration
@@ -643,6 +737,49 @@ if __name__ == '__main__':
     print(f"Using FSQ: {use_fsq}")
     print(f"Pred is closed: {pred_is_closed}")
     print(f"Canonical: {canonical}")
+    
+    # Load RTS codebooks if enabled
+    tokenize_rts = args.tokenize_rts
+    if tokenize_rts:
+        if not args.codebook_dir:
+            raise ValueError("--codebook_dir must be specified when --tokenize_rts is enabled")
+        
+        codebook_dir = Path(args.codebook_dir)
+        if not codebook_dir.exists():
+            raise FileNotFoundError(f"Codebook directory not found: {codebook_dir}")
+        
+        print(f"\n{'='*70}")
+        print("Loading RTS Codebooks...")
+        print(f"{'='*70}")
+        
+        # Load rotation codebook
+        rot_cb_path = codebook_dir / 'cb_rotation.pkl'
+        if not rot_cb_path.exists():
+            raise FileNotFoundError(f"Rotation codebook not found: {rot_cb_path}")
+        rotation_codebook = RotationCodebook(codebook_size=0)  # Size will be loaded
+        rotation_codebook.load(rot_cb_path)
+        
+        # Load translation codebook
+        trans_cb_path = codebook_dir / 'cb_translation.pkl'
+        if not trans_cb_path.exists():
+            raise FileNotFoundError(f"Translation codebook not found: {trans_cb_path}")
+        translation_codebook = TranslationCodebook(codebook_size=0)
+        translation_codebook.load(trans_cb_path)
+        
+        # Load scale codebook
+        scale_cb_path = codebook_dir / 'cb_scale.pkl'
+        if not scale_cb_path.exists():
+            raise FileNotFoundError(f"Scale codebook not found: {scale_cb_path}")
+        scale_codebook = ScaleCodebook(codebook_size=0)
+        scale_codebook.load(scale_cb_path)
+        
+        print(f"\n✓ RTS Codebooks loaded successfully!")
+        print(f"  Rotation: {rotation_codebook.codebook_size} entries")
+        print(f"  Translation: {translation_codebook.actual_codebook_size} entries")
+        print(f"  Scale: {scale_codebook.actual_codebook_size} entries")
+        print(f"{'='*70}\n")
+    else:
+        print("\nRTS tokenization disabled (using continuous RTS values)\n")
     
     # Load checkpoint
     if args.checkpoint_path:
