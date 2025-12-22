@@ -73,6 +73,7 @@ model = None
 current_idx = 0
 max_idx = 0
 pending_idx = 0  # Pending index for "Go To Index" input
+current_json_path = ""  # Current JSON file path being processed
 gt_group = None
 recovered_group = None
 pipeline_group = None
@@ -118,6 +119,7 @@ def process_sample(idx):
     """Process a single sample and return both GT and recovered data"""
     global dataset, model, pred_is_closed, use_fsq, canonical, num_samples
     global tokenize_rts, rotation_codebook, translation_codebook, scale_codebook, rts_quantization_errors
+    global current_json_path
     
     # Load data from dataset
     if pred_is_closed:
@@ -129,6 +131,7 @@ def process_sample(idx):
     
     print('Processing file:', dataset.json_names[idx])
     json_path = dataset.json_names[idx]
+    current_json_path = json_path  # Update global variable
     
     mask_bool = mask_tensor.bool()
     mask_np = mask_bool.cpu().numpy().astype(bool)
@@ -670,11 +673,20 @@ def callback():
     global current_idx, max_idx, show_gt, show_pipeline, show_recovered, show_resampled
     global resampled_surfaces, pred_is_closed, show_closed_colors, pending_idx
     global show_gt_samples, show_pred_samples, show_pipeline_samples, num_samples
+<<<<<<< HEAD
     global tokenize_rts, use_tokenized_rts, rts_quantization_errors
     global export_folder_path
+=======
+    global tokenize_rts, use_tokenized_rts, rts_quantization_errors, current_json_path
+>>>>>>> 61b75eca8a1d5f33a056161fc56c7972a189b537
     
     psim.Text("VAE V2 Surface Reconstruction Test")
     psim.Separator()
+    
+    # Display current JSON path
+    if current_json_path:
+        psim.TextWrapped(f"Current File: {current_json_path}")
+        psim.Separator()
     
     # Index controls
     slider_changed, slider_idx = psim.SliderInt("Test Index", current_idx, 0, max_idx)
