@@ -1,0 +1,81 @@
+resume_training: false
+from_start: false
+
+epochs: 200
+batch_size: 512
+lr: 0.0005
+num_workers: 0
+num_workers_val: 8
+num_gpus: 6
+
+grad_accum_every: 1
+ema_update_every: 10
+max_grad_norm: 1.0
+
+val_every_epoch: 2
+save_every_epoch: 2
+log_every_step: 50
+
+use_wandb_tracking: true
+wandb_project_name: VAE_V1
+wandb_run_name: train_1221_vae_v3_bspline_fsq_4cbs_weight_adjust_sample_loss
+
+use_fsq: true
+
+trainer:
+    use_logvar: true
+    u_closed_pos_weight: 10.0
+    v_closed_pos_weight: 50.0
+    type_weight: {
+      "plane": 1.0,
+      "cylinder": 1.0,
+      "cone": 5.0,
+      "sphere": 15.0,
+      "torus": 5.0,
+      "bspline_surface": 5.0,
+    }
+
+# Dataset configuration using dynamic loading
+data_train:
+    name: src.dataset.dataset_v2.dataset_compound_cache
+    params:
+        cache_path: ../data/logan_jsons_cache_2/abc_cache_2_updated_rot.npz
+        detect_closed: true
+
+data_val:
+    name: src.dataset.dataset_v2.dataset_compound_cache
+    params:
+        cache_path: ../data/logan_jsons_cache_2/abc_test_cache_2_updated_rot.npz
+        detect_closed: true
+
+
+
+model:
+    name: src.vae.vae_v3.SurfaceVAE_FSQ
+    pred_is_closed: true
+    load_ckpt: false  # Don't load checkpoint on initialization (trainer will handle resume)
+
+    params:
+        param_raw_dim: [17, 18, 19, 18, 19, 65]
+        latent_dim: 64
+        fsq_levels: [8,5,5,5]  # Each codebook: 8*5*5*5 = 1000 codes
+        num_codebooks: 4  # 4 codebooks × 4D = 64D (perfect match, no bottleneck!)
+        # With 11 codebooks: each sample uses 11 independent codes
+        # Total capacity: much larger than single codebook
+        # Reduces information bottleneck: 64D → 1×4D → 1×4D → 64D
+        param_dim: 32
+        n_surface_types: 6
+        emb_dim: 16
+    
+    checkpoint_folder: checkpoints/train_1221_vae_v3_bspline_fsq_4cbs_weight_adjust_sample_loss
+    checkpoint_file_name: model-03.pt
+
+loss:
+    recon_weight: 10.0
+    cls_weight: 1.0
+    kl_weight: 0.0  # FSQ doesn't need KL loss
+    l2norm_weight: 0.0  # FSQ quantized latents don't benefit from L2 norm
+    is_closed_weight: 1.0
+    kl_annealing_steps: 0  # Not needed for FSQ
+    kl_free_bits: 0.0  # Not needed for FSQ
+    sample_weight: 1.0
