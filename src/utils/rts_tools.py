@@ -775,10 +775,10 @@ class TranslationCodebook:
 
 class ScaleCodebook:
     """
-    Logarithmic quantization for scale factors.
+    Logarithmic quantization for scalar scale factors.
     
-    Applies log transform to scales, then creates uniform grid in log-space
-    covering 95% of the data range. Each dimension is independently discretized.
+    Applies log transform to scales, then creates uniform 1D grid in log-space
+    covering 95% of the data range.
     """
     
     def __init__(self, codebook_size: int):
@@ -787,22 +787,18 @@ class ScaleCodebook:
             codebook_size: Number of codebook entries
         """
         self.codebook_size = codebook_size
-        # Compute bins per dimension (approximate cube root)
-        self.bins_per_dim = max(2, int(np.round(codebook_size ** (1/3))))
-        # Actual codebook size might differ slightly
-        self.actual_codebook_size = self.bins_per_dim ** 3
         
-        self.log_min_vals = None  # (3,) minimum log-scale values (2.5th percentile)
-        self.log_max_vals = None  # (3,) maximum log-scale values (97.5th percentile)
-        self.log_codebook = None  # (codebook_size, 3) codebook entries in log-space
+        self.log_min = None  # Minimum log-scale value (2.5th percentile)
+        self.log_max = None  # Maximum log-scale value (97.5th percentile)
+        self.log_codebook = None  # (codebook_size,) codebook entries in log-space
         self.is_fitted = False
         
     def fit(self, scales: np.ndarray, percentile: float = 95.0, eps: float = 1e-8, verbose: bool = True) -> Dict:
         """
-        Fit scale codebook by creating uniform grid in log-space covering specified percentile.
+        Fit scale codebook by creating uniform 1D grid in log-space covering specified percentile.
         
         Args:
-            scales: (N, 3) scale factors (positive values)
+            scales: (N,) scalar scale factors (positive values)
             percentile: Percentage of data to cover (default: 95%)
             eps: Small epsilon to avoid log(0)
             verbose: Print progress
@@ -810,19 +806,13 @@ class ScaleCodebook:
         Returns:
             stats: Dictionary with statistics
         """
-        # Ensure scales has correct shape
-        if scales.ndim == 1:
-            # If 1D, reshape to (N, 1) and replicate to (N, 3)
-            scales = np.tile(scales.reshape(-1, 1), (1, 3))
-        elif scales.ndim > 2:
-            # If more than 2D, flatten and reshape
-            scales = scales.reshape(-1, 3)
-        
-        assert scales.shape[1] == 3, f"Expected scales to have 3 dimensions, got shape {scales.shape}"
+        # Ensure scales is 1D
+        if scales.ndim > 1:
+            scales = scales.flatten()
         
         N = scales.shape[0]
         if verbose:
-            print(f"Fitting scale codebook with {N} samples, {self.actual_codebook_size} bins...")
+            print(f"Fitting scale codebook with {N} samples, {self.codebook_size} bins...")
         
         # Take absolute value and add eps to avoid log(0)
         scales_abs = np.abs(scales) + eps
@@ -830,33 +820,22 @@ class ScaleCodebook:
         # Apply log transform
         log_scales = np.log(scales_abs)
         
-        # Compute percentile bounds per dimension in log-space
+        # Compute percentile bounds in log-space
         lower_percentile = (100 - percentile) / 2
         upper_percentile = 100 - lower_percentile
         
-        self.log_min_vals = np.percentile(log_scales, lower_percentile, axis=0)  # (3,)
-        self.log_max_vals = np.percentile(log_scales, upper_percentile, axis=0)  # (3,)
-        
-        # Ensure they are arrays, not scalars
-        self.log_min_vals = np.atleast_1d(self.log_min_vals)
-        self.log_max_vals = np.atleast_1d(self.log_max_vals)
+        self.log_min = np.percentile(log_scales, lower_percentile)
+        self.log_max = np.percentile(log_scales, upper_percentile)
         
         if verbose:
-            print(f"Scale ranges in log-space (covering {percentile}% of data):")
-            for i, dim in enumerate(['X', 'Y', 'Z']):
-                min_scale = np.exp(self.log_min_vals[i])
-                max_scale = np.exp(self.log_max_vals[i])
-                print(f"  {dim}: log=[{self.log_min_vals[i]:.4f}, {self.log_max_vals[i]:.4f}] -> "
-                      f"scale=[{min_scale:.4f}, {max_scale:.4f}]")
+            min_scale = np.exp(self.log_min)
+            max_scale = np.exp(self.log_max)
+            print(f"Scale range in log-space (covering {percentile}% of data):")
+            print(f"  log=[{self.log_min:.4f}, {self.log_max:.4f}] -> "
+                  f"scale=[{min_scale:.4f}, {max_scale:.4f}]")
         
-        # Create uniform grid in log-space for each dimension
-        x_bins = np.linspace(self.log_min_vals[0], self.log_max_vals[0], self.bins_per_dim)
-        y_bins = np.linspace(self.log_min_vals[1], self.log_max_vals[1], self.bins_per_dim)
-        z_bins = np.linspace(self.log_min_vals[2], self.log_max_vals[2], self.bins_per_dim)
-        
-        # Create 3D grid in log-space
-        xx, yy, zz = np.meshgrid(x_bins, y_bins, z_bins, indexing='ij')
-        self.log_codebook = np.stack([xx.flatten(), yy.flatten(), zz.flatten()], axis=1)  # (K, 3)
+        # Create uniform 1D grid in log-space
+        self.log_codebook = np.linspace(self.log_min, self.log_max, self.codebook_size)
         
         self.is_fitted = True
         
@@ -870,7 +849,7 @@ class ScaleCodebook:
         Compute error statistics for the codebook.
         
         Args:
-            scales: (N, 3) scale factors
+            scales: (N,) scalar scale factors
             eps: Small epsilon to avoid log(0)
             verbose: Print statistics
             
@@ -888,90 +867,85 @@ class ScaleCodebook:
         reconstructed = self.decode(indices)
         
         # Compute errors in original scale space
-        errors = scales - reconstructed  # (N, 3)
-        l2_errors = np.linalg.norm(errors, axis=1)  # (N,)
-        relative_errors = np.abs(errors) / (np.abs(scales) + eps)  # (N, 3)
-        relative_l2_errors = np.linalg.norm(relative_errors, axis=1)  # (N,)
+        errors = np.abs(scales - reconstructed)  # (N,)
+        relative_errors = errors / (np.abs(scales) + eps)  # (N,)
         
         # Compute errors in log-space
         scales_abs = np.abs(scales) + eps
         reconstructed_abs = np.abs(reconstructed) + eps
-        log_errors = np.abs(np.log(scales_abs) - np.log(reconstructed_abs))  # (N, 3)
-        log_l2_errors = np.linalg.norm(log_errors, axis=1)  # (N,)
+        log_errors = np.abs(np.log(scales_abs) - np.log(reconstructed_abs))  # (N,)
         
         # Check coverage (percentage of data within bounds in log-space)
         log_scales = np.log(scales_abs)
-        in_bounds = np.all((log_scales >= self.log_min_vals) & (log_scales <= self.log_max_vals), axis=1)
+        in_bounds = (log_scales >= self.log_min) & (log_scales <= self.log_max)
         coverage = in_bounds.mean() * 100
         
         # Compute codebook utilization
         unique_indices = np.unique(indices)
-        utilization = len(unique_indices) / self.actual_codebook_size * 100
+        utilization = len(unique_indices) / self.codebook_size * 100
         
         stats = {
-            'codebook_size': self.actual_codebook_size,
-            'bins_per_dim': self.bins_per_dim,
+            'codebook_size': self.codebook_size,
             'n_samples': len(scales),
             'coverage_percent': float(coverage),
             'codebook_utilization_percent': float(utilization),
-            # L2 error stats in original space
-            'l2_error_mean': float(l2_errors.mean()),
-            'l2_error_std': float(l2_errors.std()),
-            'l2_error_median': float(np.median(l2_errors)),
-            'l2_error_max': float(l2_errors.max()),
-            'l2_error_95th': float(np.percentile(l2_errors, 95)),
+            # Absolute error stats
+            'abs_error_mean': float(errors.mean()),
+            'abs_error_std': float(errors.std()),
+            'abs_error_median': float(np.median(errors)),
+            'abs_error_max': float(errors.max()),
+            'abs_error_95th': float(np.percentile(errors, 95)),
             # Relative error stats
             'relative_error_mean': float(relative_errors.mean()),
             'relative_error_median': float(np.median(relative_errors)),
             'relative_error_max': float(relative_errors.max()),
-            'relative_l2_error_mean': float(relative_l2_errors.mean()),
+            'relative_error_95th': float(np.percentile(relative_errors, 95)),
             # Log-space error stats
-            'log_l2_error_mean': float(log_l2_errors.mean()),
-            'log_l2_error_median': float(np.median(log_l2_errors)),
-            'log_l2_error_max': float(log_l2_errors.max()),
-            # Per-dimension stats
-            'x_error_mean': float(np.abs(errors[:, 0]).mean()),
-            'y_error_mean': float(np.abs(errors[:, 1]).mean()),
-            'z_error_mean': float(np.abs(errors[:, 2]).mean()),
+            'log_error_mean': float(log_errors.mean()),
+            'log_error_median': float(np.median(log_errors)),
+            'log_error_max': float(log_errors.max()),
+            'log_error_95th': float(np.percentile(log_errors, 95)),
         }
         
         if verbose:
             print("\n" + "="*70)
-            print("SCALE CODEBOOK STATISTICS")
+            print("SCALE CODEBOOK STATISTICS (Scalar)")
             print("="*70)
-            print(f"Codebook size: {stats['codebook_size']} ({self.bins_per_dim}^3)")
+            print(f"Codebook size: {stats['codebook_size']}")
             print(f"Number of samples: {stats['n_samples']}")
             print(f"Coverage: {stats['coverage_percent']:.2f}%")
             print(f"Codebook utilization: {stats['codebook_utilization_percent']:.2f}%")
             print()
-            print("L2 Reconstruction Errors (original space):")
-            print(f"  Mean:   {stats['l2_error_mean']:.6f}")
-            print(f"  Std:    {stats['l2_error_std']:.6f}")
-            print(f"  Median: {stats['l2_error_median']:.6f}")
-            print(f"  95th:   {stats['l2_error_95th']:.6f}")
-            print(f"  Max:    {stats['l2_error_max']:.6f}")
+            print("Absolute Errors:")
+            print(f"  Mean:   {stats['abs_error_mean']:.6f}")
+            print(f"  Std:    {stats['abs_error_std']:.6f}")
+            print(f"  Median: {stats['abs_error_median']:.6f}")
+            print(f"  95th:   {stats['abs_error_95th']:.6f}")
+            print(f"  Max:    {stats['abs_error_max']:.6f}")
             print()
             print("Relative Errors:")
             print(f"  Mean:   {stats['relative_error_mean']:.6f}")
             print(f"  Median: {stats['relative_error_median']:.6f}")
+            print(f"  95th:   {stats['relative_error_95th']:.6f}")
             print(f"  Max:    {stats['relative_error_max']:.6f}")
             print()
-            print("Log-space L2 Errors:")
-            print(f"  Mean:   {stats['log_l2_error_mean']:.6f}")
-            print(f"  Median: {stats['log_l2_error_median']:.6f}")
-            print(f"  Max:    {stats['log_l2_error_max']:.6f}")
+            print("Log-space Errors:")
+            print(f"  Mean:   {stats['log_error_mean']:.6f}")
+            print(f"  Median: {stats['log_error_median']:.6f}")
+            print(f"  95th:   {stats['log_error_95th']:.6f}")
+            print(f"  Max:    {stats['log_error_max']:.6f}")
             print("="*70 + "\n")
         
         return stats
     
     def encode(self, scales: np.ndarray, eps: float = 1e-8, batch_size: int = 10000, verbose: bool = False) -> np.ndarray:
         """
-        Encode scale factors to codebook indices.
+        Encode scalar scale factors to codebook indices.
         
         Args:
-            scales: (N, 3) scale factors
+            scales: (N,) scalar scale factors
             eps: Small epsilon to avoid log(0)
-            batch_size: Process in batches to avoid memory issues
+            batch_size: Not used for 1D, kept for API compatibility
             verbose: Show progress bar
             
         Returns:
@@ -980,58 +954,33 @@ class ScaleCodebook:
         if not self.is_fitted:
             raise RuntimeError("Codebook not fitted yet!")
         
-        # Ensure scales has correct shape
-        if scales.ndim == 1:
-            # If 1D, reshape to (N, 1) and replicate to (N, 3)
-            scales = np.tile(scales.reshape(-1, 1), (1, 3))
-        elif scales.ndim > 2:
-            # If more than 2D, flatten and reshape
-            scales = scales.reshape(-1, 3)
-        
-        assert scales.shape[1] == 3, f"Expected scales to have 3 dimensions, got shape {scales.shape}"
-        
-        N = scales.shape[0]
+        # Ensure scales is 1D
+        if scales.ndim > 1:
+            scales = scales.flatten()
         
         # Apply log transform
         scales_abs = np.abs(scales) + eps
         log_scales = np.log(scales_abs)
         
         # Clip to bounds in log-space
-        log_scales_clipped = np.clip(log_scales, self.log_min_vals, self.log_max_vals)
+        log_scales_clipped = np.clip(log_scales, self.log_min, self.log_max)
         
-        # Process in batches
-        indices = np.zeros(N, dtype=np.int32)
-        num_batches = (N + batch_size - 1) // batch_size
-        
-        iterator = range(num_batches)
-        if verbose:
-            iterator = tqdm(iterator, desc="Encoding scales")
-        
-        for i in iterator:
-            start_idx = i * batch_size
-            end_idx = min((i + 1) * batch_size, N)
-            batch = log_scales_clipped[start_idx:end_idx]
-            
-            # Compute distances to all codebook entries in log-space for this batch
-            distances = np.linalg.norm(
-                batch[:, np.newaxis, :] - self.log_codebook[np.newaxis, :, :],
-                axis=2
-            )  # (B, K)
-            
-            # Find nearest codebook entry
-            indices[start_idx:end_idx] = np.argmin(distances, axis=1)
+        # Find nearest codebook entry using searchsorted (efficient for 1D)
+        # Compute distances to all codebook entries
+        distances = np.abs(log_scales_clipped[:, np.newaxis] - self.log_codebook[np.newaxis, :])  # (N, K)
+        indices = np.argmin(distances, axis=1).astype(np.int32)
         
         return indices
     
     def decode(self, indices: np.ndarray) -> np.ndarray:
         """
-        Decode codebook indices to scale factors.
+        Decode codebook indices to scalar scale factors.
         
         Args:
             indices: (N,) codebook indices
             
         Returns:
-            scales: (N, 3) scale factors
+            scales: (N,) scalar scale factors
         """
         if not self.is_fitted:
             raise RuntimeError("Codebook not fitted yet!")
@@ -1054,10 +1003,8 @@ class ScaleCodebook:
         
         data = {
             'codebook_size': self.codebook_size,
-            'actual_codebook_size': self.actual_codebook_size,
-            'bins_per_dim': self.bins_per_dim,
-            'log_min_vals': self.log_min_vals,
-            'log_max_vals': self.log_max_vals,
+            'log_min': self.log_min,
+            'log_max': self.log_max,
             'log_codebook': self.log_codebook,
             'is_fitted': self.is_fitted,
         }
@@ -1078,15 +1025,13 @@ class ScaleCodebook:
             data = pickle.load(f)
         
         self.codebook_size = data['codebook_size']
-        self.actual_codebook_size = data['actual_codebook_size']
-        self.bins_per_dim = data['bins_per_dim']
-        self.log_min_vals = data['log_min_vals']
-        self.log_max_vals = data['log_max_vals']
+        self.log_min = data['log_min']
+        self.log_max = data['log_max']
         self.log_codebook = data['log_codebook']
         self.is_fitted = data['is_fitted']
         
         print(f"Scale codebook loaded from: {load_path}")
-        print(f"  Codebook size: {self.actual_codebook_size} ({self.bins_per_dim}^3)")
+        print(f"  Codebook size: {self.codebook_size}")
 
 
 def build_translation_codebook_from_cache(

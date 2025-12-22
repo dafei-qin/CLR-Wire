@@ -169,13 +169,18 @@ def process_sample(idx):
             rot_errors_deg.append(np.rad2deg(angle))
         
         trans_errors = np.linalg.norm(shift - shift_quantized, axis=1)
-        scale_errors_relative = np.abs(scale - scale_quantized) / (np.abs(scale) + 1e-8)
+        
+        # Scale errors (scalar)
+        scale_errors_abs = np.abs(scale - scale_quantized)
+        scale_errors_relative = scale_errors_abs / (np.abs(scale) + 1e-8)
         
         rts_quantization_errors = {
             'rotation_mean_deg': np.mean(rot_errors_deg),
             'rotation_max_deg': np.max(rot_errors_deg),
             'translation_mean': np.mean(trans_errors),
             'translation_max': np.max(trans_errors),
+            'scale_abs_mean': np.mean(scale_errors_abs),
+            'scale_abs_max': np.max(scale_errors_abs),
             'scale_relative_mean': np.mean(scale_errors_relative),
             'scale_relative_max': np.max(scale_errors_relative),
             'num_surfaces': len(rotation),
@@ -186,8 +191,8 @@ def process_sample(idx):
               f"max={rts_quantization_errors['rotation_max_deg']:.4f}°")
         print(f"  Translation: mean={rts_quantization_errors['translation_mean']:.6f}, "
               f"max={rts_quantization_errors['translation_max']:.6f}")
-        print(f"  Scale: relative mean={rts_quantization_errors['scale_relative_mean']:.6f}, "
-              f"max={rts_quantization_errors['scale_relative_max']:.6f}")
+        print(f"  Scale (scalar): abs mean={rts_quantization_errors['scale_abs_mean']:.6f}, "
+              f"relative mean={rts_quantization_errors['scale_relative_mean']:.4f}")
     
     # Sample GT surfaces (before VAE processing)
     # Choose RTS based on tokenization setting
@@ -692,12 +697,12 @@ def callback():
             # Display quantization statistics
             if rts_quantization_errors:
                 psim.Text(f"Quantization Errors ({rts_quantization_errors['num_surfaces']} surfaces):")
-                psim.Text(f"  Rotation: mean={rts_quantization_errors['rotation_mean_deg']:.4f}°, "
-                         f"max={rts_quantization_errors['rotation_max_deg']:.4f}°")
-                psim.Text(f"  Translation: mean={rts_quantization_errors['translation_mean']:.6f}, "
-                         f"max={rts_quantization_errors['translation_max']:.6f}")
-                psim.Text(f"  Scale: mean={rts_quantization_errors['scale_relative_mean']:.6f}, "
-                         f"max={rts_quantization_errors['scale_relative_max']:.6f}")
+                psim.Text(f"  Rotation: {rts_quantization_errors['rotation_mean_deg']:.3f}° "
+                         f"(max {rts_quantization_errors['rotation_max_deg']:.3f}°)")
+                psim.Text(f"  Translation: {rts_quantization_errors['translation_mean']:.5f} "
+                         f"(max {rts_quantization_errors['translation_max']:.5f})")
+                psim.Text(f"  Scale (rel): {rts_quantization_errors['scale_relative_mean']:.4f} "
+                         f"(max {rts_quantization_errors['scale_relative_max']:.4f})")
         
         # is_closed visualization controls
         if pred_is_closed:
@@ -781,8 +786,8 @@ if __name__ == '__main__':
         
         print(f"\n✓ RTS Codebooks loaded successfully!")
         print(f"  Rotation: {rotation_codebook.codebook_size} entries")
-        print(f"  Translation: {translation_codebook.actual_codebook_size} entries")
-        print(f"  Scale: {scale_codebook.actual_codebook_size} entries")
+        print(f"  Translation: {translation_codebook.actual_codebook_size} entries ({translation_codebook.bins_per_dim}^3)")
+        print(f"  Scale (scalar): {scale_codebook.codebook_size} entries")
         print(f"{'='*70}\n")
     else:
         print("\nRTS tokenization disabled (using continuous RTS values)\n")
