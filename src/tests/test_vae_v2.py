@@ -321,8 +321,12 @@ def process_sample(idx):
     recovered_json_data = to_json(params_pred.cpu().numpy(), types_pred.cpu().numpy(), mask.cpu().numpy())
     
     if canonical:
-        recovered_json_data = [from_canonical(recovered_json_data[i], shift[i], rotation[i], scale[i]) 
+        if use_tokenized_rts:
+            recovered_json_data = [from_canonical(recovered_json_data[i], shift_quantized[i], rotation_quantized[i], scale_quantized[i]) 
                               for i in range(len(recovered_json_data))]
+        else:
+            recovered_json_data = [from_canonical(recovered_json_data[i], shift[i], rotation[i], scale[i]) 
+                                for i in range(len(recovered_json_data))]
     
     # Convert dataset pipeline surfaces to JSON
     pipeline_json_data = []
@@ -331,7 +335,10 @@ def process_sample(idx):
         recovered_surface['idx'] = [i, i]
         recovered_surface['orientation'] = 'Forward'
         if canonical:
-            recovered_surface = from_canonical(recovered_surface, shift[i], rotation[i], scale[i])
+            if use_tokenized_rts:
+                recovered_surface = from_canonical(recovered_surface, shift_quantized[i], rotation_quantized[i], scale_quantized[i])
+            else:
+                recovered_surface = from_canonical(recovered_surface, shift[i], rotation[i], scale[i])
         pipeline_json_data.append(recovered_surface)
     
     # Sample pipeline surfaces (dataset GT after preprocessing)
