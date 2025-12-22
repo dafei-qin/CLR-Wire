@@ -206,6 +206,14 @@ def recover_surface_from_params(params, surface_type_idx):
     }
 
 def params_to_samples_with_rts(rotations, scales, shifts, params, surface_type_idx,  num_samples_u, num_samples_v):
+    if len(rotations.shape) == 2:
+        # Only on sample, need unsqueeze
+        rotations = rotations.unsqueeze(0)
+        scales = scales.unsqueeze(0)
+        shifts = shifts.unsqueeze(0)
+        # params = params.unsqueeze(0)
+        surface_type_idx = surface_type_idx.unsqueeze(0)
+
     points = batch_params_to_samples(params, surface_type_idx, num_samples_u, num_samples_v)
     if points.shape[0] == 1:
         rotations = rotations.unsqueeze(0)

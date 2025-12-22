@@ -205,9 +205,9 @@ def process_sample(idx):
     for i in range(len(valid_params)):
         try:
             samples = params_to_samples_with_rts(
-                torch.from_numpy(rotation_to_use[i]), 
-                torch.tensor(scale_to_use[i]), 
-                torch.from_numpy(shift_to_use[i]), 
+                torch.from_numpy(rotation_to_use[i]).float(), 
+                torch.tensor(scale_to_use[i]).float(), 
+                torch.from_numpy(shift_to_use[i]).float(), 
                 valid_params[i].unsqueeze(0), 
                 valid_types[i], 
                 num_samples, 
@@ -278,9 +278,9 @@ def process_sample(idx):
         for i in range(len(params_pred)):
             try:
                 samples = params_to_samples_with_rts(
-                    torch.from_numpy(rotation_to_use[i]), 
-                    torch.tensor(scale_to_use[i]), 
-                    torch.from_numpy(shift_to_use[i]), 
+                    torch.from_numpy(rotation_to_use[i]).float(), 
+                    torch.tensor(scale_to_use[i]).float(), 
+                    torch.from_numpy(shift_to_use[i]).float(), 
                     params_pred[i].unsqueeze(0), 
                     types_pred[i], 
                     num_samples, 
@@ -333,9 +333,9 @@ def process_sample(idx):
     for i in range(len(valid_params)):
         try:
             samples = params_to_samples_with_rts(
-                torch.from_numpy(rotation_to_use[i]), 
-                torch.tensor(scale_to_use[i]), 
-                torch.from_numpy(shift_to_use[i]), 
+                torch.from_numpy(rotation_to_use[i]).float(), 
+                torch.tensor(scale_to_use[i]).float(), 
+                torch.from_numpy(shift_to_use[i]).float(), 
                 valid_params[i].unsqueeze(0), 
                 valid_types[i], 
                 num_samples, 
@@ -429,9 +429,9 @@ def resample_model():
         for i in range(len(params_pred)):
             try:
                 samples = params_to_samples_with_rts(
-                    torch.from_numpy(rotation[i]), 
-                    torch.tensor(scale[i]), 
-                    torch.from_numpy(shift[i]), 
+                    torch.from_numpy(rotation[i]).float(), 
+                    torch.tensor(scale[i]).float(), 
+                    torch.from_numpy(shift[i]).float(), 
                     params_pred[i].unsqueeze(0), 
                     types_pred[i], 
                     num_samples, 
