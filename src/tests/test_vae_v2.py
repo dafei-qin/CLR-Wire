@@ -281,6 +281,11 @@ def process_sample(idx):
         
         # Decode
         params_pred, mask = model.decode(z, types_pred)
+
+        # use_gt_uvs = True
+        # if use_gt_uvs:
+        #     params_pred[..., 9:17] = valid_params[..., 9:17]
+        #     print('Warning, now use gt uv for reconstruction')
         
         # Calculate metrics
         recon_fn = torch.nn.MSELoss()
@@ -516,15 +521,15 @@ def export_surfaces_to_step():
         
         # Export GT surfaces
         gt_output = export_path / f"{file_stem}_gt.step"
-        success_gt = write_to_step(gt_surfaces, gt_output, verbose=True)
+        success_gt = write_to_step([_['surface'] for _ in gt_surfaces.values()], gt_output)
         
         # Export dataset GT (pipeline) surfaces
         pipeline_output = export_path / f"{file_stem}_dataset_gt.step"
-        success_pipeline = write_to_step(pipeline_surfaces, pipeline_output, verbose=True)
+        success_pipeline = write_to_step([_['surface'] for _ in pipeline_surfaces.values()], pipeline_output)
         
         # Export recovered surfaces
         recovered_output = export_path / f"{file_stem}_reconstructed.step"
-        success_recovered = write_to_step(recovered_surfaces, recovered_output, verbose=True)
+        success_recovered = write_to_step([_['surface'] for _ in recovered_surfaces.values()], recovered_output)
         
         # Print summary
         print(f"\n{'='*70}")

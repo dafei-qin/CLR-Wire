@@ -380,7 +380,7 @@ class dataset_compound(Dataset):
     # Surface type to index mapping
     
     
-    def __init__(self, json_dir: str, max_num_surfaces: int = 500, canonical: bool = False, detect_closed: bool = False, bspline_fit_threshold: float = 1e-5):
+    def __init__(self, json_dir: str, max_num_surfaces: int = 500, canonical: bool = False, detect_closed: bool = False, bspline_fit_threshold: float = 1e-5, use_preprocess_fn=True):
         """
         Args:
             json_dir: Path to directory containing JSON files
@@ -414,6 +414,7 @@ class dataset_compound(Dataset):
         
         self.postprocess_funcs = {k: build_surface_postpreprocess(v) for k, v in SURFACE_PARAM_SCHEMAS.items()}
         self.preprocess_funcs = {k: build_surface_process(v) for k, v in SURFACE_PARAM_SCHEMAS.items()}
+        self.use_preprocess_fn = use_preprocess_fn
         # # Override max_num_surfaces if specified
         # if self.max_surfaces_per_file is not None:
         #     self.max_num_surfaces = self.max_surfaces_per_file
@@ -754,13 +755,13 @@ class dataset_compound(Dataset):
             v_max = v_max - v_min
             v_min = 0
 
-            if r_min < r_min_thresh:
-                # Compute how much delta_v we need to increase to make r_min_thresh
-                delta_v = (r_min_thresh - r_min) / np.sin(semi_angle)
-                v_min_new = v_min + delta_v
-                v_max = v_max + delta_v
-                P_min = P + v_min_new * np.cos(semi_angle) * D
-                r_min = radius + v_min_new * np.sin(semi_angle)
+            # if r_min < r_min_thresh:
+            #     # Compute how much delta_v we need to increase to make r_min_thresh
+            #     delta_v = (r_min_thresh - r_min) / np.sin(semi_angle)
+            #     v_min_new = v_min + delta_v
+            #     v_max = v_max + delta_v
+            #     P_min = P + v_min_new * np.cos(semi_angle) * D
+            #     r_min = radius + v_min_new * np.sin(semi_angle)
 
     
             P = P_min
@@ -1018,7 +1019,8 @@ class dataset_compound(Dataset):
         if surface_type != 'bspline_surface':
             assert np.allclose(params, self.postprocess_funcs[surface_type](self.preprocess_funcs[surface_type](params))), f"type: {surface_type}, params: {params}, postprocess: {self.postprocess_funcs[surface_type](self.preprocess_funcs[surface_type](params))}"
             # Do the log processing of radius
-            params = self.preprocess_funcs[surface_type](params)
+            if self.use_preprocess_fn:
+                params = self.preprocess_funcs[surface_type](params)
         
         # assert len(params) == self.base_dim + SCALAR_DIM_MAP[surface_type], f"surface {surface_type} params length {len(params)} != expected {self.base_dim + SCALAR_DIM_MAP[surface_type]}"
 
@@ -1042,7 +1044,8 @@ class dataset_compound(Dataset):
             scalar_params = params[17:]  # 48D control points
         else:
             # Apply exp to radius for other surface types
-            params = self.postprocess_funcs[surface_type](params)
+            if self.use_preprocess_fn:
+                params = self.postprocess_funcs[surface_type](params)
             P = params[:3]
             D = params[3:6] / np.linalg.norm(params[3:6])
             X = params[6:9] / np.linalg.norm(params[6:9])
@@ -1268,6 +1271,8 @@ class dataset_compound(Dataset):
 
             # try:
             # Catch RuntimeWarnings (overflow, invalid value) and convert to exceptions
+            if i == 15:
+                print()
             with warnings.catch_warnings():
                 warnings.filterwarnings('error', category=RuntimeWarning)
                 # print(surface_dict)
