@@ -145,7 +145,7 @@ class DCAE_FSQ_VAE(nn.Module):
         z_continuous = self.dcae.encode(x)
         
         # Reshape to 1D: (B, 3, 2, 2) → (B, 12)
-        z_flat = z_continuous.view(batch_size, -1)
+        z_flat = z_continuous.reshape(batch_size, -1)
         
         # FSQ expects at least 3D input: (B, seq, dim)
         z_flat = z_flat.unsqueeze(1)  # (B, 1, 12)
@@ -157,7 +157,7 @@ class DCAE_FSQ_VAE(nn.Module):
         z_quantized_flat = z_quantized_flat.squeeze(1)  # (B, 12)
         
         # Reshape back to spatial: (B, 12) → (B, 3, 2, 2)
-        z_quantized = z_quantized_flat.view(
+        z_quantized = z_quantized_flat.reshape(
             batch_size, 
             self.latent_channels, 
             self.latent_spatial_size, 

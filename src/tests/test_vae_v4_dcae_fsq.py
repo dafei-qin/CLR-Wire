@@ -3,8 +3,10 @@ Test script for VAE v4 DC-AE FSQ model.
 
 This script visualizes three pipelines for bspline surfaces:
 1. json -> visualize_json_interset (raw JSON visualization)
-2. json -> dataset_v2.dataset_compound -> to_canonical -> from_canonical -> visualize (dataset round-trip)
-3. json -> dataset_v2.dataset_compound -> to_canonical -> vae_v4_dcae_fsq -> from_canonical -> visualize (VAE reconstruction)
+2. json -> dataset_v2.dataset_compound (canonical space) -> from_canonical (optional) -> visualize (dataset round-trip)
+3. json -> dataset_v2.dataset_compound (canonical space) -> vae_v4_dcae_fsq -> from_canonical (optional) -> visualize (VAE reconstruction)
+
+Note: dataset_v2 returns surfaces in canonical space. from_canonical is only applied if config.canonical=True.
 """
 import torch
 import numpy as np
@@ -32,6 +34,8 @@ model = None
 current_idx = 0
 max_idx = 0
 json_files = []
+valid_to_original_idx = []  # Mapping from valid idx to original dataset idx
+canonical = False  # Whether dataset uses canonical space (loaded from config)
 
 # Polyscope groups
 gt_group = None
@@ -67,16 +71,23 @@ def process_sample(idx):
     """
     Process a single sample through all three pipelines.
     
-    Returns:
-        gt_data: Raw JSON data
-        dataset_roundtrip_data: JSON after dataset parsing + to_canonical + from_canonical
-        vae_recon_data: JSON after VAE reconstruction
-    """
-    global dataset, model
+    Args:
+        idx: Valid index (index in json_files list)
     
+    Returns:
+        gt_data: Raw JSON data (in original space)
+        dataset_roundtrip_data: JSON after dataset parsing (canonical -> original if config.canonical=True)
+        vae_recon_data: JSON after VAE reconstruction (canonical -> original if config.canonical=True)
+    """
+    global dataset, model, valid_to_original_idx, canonical
+    
+    # Map valid idx to original dataset idx
+    dataset_idx = valid_to_original_idx[idx]
     json_path = json_files[idx]
+    
     print(f'\n{"="*70}')
     print(f'Processing file: {json_path}')
+    print(f'Valid index: {idx}, Dataset index: {dataset_idx}')
     print(f'{"="*70}')
     
     # Load raw JSON
@@ -92,55 +103,56 @@ def process_sample(idx):
     # Pipeline 1: Raw JSON visualization
     gt_data = bspline_surfaces
     
-    # Pipeline 2: Dataset round-trip (parse -> to_canonical -> from_canonical)
+    # Pipeline 2: Dataset round-trip (dataset returns canonical space, optionally convert back)
     try:
-        # Get dataset sample (this goes through parsing and to_canonical)
-        sample = dataset[idx]
+        # Get dataset sample (already in canonical space after dataset processing)
+        # Use the mapped dataset index
+        sample = dataset[dataset_idx]
         
         # Unpack sample from dataset_v2
-        # Format: (patches, shift, rotation, scale, valid)
-        # params_tensor, types_tensor, mask_tensor, all_shifts, all_rotations, all_scales
-        patches, types, masks, shift, rotation, scale = sample
-        patches = patches[types==5]
-        shift = shift[types==5]
-        rotation = rotation[types==5]
-        scale = scale[types==5]
+        # Format: (params_tensor, types_tensor, mask_tensor, shift, rotation, scale)
+        params_tensor, types_tensor, mask_tensor, shift, rotation, scale = sample
         
+        # Apply mask to get only valid surfaces
+        mask_bool = mask_tensor.bool()
+        valid_params = params_tensor[mask_bool]
+        valid_types = types_tensor[mask_bool]
+        shift = shift[mask_bool.cpu().numpy()]
+        rotation = rotation[mask_bool.cpu().numpy()]
+        scale = scale[mask_bool.cpu().numpy()]
+
+        # Keep only bspline surfaces (type == 5)
+        bspline_mask = (valid_types == 5)
+        if bspline_mask.sum() == 0:
+            print("No valid bspline surfaces (type==5) in this sample; skipping.")
+            return None, None, None
+
+        bspline_mask_np = bspline_mask.cpu().numpy() if hasattr(bspline_mask, "cpu") else bspline_mask
+        valid_params = valid_params[bspline_mask]
+        valid_types = valid_types[bspline_mask]
+        shift = shift[bspline_mask_np]
+        rotation = rotation[bspline_mask_np]
+        scale = scale[bspline_mask_np]
         
         print(f"Dataset sample shapes:")
-        print(f"  patches: {patches.shape}")  # Should be (N, H, W, C) where patches are control points
+        print(f"  params: {valid_params.shape}")
+        print(f"  types: {valid_types}")
         print(f"  shift: {shift.shape}")
         print(f"  rotation: {rotation.shape}")
         print(f"  scale: {scale.shape}")
         
-        # Convert patches back to surface format and apply from_canonical
-        # For bspline surfaces, patches contain control points (4x4x3)
+        # Recover surfaces using dataset's method (returns surfaces in canonical space)
         dataset_roundtrip_data = []
-        
-        # Since dataset_v2 processes surfaces to canonical space, we need to recover them
-        # The patches are already in canonical form (4x4x3 control points)
-        # We need to convert back using from_canonical
-        
-        # For now, create a simple bspline surface from patches
-        # This is simplified - actual implementation may need more complex recovery
-        num_surfaces = patches.shape[0] if patches.ndim == 4 else 1
-        
-        for surf_idx in range(len(bspline_surfaces)):
-            # Use original surface structure but with canonical transformation applied
-            surf_copy = copy.deepcopy(bspline_surfaces[surf_idx])
+        for i in range(len(valid_params)):
+            recovered_surface = dataset._recover_surface(valid_params[i].cpu().numpy(), valid_types[i].item())
+            recovered_surface['idx'] = [i, i]
+            recovered_surface['orientation'] = 'Forward'
             
-            # Apply from_canonical transformation
-            # Note: We use the transformation parameters from dataset
-            if surf_idx < len(shift):
-                surf_canonical = to_canonical(surf_copy, shift[surf_idx].cpu().numpy(), 
-                                             rotation[surf_idx].cpu().numpy(), 
-                                             scale[surf_idx].cpu().numpy())
-                surf_recovered = from_canonical(surf_canonical, shift[surf_idx].cpu().numpy(),
-                                              rotation[surf_idx].cpu().numpy(),
-                                              scale[surf_idx].cpu().numpy())
-                dataset_roundtrip_data.append(surf_recovered)
-            else:
-                dataset_roundtrip_data.append(surf_copy)
+            # If canonical=True, apply from_canonical to restore to original space
+            if canonical:
+                recovered_surface = from_canonical(recovered_surface, shift[i], rotation[i], scale[i])
+            
+            dataset_roundtrip_data.append(recovered_surface)
         
     except Exception as e:
         print(f"Error in dataset round-trip pipeline: {e}")
@@ -150,9 +162,9 @@ def process_sample(idx):
     
     # Pipeline 3: VAE reconstruction
     try:
-        # Get patches in the format expected by VAE
-        # Format from dataset: (num_surfaces, H, W, C)
-        patches_input = patches[..., 17:].reshape(-1, 4, 4, 3)
+        # Extract control points (patches) from params for VAE processing
+        # For bspline surfaces, control points are at params[..., 17:17+48] reshaped to (4, 4, 3)
+        patches_input = valid_params[..., 17:17+48].reshape(-1, 4, 4, 3)
         patches_input = einops.rearrange(patches_input, 'b h w c -> b c h w')
         patches_input = patches_input.float()
         
@@ -182,37 +194,21 @@ def process_sample(idx):
         x_recon_cpu = x_recon.cpu()
         x_recon_patches = einops.rearrange(x_recon_cpu, 'b c h w -> b h w c')
         
-        # Create bspline surfaces from reconstructed patches
-        for surf_idx in range(min(len(bspline_surfaces), x_recon_patches.shape[0])):
-            surf_copy = copy.deepcopy(bspline_surfaces[surf_idx])
+        # Create reconstructed params by replacing control points in original params
+        params_recon = valid_params.clone()
+        params_recon[..., 17:17+48] = x_recon_patches.reshape(len(valid_params), -1)
+        
+        # Recover surfaces from reconstructed params (in canonical space)
+        for i in range(len(params_recon)):
+            recovered_surface = dataset._recover_surface(params_recon[i].cpu().numpy(), valid_types[i].item())
+            recovered_surface['idx'] = [i, i]
+            recovered_surface['orientation'] = 'Forward'
             
-            # Replace control points (poles) with reconstructed ones
-            recon_poles = x_recon_patches[surf_idx].detach().cpu().numpy()
+            # If canonical=True, apply from_canonical to restore to original space
+            if canonical:
+                recovered_surface = from_canonical(recovered_surface, shift[i], rotation[i], scale[i])
             
-            # The poles might need to be in the format expected by visualization
-            # For a 4x4 control grid, reshape appropriately
-            if 'poles' in surf_copy:
-                original_poles_shape = np.array(surf_copy['poles']).shape
-                # Reshape reconstructed poles to match original
-                if len(original_poles_shape) == 3:  # (u, v, coords)
-                    if original_poles_shape[-1] == 4:  # Has weights
-                        # Preserve weights from original
-                        original_weights = np.array(surf_copy['poles'])[..., 3:4]
-                        recon_poles_with_weights = np.concatenate([recon_poles, original_weights[:4, :4, :]], axis=-1)
-                        surf_copy['poles'] = recon_poles_with_weights.tolist()
-                    else:
-                        surf_copy['poles'] = recon_poles.tolist()
-            
-            # Apply from_canonical to bring back to original space
-            if surf_idx < len(shift):
-                # First, create canonical version with reconstructed poles
-                # Then apply from_canonical
-                surf_recovered = from_canonical(surf_copy, shift[surf_idx].cpu().numpy(),
-                                              rotation[surf_idx].cpu().numpy(),
-                                              scale[surf_idx].cpu().numpy())
-                vae_recon_data.append(surf_recovered)
-            else:
-                vae_recon_data.append(surf_copy)
+            vae_recon_data.append(recovered_surface)
         
     except Exception as e:
         print(f"Error in VAE reconstruction pipeline: {e}")
@@ -309,8 +305,9 @@ def callback():
             update_visualization()
     
     psim.Separator()
-    psim.Text(f"Current Index: {current_idx}")
-    psim.Text(f"Max Index: {max_idx}")
+    psim.Text(f"Current Valid Index: {current_idx}")
+    psim.Text(f"Dataset Index: {valid_to_original_idx[current_idx] if current_idx < len(valid_to_original_idx) else 'N/A'}")
+    psim.Text(f"Max Valid Index: {max_idx}")
     psim.Text(f"Current File: {json_files[current_idx] if current_idx < len(json_files) else 'N/A'}")
     
     # Group controls
@@ -338,20 +335,29 @@ def callback():
 
 
 def collect_json_files(dataset):
-    """Collect all JSON files from dataset that contain bspline surfaces."""
+    """
+    Collect all JSON files from dataset that contain bspline surfaces.
+    
+    Returns:
+        json_files_list: List of valid JSON file paths
+        idx_mapping: List mapping valid index to original dataset index
+    """
     json_files_list = []
+    idx_mapping = []
     
     # Try to get json file names from dataset
     if hasattr(dataset, 'json_names'):
-        for json_path in dataset.json_names:
+        for original_idx, json_path in enumerate(dataset.json_names):
             json_data = load_json_file(json_path)
             if json_data is not None:
                 json_files_list.append(json_path)
+                idx_mapping.append(original_idx)
     elif hasattr(dataset, 'data_paths'):
-        for json_path in dataset.data_paths:
+        for original_idx, json_path in enumerate(dataset.data_paths):
             json_data = load_json_file(json_path)
             if json_data is not None:
                 json_files_list.append(json_path)
+                idx_mapping.append(original_idx)
     else:
         # Fallback: iterate through dataset indices
         print("Warning: Could not find json_names or data_paths in dataset")
@@ -362,10 +368,11 @@ def collect_json_files(dataset):
                 if sample[-1].item():  # valid flag
                     if i < len(dataset.json_names if hasattr(dataset, 'json_names') else []):
                         json_files_list.append(dataset.json_names[i])
+                        idx_mapping.append(i)
             except:
                 continue
     
-    return json_files_list
+    return json_files_list, idx_mapping
 
 
 if __name__ == '__main__':
@@ -384,6 +391,10 @@ if __name__ == '__main__':
     # Load config
     config = OmegaConf.load(args.config)
     
+    # Load canonical setting from config
+    canonical = config.data_val['params'].get('canonical', False)
+    print(f"Canonical mode: {canonical}")
+    
     # Load dataset
     print("Loading dataset...")
     dataset = load_dataset_from_config(config, section='data_val')
@@ -391,7 +402,7 @@ if __name__ == '__main__':
     
     # Collect valid JSON files with bspline surfaces
     print("Collecting JSON files with bspline surfaces...")
-    json_files = collect_json_files(dataset)
+    json_files, valid_to_original_idx = collect_json_files(dataset)
     max_idx = len(json_files) - 1
     current_idx = min(args.start_idx, max_idx)
     
@@ -400,6 +411,7 @@ if __name__ == '__main__':
         sys.exit(1)
     
     print(f"Found {len(json_files)} files with bspline surfaces")
+    print(f"Index mapping created: valid[0-{max_idx}] -> dataset[{min(valid_to_original_idx)}-{max(valid_to_original_idx)}]")
     
     # Load model
     print("Loading model...")
@@ -423,8 +435,9 @@ if __name__ == '__main__':
     
     model.eval()
     
-    print(f"\nModel info:")
-    print(f"  Type: {type(model).__name__}")
+    print(f"\nModel and configuration:")
+    print(f"  Model type: {type(model).__name__}")
+    print(f"  Canonical mode: {canonical}")
     if hasattr(model, 'codebook_size'):
         print(f"  Codebook size: {model.codebook_size}")
     if hasattr(model, 'num_codebooks'):
