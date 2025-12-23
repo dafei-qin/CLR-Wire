@@ -17,7 +17,7 @@ import os
 from pathlib import Path
 
 # Add project root to sys.path
-sys.path.append('/home/qindafei/CAD/CLR-Wire')
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.dataset.dataset_v2 import dataset_compound
 from src.tools.surface_to_canonical_space import to_canonical, from_canonical
