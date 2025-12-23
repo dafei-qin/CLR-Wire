@@ -559,7 +559,10 @@ def main(input_folder, output_dir, num_workers=4, timeout_seconds=300, num_sampl
         timeout_seconds: Timeout in seconds for each file processing
         num_samples: Number of random samples per face
     """
+    print('processing ', input_folder)
     stepfiles = glob.glob(os.path.join(input_folder, "*.step"))
+    if len(stepfiles) == 0:
+        stepfiles = glob.glob(os.path.join(input_folder, "*", "*.step"))
     stepfiles = sorted(stepfiles)
     
     if not stepfiles:

@@ -1271,8 +1271,6 @@ class dataset_compound(Dataset):
 
             # try:
             # Catch RuntimeWarnings (overflow, invalid value) and convert to exceptions
-            if i == 15:
-                print()
             with warnings.catch_warnings():
                 warnings.filterwarnings('error', category=RuntimeWarning)
                 # print(surface_dict)

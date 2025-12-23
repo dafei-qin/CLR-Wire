@@ -167,6 +167,81 @@ class dataset_compound_tokenize(Dataset):
 
             return surface, codes
 
+    def de_tokenize(self, surface, code):
+        """
+        Map discrete codes back to quantized uv / scalar values.
+
+        Args:
+            surface: dict describing the surface (will be modified in place)
+            code: array-like of length 6 produced by `tokenize`
+        """
+        surface_type = surface['type']
+        if surface_type == 'bspline_surface':
+            return surface  # nothing to recover
+
+        code = np.asarray(code).astype(int)
+
+        def decode(idx, min_val, max_val):
+            """Recover the codebook center for a given index."""
+            if idx < 0:
+                return None
+            bin_width = (max_val - min_val) / self.codebook_size
+            return min_val + (idx + 0.5) * bin_width
+
+        if surface_type == 'plane':
+            uv_vals = [decode(c, -0.5, 0.5) for c in code[:4]]
+            surface['uv'] = [float(v) for v in uv_vals if v is not None]
+            surface['scalar'] = []
+
+        elif surface_type in ('cylinder', 'cone'):
+            u = [decode(code[0], -1, 1), decode(code[1], -1, 1)]
+            u = [float(v * 2 * np.pi) for v in u]
+
+            v1 = decode(code[3], 0, 1)
+            v = [0.0, float(v1)] if v1 is not None else surface.get('uv', [0.0, 0.0])[2:]
+
+            surface['uv'] = u + v
+
+            if surface_type == 'cylinder':
+                scale0 = decode(code[4], 0, 1)
+                if scale0 is not None:
+                    surface['scalar'] = [float(scale0)]
+
+            elif surface_type == 'cone':
+                scale0 = decode(code[4], 0, 1)
+                scale1 = decode(code[5], 0, 1)
+                scalars = []
+                if scale0 is not None:
+                    scalars.append(float(scale0 / 2 * np.pi))
+                if scale1 is not None:
+                    scalars.append(float(scale1))
+                surface['scalar'] = scalars
+
+        elif surface_type == 'sphere':
+            u = [decode(code[0], -1, 1), decode(code[1], -1, 1)]
+            u = [float(v * 2 * np.pi) for v in u]
+
+            v = [decode(code[2], -1, 1), decode(code[3], -1, 1)]
+            v = [float(val * np.pi / 2) for val in v]
+
+            surface['uv'] = u + v
+            surface['scalar'] = [1.0]
+
+        elif surface_type == 'torus':
+            u = [decode(code[0], -1, 1), decode(code[1], -1, 1)]
+            u = [float(v * 2 * np.pi) for v in u]
+
+            v = [decode(code[2], -1, 1), decode(code[3], -1, 1)]
+            v = [float(val * 2 * np.pi) for val in v]
+
+            surface['uv'] = u + v
+
+            scale2 = decode(code[5], 0, 1)
+            if scale2 is not None:
+                surface['scalar'] = [1.0, float(scale2)]
+
+        return surface
+
     def __getitem__(self, idx):
 
         if self.detect_closed:
