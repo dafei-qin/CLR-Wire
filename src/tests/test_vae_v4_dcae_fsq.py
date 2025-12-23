@@ -99,11 +99,13 @@ def process_sample(idx):
         
         # Unpack sample from dataset_v2
         # Format: (patches, shift, rotation, scale, valid)
-        patches, shift, rotation, scale, valid = sample
+        # params_tensor, types_tensor, mask_tensor, all_shifts, all_rotations, all_scales
+        patches, types, masks, shift, rotation, scale = sample
+        patches = patches[types==5]
+        shift = shift[types==5]
+        rotation = rotation[types==5]
+        scale = scale[types==5]
         
-        if not valid.item():
-            print(f"Sample {idx} is invalid, skipping")
-            return None, None, None
         
         print(f"Dataset sample shapes:")
         print(f"  patches: {patches.shape}")  # Should be (N, H, W, C) where patches are control points
