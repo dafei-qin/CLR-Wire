@@ -1,0 +1,68 @@
+resume_training: false
+from_start: false
+
+epochs: 200
+batch_size: 512
+lr: 0.0005
+num_workers: 0
+num_workers_val: 8
+num_gpus: 6
+
+grad_accum_every: 1
+ema_update_every: 10
+max_grad_norm: 1.0
+
+val_every_epoch: 5
+save_every_epoch: 20
+log_every_step: 500
+
+use_wandb_tracking: true
+wandb_project_name: VAE_V1
+wandb_run_name: train_1223_vae_v4_bspline_only_dcae_fsq_6tokens_1024
+
+use_fsq: true
+
+trainer:
+    use_logvar: true
+    u_closed_pos_weight: 10.0
+    v_closed_pos_weight: 50.0
+
+
+# Dataset configuration using dynamic loading
+data_train:
+    name: src.dataset.dataset_v2.dataset_compound_cache
+    params:
+        cache_path: ../data/logan_jsons_cache_2/abc_cache_2_fix_rot_only_bspline.npz
+        detect_closed: false
+
+data_val:
+    name: src.dataset.dataset_v2.dataset_compound_cache
+    params:
+        cache_path: ../data/logan_jsons_cache_2/abc_test_cache_2_fix_rot_only_bspline.npz
+        detect_closed: false
+
+model:
+    name: src.vae.vae_v4_dcae_fsq.DCAE_FSQ_VAE
+    pred_is_closed: true
+    load_ckpt: false  # Don't load checkpoint on initialization (trainer will handle resume)
+
+    params:
+        input_size: 4
+        in_channels: 3
+        latent_channels: 3
+        width_base: 64
+        fsq_levels: [8, 5, 5, 5]
+        num_codebooks: 6
+    
+    checkpoint_folder: checkpoints/train_1223_vae_v4_bspline_only_dcae_fsq_6tokens_1024
+    checkpoint_file_name: model-03.pt
+
+loss:
+    recon_weight: 10.0
+    cls_weight: 1.0
+    kl_weight: 0.0  # FSQ doesn't need KL loss
+    l2norm_weight: 0.0  # FSQ quantized latents don't benefit from L2 norm
+    is_closed_weight: 0.0
+    kl_annealing_steps: 0  # Not needed for FSQ
+    kl_free_bits: 0.0  # Not needed for FSQ
+    sample_weight: 0.0
