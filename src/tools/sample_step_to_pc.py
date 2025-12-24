@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 import json
 import networkx as nx
+import fpsample
 
 # Suppress warnings BEFORE importing any OCC/occwl modules
 warnings.filterwarnings('ignore', category=DeprecationWarning)
@@ -387,7 +388,7 @@ def filter_unique_solids(solids, verbose=False):
     return unique_solids, unique_indices
 
 
-def step_to_pointcloud(step_filename, ply_filename, num_samples=1000, debug=False):
+def step_to_pointcloud(step_filename, ply_filename, num_samples=1000, debug=False, fps=True, num_fps=81920):
     """
     Convert STEP file to point cloud with normals
     
@@ -458,22 +459,60 @@ def step_to_pointcloud(step_filename, ply_filename, num_samples=1000, debug=Fals
         for face_idx in graph.nodes():
             face = graph.nodes[face_idx]["face"]
             
-            # Retry mechanism to ensure enough valid samples
+            # 累积采样当前 face 的有效点，避免每次重采样丢弃之前的结果
+            accumulated_points = []
+            accumulated_normals = []
+            accumulated_valid = 0
+
             tried_runs = 0
             num_samples_current = num_samples
-            while tried_runs < 10:
-                points, normals, masks = sample_face_uv(face, num_samples=num_samples_current, debug=debug)
-                if masks.sum() < num_samples:
+            while tried_runs < 5 and accumulated_valid < num_samples:
+                points_batch, normals_batch, masks_batch = sample_face_uv(
+                    face, num_samples=num_samples_current, debug=debug
+                )
+                masks_batch = masks_batch.astype(bool)
+
+                if masks_batch.any():
+                    accumulated_points.append(points_batch[masks_batch])
+                    accumulated_normals.append(normals_batch[masks_batch])
+                    accumulated_valid += masks_batch.sum()
+
+                if accumulated_valid < num_samples:
                     num_samples_current = num_samples_current * 2
                     tried_runs += 1
                 else:
                     break
+
+            if accumulated_points:
+                points = np.concatenate(accumulated_points, axis=0)
+                normals = np.concatenate(accumulated_normals, axis=0)
+                masks = np.ones(points.shape[0], dtype=bool)
+            else:
+                # 该面完全没有有效点
+                points = np.zeros((0, 3), dtype=np.float32)
+                normals = np.zeros((0, 3), dtype=np.float32)
+                masks = np.zeros((0,), dtype=bool)
             
             all_points.append(points.astype(np.float32))
             all_normals.append(normals.astype(np.float32))
             all_masks.append(masks.astype(bool))
 
         graph_undirected = strip_features_and_make_undirected(graph)
+
+        if fps:
+            all_points_valid = [p[m.astype(bool)] for p, m in zip(all_points, all_masks)]
+            all_normals_valid = [n[m.astype(bool)] for n, m in zip(all_normals, all_masks)]
+            all_points_valid = np.concatenate(all_points_valid, axis=0)
+            all_normals_valid = np.concatenate(all_normals_valid, axis=0)
+            print('Num valid points total: ', len(all_points_valid))
+            # 如果有效点太少，直接跳过该 solid 的 FPS 采样，避免异常
+            if len(all_points_valid) < num_fps * 2:
+                print('[WARN] Num valid points too few, skipping FPS sampling for this solid')
+            else:
+                fps_idx = fpsample.bucket_fps_kdtree_sampling(all_points_valid, num_fps)
+                all_points = all_points_valid[fps_idx]
+                all_normals = all_normals_valid[fps_idx]
+                all_masks = np.ones_like(all_points, dtype=bool)
         
         # Save to NPZ file with graph data (use idx for unique solid indexing)
         save_name = ply_filename.replace('.npz', f'_{idx:03d}.npz')
@@ -497,7 +536,7 @@ def process_file(args):
     warnings.filterwarnings('ignore', category=DeprecationWarning)
     warnings.simplefilter('ignore', DeprecationWarning)
     """Process a single STEP file with timeout protection"""
-    stepfile, input_folder, output_dir, timeout_seconds, num_samples = args
+    stepfile, input_folder, output_dir, timeout_seconds, num_samples, fps, num_fps = args
     
     # 计算相对于输入文件夹的相对路径
     rel_path = os.path.relpath(stepfile, input_folder)
@@ -525,7 +564,7 @@ def process_file(args):
     
     try:
         print(f"[START] Processing {stepfile} (timeout: {timeout_seconds}s)")
-        step_to_pointcloud(stepfile, npzfile, num_samples=num_samples, debug=False)
+        step_to_pointcloud(stepfile, npzfile, num_samples=num_samples, debug=False, fps=fps, num_fps=num_fps)
         
         # 取消超时
         if hasattr(signal, 'SIGALRM'):
@@ -548,7 +587,7 @@ def process_file(args):
         print(f"[ERROR] {stepfile}: {e}")
         return {'status': 'error', 'file': stepfile, 'error': str(e)}
 
-def main(input_folder, output_dir, num_workers=4, timeout_seconds=300, num_samples=1000):
+def main(input_folder, output_dir, num_workers=4, timeout_seconds=300, num_samples=1000, fps=True, num_fps=81920):
     """
     Main function to process STEP files with timeout protection
     
@@ -580,7 +619,7 @@ def main(input_folder, output_dir, num_workers=4, timeout_seconds=300, num_sampl
     os.makedirs(output_dir, exist_ok=True)
     
     # 准备参数列表
-    args_list = [(stepfile, input_folder, output_dir, timeout_seconds, num_samples) for stepfile in stepfiles]
+    args_list = [(stepfile, input_folder, output_dir, timeout_seconds, num_samples, fps, num_fps) for stepfile in stepfiles]
     
     # 统计信息
     stats = {
@@ -655,10 +694,14 @@ if __name__ == '__main__':
                         help='Timeout in seconds for each file (default: 300s = 5 minutes)')
     parser.add_argument('--num_samples', type=int, default=1000,
                         help='Number of random samples per face')
+    parser.add_argument('--fps', type=bool, default=True,
+                        help='Whether to use FPS sampling')
+    parser.add_argument('--num_fps', type=int, default=81920,
+                        help='Number of FPS samples')
     args = parser.parse_args()
     
     # 如果没有指定 output_dir，则使用 input_folder
     output_dir = args.output_dir if args.output_dir else args.input_folder
     
     main(args.input_folder, output_dir, num_workers=args.workers, 
-         timeout_seconds=args.timeout, num_samples=args.num_samples)
+         timeout_seconds=args.timeout, num_samples=args.num_samples, fps=args.fps, num_fps=args.num_fps)
