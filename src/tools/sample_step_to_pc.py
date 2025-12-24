@@ -4,6 +4,8 @@ os.environ['PYTHONWARNINGS'] = 'ignore::DeprecationWarning'
 
 import glob
 import concurrent.futures
+from concurrent.futures.process import BrokenProcessPool
+import multiprocessing as mp
 import random
 import sys
 import argparse
@@ -406,8 +408,22 @@ def step_to_pointcloud(step_filename, ply_filename, num_samples=1000, debug=Fals
     print(f"Processing: {step_filename}")
     print(f"{'='*60}\n")
     
-    solids, attributes = Compound.load_step_with_attributes(step_filename)
-    solids = list(solids.solids())
+    # Try to load STEP file with error handling
+    # OCC library may crash (segfault) on corrupted files, which can't be caught
+    # But we can try to catch Python exceptions that might be raised
+    try:
+        solids, attributes = Compound.load_step_with_attributes(step_filename)
+        solids = list(solids.solids())
+    except Exception as e:
+        error_msg = f"Failed to load STEP file {step_filename}: {e}"
+        print(f"[ERROR] {error_msg}")
+        raise ValueError(error_msg)
+    
+    if len(solids) == 0:
+        error_msg = f"No solids found in STEP file {step_filename}"
+        print(f"[ERROR] {error_msg}")
+        raise ValueError(error_msg)
+    
     print(f"Number of solids: {len(solids)}")
 
     processor = BRepDataProcessor()
@@ -508,6 +524,7 @@ def step_to_pointcloud(step_filename, ply_filename, num_samples=1000, debug=Fals
             # 如果有效点太少，直接跳过该 solid 的 FPS 采样，避免异常
             if len(all_points_valid) < num_fps * 2:
                 print('[WARN] Num valid points too few, skipping FPS sampling for this solid')
+                raise ValueError('Num valid points too few, skipping FPS sampling for this solid')
             else:
                 fps_idx = fpsample.bucket_fps_kdtree_sampling(all_points_valid, num_fps)
                 all_points = all_points_valid[fps_idx]
@@ -538,54 +555,155 @@ def process_file(args):
     """Process a single STEP file with timeout protection"""
     stepfile, input_folder, output_dir, timeout_seconds, num_samples, fps, num_fps = args
     
-    # 计算相对于输入文件夹的相对路径
-    rel_path = os.path.relpath(stepfile, input_folder)
-    # 在输出目录下创建相同的子目录结构
-    npzfile = os.path.join(output_dir, rel_path.replace('.step', '.npz'))
-    
-    # 获取输出文件的最小子文件夹路径
-    output_subdir = os.path.dirname(npzfile)
-    
-    # 检查输出文件夹是否已存在且包含处理结果
-    if os.path.exists(output_subdir):
-        # 检查文件夹中是否有 .npz 文件（表示已经处理过）
-        existing_npz_files = glob.glob(os.path.join(output_subdir, '*.npz'))
-        if existing_npz_files:
-            print(f"[SKIP] {stepfile} - output folder already exists with {len(existing_npz_files)} npz file(s)")
-            return {'status': 'skipped', 'file': stepfile}
-    
-    # 创建输出目录
-    os.makedirs(output_subdir, exist_ok=True)
-    
-    # 设置超时信号（仅在 Unix 系统上工作）
-    if hasattr(signal, 'SIGALRM'):
-        signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(timeout_seconds)
-    
+    # Wrap everything in try-except to catch any unexpected errors
+    # This is important because OCC library crashes (segfaults) cannot be caught,
+    # but we can at least handle Python exceptions gracefully
     try:
-        print(f"[START] Processing {stepfile} (timeout: {timeout_seconds}s)")
-        step_to_pointcloud(stepfile, npzfile, num_samples=num_samples, debug=False, fps=fps, num_fps=num_fps)
+        # 计算相对于输入文件夹的相对路径
+        rel_path = os.path.relpath(stepfile, input_folder)
+        # 在输出目录下创建相同的子目录结构
+        npzfile = os.path.join(output_dir, rel_path.replace('.step', '.npz'))
         
-        # 取消超时
+        # 获取输出文件的最小子文件夹路径
+        output_subdir = os.path.dirname(npzfile)
+        
+        # 检查输出文件夹是否已存在且包含处理结果
+        if os.path.exists(output_subdir):
+            # 检查文件夹中是否有 .npz 文件（表示已经处理过）
+            existing_npz_files = glob.glob(os.path.join(output_subdir, '*.npz'))
+            if existing_npz_files:
+                print(f"[SKIP] {stepfile} - output folder already exists with {len(existing_npz_files)} npz file(s)")
+                return {'status': 'skipped', 'file': stepfile}
+        
+        # 创建输出目录
+        os.makedirs(output_subdir, exist_ok=True)
+        
+        # 设置超时信号（仅在 Unix 系统上工作）
         if hasattr(signal, 'SIGALRM'):
-            signal.alarm(0)
+            signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(timeout_seconds)
         
-        print(f"[SUCCESS] {stepfile} -> {npzfile}")
-        return {'status': 'success', 'file': stepfile}
-        
-    except TimeoutError:
-        # 取消超时
-        if hasattr(signal, 'SIGALRM'):
-            signal.alarm(0)
-        print(f"[TIMEOUT] {stepfile} (exceeded {timeout_seconds}s)")
-        return {'status': 'timeout', 'file': stepfile}
-        
+        try:
+            print(f"[START] Processing {stepfile} (timeout: {timeout_seconds}s)")
+            step_to_pointcloud(stepfile, npzfile, num_samples=num_samples, debug=False, fps=fps, num_fps=num_fps)
+            
+            # 取消超时
+            if hasattr(signal, 'SIGALRM'):
+                signal.alarm(0)
+            
+            print(f"[SUCCESS] {stepfile} -> {npzfile}")
+            return {'status': 'success', 'file': stepfile}
+            
+        except TimeoutError:
+            # 取消超时
+            if hasattr(signal, 'SIGALRM'):
+                signal.alarm(0)
+            print(f"[TIMEOUT] {stepfile} (exceeded {timeout_seconds}s)")
+            return {'status': 'timeout', 'file': stepfile}
+            
+        except Exception as e:
+            # 取消超时
+            if hasattr(signal, 'SIGALRM'):
+                signal.alarm(0)
+            error_msg = str(e)
+            print(f"[ERROR] {stepfile}: {error_msg}")
+            return {'status': 'error', 'file': stepfile, 'error': error_msg}
+            
     except Exception as e:
-        # 取消超时
-        if hasattr(signal, 'SIGALRM'):
-            signal.alarm(0)
-        print(f"[ERROR] {stepfile}: {e}")
-        return {'status': 'error', 'file': stepfile, 'error': str(e)}
+        # Catch any unexpected errors at the outer level
+        error_msg = f"Unexpected error in process_file: {e}"
+        print(f"[CRITICAL ERROR] {stepfile}: {error_msg}")
+        return {'status': 'error', 'file': stepfile, 'error': error_msg}
+
+
+def _child_process_wrapper(args, result_queue):
+    """
+    Wrapper function to run process_file in a child process.
+    This allows complete isolation - if the child process crashes (segfault),
+    it won't affect other processes.
+    """
+    try:
+        result = process_file(args)
+        result_queue.put(result)
+    except Exception as e:
+        stepfile = args[0]
+        result_queue.put({
+            'status': 'error',
+            'file': stepfile,
+            'error': f"Exception in child process: {str(e)}"
+        })
+
+
+def process_file_with_isolation(args):
+    """
+    Process a single file using an isolated subprocess.
+    This ensures that if OCC library causes a segfault, it only affects this one task.
+    
+    Args:
+        args: tuple of (stepfile, input_folder, output_dir, timeout_seconds, num_samples, fps, num_fps)
+    
+    Returns:
+        dict: Result dictionary with status and file info
+    """
+    stepfile, input_folder, output_dir, timeout_seconds, num_samples, fps, num_fps = args
+    
+    # Create a queue to receive results from child process
+    result_queue = mp.Queue()
+    
+    # Create and start child process
+    proc = mp.Process(target=_child_process_wrapper, args=(args, result_queue))
+    proc.start()
+    
+    # Wait for process to complete (with timeout)
+    # Use a slightly longer timeout to account for process startup overhead
+    proc.join(timeout=timeout_seconds + 10)
+    
+    # Check if process is still alive (timeout occurred)
+    if proc.is_alive():
+        # Process timed out, kill it
+        proc.terminate()
+        proc.join(timeout=5)
+        if proc.is_alive():
+            proc.kill()
+            proc.join()
+        return {
+            'status': 'timeout',
+            'file': stepfile,
+            'error': f'Process timeout after {timeout_seconds}s'
+        }
+    
+    # Check exit code
+    if proc.exitcode is None:
+        return {
+            'status': 'error',
+            'file': stepfile,
+            'error': 'Child process exitcode is None'
+        }
+    
+    if proc.exitcode != 0:
+        # Process crashed (likely segfault from OCC library)
+        # Try to get error message from queue
+        try:
+            result = result_queue.get(timeout=1)
+            return result
+        except:
+            return {
+                'status': 'error',
+                'file': stepfile,
+                'error': f'Child process crashed with exitcode {proc.exitcode} (likely segfault from OCC library)'
+            }
+    
+    # Normal exit - get result from queue
+    try:
+        result = result_queue.get(timeout=5)
+        return result
+    except Exception as e:
+        return {
+            'status': 'error',
+            'file': stepfile,
+            'error': f'No result from child process: {str(e)}'
+        }
+
 
 def main(input_folder, output_dir, num_workers=4, timeout_seconds=300, num_samples=1000, fps=True, num_fps=81920):
     """
@@ -598,6 +716,14 @@ def main(input_folder, output_dir, num_workers=4, timeout_seconds=300, num_sampl
         timeout_seconds: Timeout in seconds for each file processing
         num_samples: Number of random samples per face
     """
+    # Set multiprocessing start method for better compatibility
+    # 'fork' is faster on Unix systems, 'spawn' is safer but slower
+    try:
+        mp.set_start_method('fork', force=True)
+    except RuntimeError:
+        # Start method already set, ignore
+        pass
+    
     print('processing ', input_folder)
     stepfiles = glob.glob(os.path.join(input_folder, "*.step"))
     if len(stepfiles) == 0:
@@ -631,13 +757,16 @@ def main(input_folder, output_dir, num_workers=4, timeout_seconds=300, num_sampl
         'error_files': []
     }
     
-    # 使用 ProcessPoolExecutor 处理文件
-    with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
-        # 提交所有任务
-        future_to_file = {executor.submit(process_file, args): args[0] for args in args_list}
+    # 使用 ThreadPoolExecutor + 独立子进程处理文件
+    # 这种方式可以完全隔离每个任务：如果一个进程崩溃（segfault），不会影响其他任务
+    # 每个任务在独立的子进程中运行，通过 ThreadPoolExecutor 来管理并发
+    with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+        # 提交所有任务（每个任务内部会创建独立的子进程）
+        future_to_file = {executor.submit(process_file_with_isolation, args): args[0] for args in args_list}
         
         # 处理完成的任务
         for future in concurrent.futures.as_completed(future_to_file):
+            stepfile = future_to_file[future]
             try:
                 result = future.result()
                 if result:
@@ -650,7 +779,6 @@ def main(input_folder, output_dir, num_workers=4, timeout_seconds=300, num_sampl
                         stats['error_files'].append(result['file'])
                         
             except Exception as e:
-                stepfile = future_to_file[future]
                 print(f"[CRITICAL ERROR] Unexpected error for {stepfile}: {e}")
                 stats['error'] += 1
                 stats['error_files'].append(stepfile)

@@ -455,8 +455,8 @@ def main():
         description='Debug version: Convert STEP folder to NPZ with UV sampling (sequential, preserves relative paths)',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-    parser.add_argument('input_folder', type=str,
-                        help='Input folder containing STEP files (searched recursively with rglob)')
+    parser.add_argument('input', type=str,
+                        help='Input folder containing STEP files (searched recursively with rglob) OR single STEP file')
     parser.add_argument('--output_dir', type=str, default=None,
                         help='Output root directory for NPZ files (default: same as input_folder)')
     parser.add_argument('--num_samples', type=int, default=1000,
@@ -467,10 +467,54 @@ def main():
                         help='Number of FPS samples (same default as main script)')
     parser.add_argument('--no-debug', action='store_true',
                         help='Disable debug output')
+    parser.add_argument('--single-file', action='store_true',
+                        help='Process input as a single STEP file (for bash parallel usage)')
     
     args = parser.parse_args()
 
-    input_folder = Path(args.input_folder)
+    input_path = Path(args.input)
+    
+    # Single file mode (for bash parallel)
+    if args.single_file or input_path.is_file():
+        if not input_path.exists():
+            print(f"Error: File not found: {input_path}")
+            return 1
+        
+        if not input_path.suffix.lower() == '.step':
+            print(f"Error: Not a STEP file: {input_path}")
+            return 1
+        
+        # Determine output path
+        if args.output_dir:
+            output_root = Path(args.output_dir)
+            # If output_dir is specified, use it as base
+            # For single file, preserve relative structure if possible
+            npz_path = output_root / input_path.with_suffix('.npz').name
+        else:
+            # Default: same directory as input file
+            npz_path = input_path.with_suffix('.npz')
+        
+        npz_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        print(f"\n[DEBUG] Processing single file: {input_path}")
+        print(f"[DEBUG] Output npz: {npz_path}")
+        
+        try:
+            step_to_pointcloud(
+                str(input_path),
+                str(npz_path),
+                num_samples=args.num_samples,
+                debug=not args.no_debug,
+                fps=args.fps,
+                num_fps=args.num_fps,
+            )
+            return 0
+        except Exception as e:
+            print(f"[ERROR] Failed to process {input_path}: {e}")
+            return 1
+    
+    # Folder mode (original behavior)
+    input_folder = input_path
     output_root = Path(args.output_dir) if args.output_dir is not None else input_folder
 
     # Collect all STEP files recursively
@@ -478,7 +522,7 @@ def main():
 
     if not stepfiles:
         print(f"No STEP files found under {input_folder}")
-        return
+        return 1
 
     print(f"\n{'='*60}")
     print(f"DEBUG MODE - Sequential Folder Conversion")
@@ -500,18 +544,24 @@ def main():
         print(f"\n[DEBUG] ({i+1}/{len(stepfiles)}) Processing file: {stepfile}")
         print(f"[DEBUG] Output npz: {npz_path}")
 
-        step_to_pointcloud(
-            str(stepfile),
-            str(npz_path),
-            num_samples=args.num_samples,
-            debug=not args.no_debug,
-            fps=args.fps,
-            num_fps=args.num_fps,
-        )
+        try:
+            step_to_pointcloud(
+                str(stepfile),
+                str(npz_path),
+                num_samples=args.num_samples,
+                debug=not args.no_debug,
+                fps=args.fps,
+                num_fps=args.num_fps,
+            )
+        except Exception as e:
+            print(f"[ERROR] Failed to process {stepfile}: {e}")
+            continue
+    
+    return 0
 
 
 
 
 if __name__ == '__main__':
-    exit(main())
+    exit(main() or 0)
 
