@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 
 def cubic_bspline_basis(t):
     """
@@ -223,34 +224,43 @@ def params_to_samples_with_rts(rotations, scales, shifts, params, surface_type_i
     points = (rotations.transpose(-1, -2)[:, None, None] @ points[..., None])[..., 0] * scales[:, None, None, None] + shifts[:, None, None]
     return points
 
-def params_to_samples(params, surface_type_idx, num_samples_u, num_samples_v):
+def params_to_samples(params, surface_type_idx, num_samples_u, num_samples_v, surface_json=None):
     """Sample points from surface parameters"""
     assert torch.isfinite(params).all(), "params contains inf/nan" + str(params)
     
     # Get surface type string
     surface_type_idx_scalar = surface_type_idx.item() if isinstance(surface_type_idx, torch.Tensor) else surface_type_idx
     surface_type = SURFACE_TYPE_MAP_INV.get(surface_type_idx_scalar, 'plane')
-    
-    # Special handling for bspline_surface
-    if surface_type == 'bspline_surface':
-        # Extract 4x4x3 control points from params[17:65] (48 dimensions)
-        # params structure for bspline: [P(3), D(3), X(3), UV(8), control_points(48)]
-        control_points_flat = params[..., 17:65]  # (..., 48)
+    if not surface_json:
+        # Need to map params to surface json
+        # Special handling for bspline_surface
+        if surface_type == 'bspline_surface':
+            # Extract 4x4x3 control points from params[17:65] (48 dimensions)
+            # params structure for bspline: [P(3), D(3), X(3), UV(8), control_points(48)]
+            control_points_flat = params[..., 17:65]  # (..., 48)
+            
+            # Reshape to 4x4x3 grid
+            # Handle both single sample (..., 48) and batch (..., N, 48) cases
+            original_shape = control_points_flat.shape[:-1]  # Get all dims except last
+            control_points = control_points_flat.reshape(*original_shape, 4, 4, 3)
+            
+            # Sample the B-spline surface
+            # Output: (..., num_samples_u, num_samples_v, 3)
+            points = sample_bspline_surface(control_points, num_samples_u, num_samples_v)
+            
+            assert torch.isfinite(points).all(), "bspline points contains inf/nan"
+            return points
         
-        # Reshape to 4x4x3 grid
-        # Handle both single sample (..., 48) and batch (..., N, 48) cases
-        original_shape = control_points_flat.shape[:-1]  # Get all dims except last
-        control_points = control_points_flat.reshape(*original_shape, 4, 4, 3)
-        
-        # Sample the B-spline surface
-        # Output: (..., num_samples_u, num_samples_v, 3)
-        points = sample_bspline_surface(control_points, num_samples_u, num_samples_v)
-        
-        assert torch.isfinite(points).all(), "bspline points contains inf/nan"
-        return points
-    
-    # Standard parametric surface handling
-    surface_params = recover_surface_from_params(params, surface_type_idx)
+        # Standard parametric surface handling
+        surface_params = recover_surface_from_params(params, surface_type_idx)
+    else:
+        surface_type = surface_json['type']
+        if surface_type == 'bspline_surface':
+            points = sample_bspline_surface(np.array(surface_json['poles'])[..., :3], num_samples_u, num_samples_v)
+            assert torch.isfinite(points).all(), "bspline points contains inf/nan"
+            return points
+        else:
+            surface_params = surface_json
     
     location = surface_params['location']
     D, X, Y = surface_params['direction'][..., 0, :], surface_params['direction'][..., 1, :], surface_params['direction'][..., 2, :]

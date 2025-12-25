@@ -251,7 +251,7 @@ class DCAE_FSQ_VAE(nn.Module):
         Returns:
             z: (B, C_latent, H', W') latent codes
         """
-        batch_size = indices.size(0)
+        batch_size = indices.shape[0]
         
         # Ensure indices have correct shape
         if indices.ndim == 1:
