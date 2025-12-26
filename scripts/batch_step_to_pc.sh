@@ -1,13 +1,13 @@
 #!/bin/bash
 
 # 配置参数
-MAX_PARALLEL=16  # 最大并发数，可以根据需要修改
+MAX_PARALLEL=64  # 最大并发数，可以根据需要修改
 NUM_SAMPLES=4096
 FPS=True
 NUM_FPS=20480
-INPUT_BASE="../data/abc_step_full/1/0013"
-OUTPUT_BASE="../data/abc_step_pc_test/1/0013"
-LOG_DIR="./logs/batch_step_to_pc/1/0013"
+INPUT_BASE="/home/qindafei/CAD/data/abc_step_full/1"
+OUTPUT_BASE="/home/qindafei/CAD/data/abc_step_pc/1"
+LOG_DIR="./logs/batch_step_to_pc/1"
 SCRIPT_PATH="src/tools/sample_step_to_pc_debug.py"
 
 # 创建日志目录
@@ -61,16 +61,12 @@ for step_file in "${STEP_FILES[@]}"; do
     output_dir=$(dirname "$output_base_file")
     output_base_name=$(basename "$output_base_file" .npz)
     
-    # 检查是否已经处理过（检查输出目录中是否有对应的 .npz 文件）
+    # 检查是否已经处理过（如果输出目录存在，则认为已处理）
     if [ -d "$output_dir" ]; then
-        # 检查是否有匹配的 .npz 文件（格式为 base_name_*.npz）
-        existing_files=$(find "$output_dir" -maxdepth 1 -name "${output_base_name}_*.npz" 2>/dev/null)
-        if [ -n "$existing_files" ]; then
-            ((PROCESSED++))
-            echo "[$PROCESSED/$TOTAL] [SKIP] $rel_path (已存在)"
-            ((SUCCESS++))
-            continue
-        fi
+        ((PROCESSED++))
+        echo "[$PROCESSED/$TOTAL] [SKIP] $rel_path (已存在)"
+        ((SUCCESS++))
+        continue
     fi
     
     # 构造日志文件名（使用下划线替换斜杠）
@@ -110,7 +106,7 @@ for step_file in "${STEP_FILES[@]}"; do
     ((PROCESSED++))
     echo "[$PROCESSED/$TOTAL] 正在处理: $rel_path"
     echo "  输入: $step_file"
-    echo "  输出: $output_file"
+    echo "  输出: $output_dir"
     echo "  日志: $log_file"
     
     # 在后台运行命令
