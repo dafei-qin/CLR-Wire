@@ -28,7 +28,6 @@ if __name__ == "__main__":
         all_ps_groups.append(new_group)
         for idx_n in range(len(all_faces)):
 
-
             print('\n', f'Intersecting face with index: {idx_m:03d}-{idx_n:03d}')
             face_m = all_faces[idx_m]['surface']
             face_n = all_faces[idx_n]['surface']

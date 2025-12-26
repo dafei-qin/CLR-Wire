@@ -12,10 +12,7 @@ import polyscope as ps
 
 from utils.surface import sample_line
 
-def surf_surf_interset(face_m, face_n, face_group=None, tol=1e-2, plot_header=''):
-    geom_face_m = BRep_Tool.Surface(face_m)
-    geom_face_n = BRep_Tool.Surface(face_n)
-
+def surf_surf_interset(face_m, face_n, face_group=None, tol=1e-2, plot=True, plot_header=''):
 
     # IntSS: geom-geom intersection, no boundary constraints.
             # interset_geom = GeomInt_IntSS(geom_face_m, geom_face_n, 1e-2)
@@ -70,13 +67,14 @@ def surf_surf_interset(face_m, face_n, face_group=None, tol=1e-2, plot_header=''
         edges.append(exp.Current())
         # all_edges[idx_m].append(exp.Current())
         exp.Next()
-    for idx_line, edge in enumerate(edges):
-        a_curve = BRepAdaptor_Curve(edge)
-        line_type = a_curve.GetType()
-        points, edges = sample_line(a_curve)
-        psEdge = ps.register_curve_network(f"{plot_header}_line_{idx_line:03d}_{GeomAbs_CurveType(line_type).name}", points, edges, radius=0.001)
-        if face_group is not None:
-            psEdge.add_to_group(face_group)
+    if plot:
+        for idx_line, edge in enumerate(edges):
+            a_curve = BRepAdaptor_Curve(edge)
+            line_type = a_curve.GetType()
+            points, line_edges = sample_line(a_curve)
+            psEdge = ps.register_curve_network(f"{plot_header}_line_{idx_line:03d}_{GeomAbs_CurveType(line_type).name}", points, line_edges, radius=0.001)
+            if face_group is not None:
+                psEdge.add_to_group(face_group)
     return edges
 
 
@@ -98,3 +96,5 @@ def wire_formation(face, edges):
     #     new_group.set_hide_descendants_from_structure_lists(True)
     #     new_group.set_show_child_details(False)
     raise NotImplementedError("Wire formation is not implemented yet")
+
+

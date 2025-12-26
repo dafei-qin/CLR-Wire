@@ -50,7 +50,7 @@ import traceback
 
 ic.disable()
 
-def Compound(faces):
+def Compound(faces, edges=None):
     # Convert list of faces to a compound
     compound = TopoDS_Compound()
     builder = BRep_Builder()
@@ -63,6 +63,15 @@ def Compound(faces):
             face = explorer.Current()
             builder.Add(compound, face)
             explorer.Next()
+
+    if edges is not None:
+        for edge in edges:
+            # print(edge)
+            explorer = TopExp_Explorer(edge, TopAbs_EDGE)
+            while explorer.More():
+                edge = explorer.Current()
+                builder.Add(compound, edge)
+                explorer.Next()
 
     return compound
 
@@ -109,8 +118,8 @@ def Compound(faces):
 #         return False
 
 
-def write_to_step(faces, step_filename):
-    compound = Compound(faces)
+def write_to_step(faces, step_filename, edges=None):
+    compound = Compound(faces, edges=edges)
     write_step_file(compound, str(step_filename))
 
 

@@ -9,7 +9,7 @@ from einops import rearrange
 from pathlib import Path
 from typing import Dict, List, Tuple
 from icecream import ic
-
+from copy import deepcopy
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -74,7 +74,7 @@ def quantize_to_codebook(x, min_val, max_val, N):
 
 class dataset_compound_tokenize(Dataset):
 
-    def __init__(self, json_dir: str, max_num_surfaces: int = 500, canonical: bool = False, detect_closed: bool = False, bspline_fit_threshold: float = 1e-5, codebook_size=1024):
+    def __init__(self, json_dir: str, max_num_surfaces: int = 500, canonical: bool = True, detect_closed: bool = False, bspline_fit_threshold: float = 1e-5, codebook_size=1024, return_orig_surfaces=False):
 
         self.dataset_compound = dataset_compound(json_dir, max_num_surfaces, canonical, detect_closed, bspline_fit_threshold)
 
@@ -83,6 +83,7 @@ class dataset_compound_tokenize(Dataset):
         self.canonical = canonical
         self.detect_closed = detect_closed
         self.bspline_fit_threshold = bspline_fit_threshold
+        self.return_orig_surfaces = return_orig_surfaces
     
     def __len__(self):
         return len(self.dataset_compound)
@@ -104,15 +105,28 @@ class dataset_compound_tokenize(Dataset):
             elif surface_type == 'cylinder' or surface_type =='cone':
                 u = uv[:2]
                 v = uv[2:]
-                u_quantized, codes_u = quantize_to_codebook(u / 2 / np.pi, -1, 1, self.codebook_size)
-                if u_quantized[1] - u_quantized[0] > 1:
-                    u_quantized[1] = u_quantized[0] + 1 - 1e-5
-                u_quantized = u_quantized * 2 * np.pi
+                # u[1] = u[1] + u[0]
+                # u[0] = 0
+
+                u_center = (u[0] + u[1]) / 2 / (2* np.pi) # Should be in [-1, 1]
+                u_gap = np.clip((u[1] - u[0]), 0, 2 * np.pi) / (2 * np.pi) # Should be in [0, 1]
+
+                u_center_quantized, code_u_center = quantize_to_codebook(u_center, -1, 1, self.codebook_size)
+                u_gap_quantized, code_u_gap = quantize_to_codebook(u_gap, 0, 1, self.codebook_size)
+
+                u_quantized = [u_center_quantized - u_gap_quantized / 2, u_center_quantized + u_gap_quantized / 2]
+                u_quantized = [u_quantized[0]*2*np.pi, u_quantized[1]*2*np.pi]
+                codes_u = [code_u_center, code_u_gap]
+
+                # if u_quantized[1] - u_quantized[0] > 1:
+                #     # u_quantized[1] = u_quantized[0] + 1 - 1e-5
+                #     u_quantized[0] = u_quantized[0] + 1e-5
+                # u_quantized = u_quantized * 2 * np.pi
 
                 v_quantized, code_v = quantize_to_codebook(v[1], 0, 1, self.codebook_size)
                 v_quantized = [0, v_quantized]
                 codes_v = [-1, code_v]
-                surface['uv'] = u_quantized.tolist() + v_quantized
+                surface['uv'] = u_quantized + v_quantized
                 
 
                 if surface_type == 'cylinder':
@@ -131,16 +145,35 @@ class dataset_compound_tokenize(Dataset):
             elif surface_type == 'sphere':
                 u = uv[:2]
                 v = uv[2:]
-                u_quantized, codes_u = quantize_to_codebook(u / 2 / np.pi, -1, 1, self.codebook_size)
-                if u_quantized[1] - u_quantized[0] > 1:
-                    u_quantized[1] = u_quantized[0] + 1 - 1e-5
-                u_quantized = u_quantized * 2 * np.pi
-                v_quantized, codes_v = quantize_to_codebook(v / np.pi * 2, -1, 1, self.codebook_size)
-                if v_quantized[1] - v_quantized[0] > 1:
-                    v_quantized[1] = v_quantized[0] + 1 - 1e-5
-                v_quantized = v_quantized * np.pi / 2
+                u_center = (u[0] + u[1]) / 2 / (2* np.pi) # Should be in [-1, 1]
+                u_gap = np.clip((u[1] - u[0]), 0, 2 * np.pi) / (2 * np.pi) # Should be in [0, 1]
+                u_center_quantized, code_u_center = quantize_to_codebook(u_center, -1, 1, self.codebook_size)
+                u_gap_quantized, code_u_gap = quantize_to_codebook(u_gap, 0, 1, self.codebook_size)
+                u_quantized = [u_center_quantized - u_gap_quantized / 2, u_center_quantized + u_gap_quantized / 2]
+                u_quantized = [u_quantized[0]*2*np.pi, u_quantized[1]*2*np.pi]
+                codes_u = [code_u_center, code_u_gap]
 
-                surface['uv'] = u_quantized.tolist() + v_quantized.tolist()
+                # u_quantized, codes_u = quantize_to_codebook(u / 2 / np.pi, -1, 1, self.codebook_size)
+                # if u_quantized[1] - u_quantized[0] > 1:
+                #     # u_quantized[1] = u_quantized[0] + 1 - 1e-5
+                #     u_quantized[0] = u_quantized[0] + 1e-5
+                # u_quantized = u_quantized * 2 * np.pi
+
+                v_center = (v[0] + v[1]) / 2 / np.pi # Should be in [-1, 1]
+                v_gap = np.clip((v[1] - v[0]), 0, np.pi) / np.pi # Should be in [0, 1]
+                v_center_quantized, code_v_center = quantize_to_codebook(v_center, -0.5, 0.5, self.codebook_size)
+                v_gap_quantized, code_v_gap = quantize_to_codebook(v_gap, 0, 1, self.codebook_size)
+                v_quantized = [v_center_quantized - v_gap_quantized / 2, v_center_quantized + v_gap_quantized / 2]
+                v_quantized = [v_quantized[0]*np.pi, v_quantized[1]*np.pi]
+                codes_v = [code_v_center, code_v_gap]
+
+                # v_quantized, codes_v = quantize_to_codebook(v / np.pi * 2, -1, 1, self.codebook_size)
+                # if v_quantized[1] - v_quantized[0] > 1:
+                #     # v_quantized[1] = v_quantized[0] + 1 - 1e-5
+                #     v_quantized[0] = v_quantized[0] + 1e-5
+                # v_quantized = v_quantized * np.pi / 2
+
+                surface['uv'] = u_quantized+ v_quantized
     
                 
                 codes = np.concatenate([codes_u, codes_v, np.zeros(2, dtype=int) - 1]) # Total length = 6
@@ -148,16 +181,35 @@ class dataset_compound_tokenize(Dataset):
             elif surface_type == 'torus':
                 u = uv[:2]
                 v = uv[2:]
-                u_quantized, codes_u = quantize_to_codebook(u / 2 / np.pi, -1, 1, self.codebook_size)
-                if u_quantized[1] - u_quantized[0] > 1:
-                    u_quantized[1] = u_quantized[0] + 1 - 1e-5
-                u_quantized = u_quantized * 2 * np.pi
-                v_quantized, codes_v = quantize_to_codebook(v / 2 / np.pi, -1, 1, self.codebook_size)
-                if v_quantized[1] - v_quantized[0] > 1:
-                    v_quantized[1] = v_quantized[0] + 1 - 1e-5
-                v_quantized = v_quantized * 2 * np.pi
 
-                surface['uv'] = u_quantized.tolist() + v_quantized.tolist()
+                u_center = (u[0] + u[1]) / 2 / (2* np.pi) # Should be in [-1, 1]
+                u_gap = np.clip((u[1] - u[0]), 0, 2 * np.pi) / (2 * np.pi) # Should be in [0, 1]
+                u_center_quantized, code_u_center = quantize_to_codebook(u_center, -1, 1, self.codebook_size)
+                u_gap_quantized, code_u_gap = quantize_to_codebook(u_gap, 0, 1, self.codebook_size)
+                u_quantized = [u_center_quantized - u_gap_quantized / 2, u_center_quantized + u_gap_quantized / 2]
+                u_quantized = [u_quantized[0]*2*np.pi, u_quantized[1]*2*np.pi]
+                codes_u = [code_u_center, code_u_gap]
+
+                v_center = (v[0] + v[1]) / 2 / (2 *np.pi) # Should be in [-1, 1]
+                v_gap = np.clip((v[1] - v[0]), 0, 2 * np.pi) / (2 * np.pi) # Should be in [0, 1]
+                v_center_quantized, code_v_center = quantize_to_codebook(v_center, -1, 1, self.codebook_size)
+                v_gap_quantized, code_v_gap = quantize_to_codebook(v_gap, 0, 1, self.codebook_size)
+                v_quantized = [v_center_quantized - v_gap_quantized / 2, v_center_quantized + v_gap_quantized / 2]
+                v_quantized = [v_quantized[0]*2*np.pi, v_quantized[1]*2*np.pi]
+                codes_v = [code_v_center, code_v_gap]
+
+                # u_quantized, codes_u = quantize_to_codebook(u / 2 / np.pi, -1, 1, self.codebook_size)
+                # if u_quantized[1] - u_quantized[0] > 1:
+                #     # u_quantized[1] = u_quantized[0] + 1 - 1e-5
+                #     u_quantized[0] = u_quantized[0] + 1e-5
+                # u_quantized = u_quantized * 2 * np.pi
+                # v_quantized, codes_v = quantize_to_codebook(v / 2 / np.pi, -1, 1, self.codebook_size)
+                # if v_quantized[1] - v_quantized[0] > 1:
+                #     # v_quantized[1] = v_quantized[0] + 1 - 1e-5
+                #     v_quantized[0] = v_quantized[0] + 1e-5
+                # v_quantized = v_quantized * 2 * np.pi
+
+                surface['uv'] = u_quantized + v_quantized
                 
                 scale_2_quantized, scale_2_code = quantize_to_codebook(surface['scalar'][1], 0, 1, self.codebook_size)
 
@@ -194,8 +246,12 @@ class dataset_compound_tokenize(Dataset):
             surface['scalar'] = []
 
         elif surface_type in ('cylinder', 'cone'):
-            u = [decode(code[0], -1, 1), decode(code[1], -1, 1)]
-            u = [float(v * 2 * np.pi) for v in u]
+            # u = [decode(code[0], -1, 1), decode(code[1], -1, 1)]
+            # u = [float(v * 2 * np.pi) for v in u]
+            u_center, u_gap = [decode(code[0], -1, 1), decode(code[1], 0, 1)]
+            u = [u_center - u_gap / 2, u_center + u_gap / 2]
+            u = [u[0]*2*np.pi, u[1]*2*np.pi]
+
 
             v1 = decode(code[3], 0, 1)
             v = [0.0, float(v1)] if v1 is not None else surface.get('uv', [0.0, 0.0])[2:]
@@ -218,21 +274,37 @@ class dataset_compound_tokenize(Dataset):
                 surface['scalar'] = scalars
 
         elif surface_type == 'sphere':
-            u = [decode(code[0], -1, 1), decode(code[1], -1, 1)]
-            u = [float(v * 2 * np.pi) for v in u]
+            u_center, u_gap = [decode(code[0], -1, 1), decode(code[1], 0, 1)]
+            u = [u_center - u_gap / 2, u_center + u_gap / 2]
+            u = [u[0]*2*np.pi, u[1]*2*np.pi]
 
-            v = [decode(code[2], -1, 1), decode(code[3], -1, 1)]
-            v = [float(val * np.pi / 2) for val in v]
+            v_center, v_gap = [decode(code[2], -0.5, 0.5), decode(code[3], 0, 1)]
+            v = [v_center - v_gap / 2, v_center + v_gap / 2]
+            v = [v[0]*np.pi, v[1]*np.pi]
+
+            # u = [decode(code[0], -1, 1), decode(code[1], -1, 1)]
+            # u = [float(v * 2 * np.pi) for v in u]
+
+            # v = [decode(code[2], -1, 1), decode(code[3], -1, 1)]
+            # v = [float(val * np.pi / 2) for val in v]
 
             surface['uv'] = u + v
             surface['scalar'] = [1.0]
 
         elif surface_type == 'torus':
-            u = [decode(code[0], -1, 1), decode(code[1], -1, 1)]
-            u = [float(v * 2 * np.pi) for v in u]
+            # u = [decode(code[0], -1, 1), decode(code[1], -1, 1)]
+            # u = [float(v * 2 * np.pi) for v in u]
 
-            v = [decode(code[2], -1, 1), decode(code[3], -1, 1)]
-            v = [float(val * 2 * np.pi) for val in v]
+            # v = [decode(code[2], -1, 1), decode(code[3], -1, 1)]
+            # v = [float(val * 2 * np.pi) for val in v]
+
+            u_center, u_gap = [decode(code[0], -1, 1), decode(code[1], 0, 1)]
+            u = [u_center - u_gap / 2, u_center + u_gap / 2]
+            u = [u[0]*2*np.pi, u[1]*2*np.pi]
+
+            v_center, v_gap = [decode(code[2], -1, 1), decode(code[3], 0, 1)]
+            v = [v_center - v_gap / 2, v_center + v_gap / 2]
+            v = [v[0]*2*np.pi, v[1]*2*np.pi]
 
             surface['uv'] = u + v
 
@@ -260,8 +332,11 @@ class dataset_compound_tokenize(Dataset):
 
         all_codes = np.zeros((params_tensor.shape[0], 6), dtype=int)
         all_recon_surfaces = []
+        all_orig_surfaces = []
         for i in range(params_tensor.shape[0]):
-            recon_surface = self.dataset_compound._recover_surface(params_tensor[i].numpy(), types_tensor[i].item())
+            orig_surface = self.dataset_compound._recover_surface(params_tensor[i].numpy(), types_tensor[i].item())
+            all_orig_surfaces.append(orig_surface)
+            recon_surface = deepcopy(orig_surface)
             if recon_surface['type'] == 'bspline_surface':
                 # For bspline, no tokenization needed
                 all_recon_surfaces.append(recon_surface)
@@ -272,12 +347,22 @@ class dataset_compound_tokenize(Dataset):
                 all_codes[i] = code
 
         if self.detect_closed:
-            return (all_recon_surfaces, all_codes, types_tensor, 
-                    all_shifts, all_rotations, all_scales,
-                    is_u_closed_tensor, is_v_closed_tensor)
+            if self.return_orig_surfaces:
+                return (all_recon_surfaces, all_codes, types_tensor, 
+                        all_shifts, all_rotations, all_scales,
+                        is_u_closed_tensor, is_v_closed_tensor, all_orig_surfaces)
+            else:
+                return (all_recon_surfaces, all_codes, types_tensor, 
+                        all_shifts, all_rotations, all_scales,
+                        is_u_closed_tensor, is_v_closed_tensor)
+            
         else:
-            return (all_recon_surfaces, all_codes, types_tensor, 
-                    all_shifts, all_rotations, all_scales)
+            if self.return_orig_surfaces:
+                return (all_recon_surfaces, all_codes, types_tensor, 
+                        all_shifts, all_rotations, all_scales, all_orig_surfaces)
+            else:
+                return (all_recon_surfaces, all_codes, types_tensor, 
+                        all_shifts, all_rotations, all_scales)
 
 
         
