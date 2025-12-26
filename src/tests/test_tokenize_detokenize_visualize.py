@@ -15,6 +15,9 @@ from pathlib import Path
 import polyscope as ps
 import torch
 
+project_root = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(project_root))
+
 from src.dataset.dataset_v4_tokenize_all import dataset_compound_tokenize_all
 from utils.surface import visualize_json_interset
 
