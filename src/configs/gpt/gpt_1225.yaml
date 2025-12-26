@@ -1,0 +1,9 @@
+
+
+model: 
+  name: lit_gpt.modle.GPT
+  params:
+    padded_vocab_size: 1026 # 1024 + start + end
+    block_size: 1000
+    build_conditioner: false
+    freeze_conditioner: false
