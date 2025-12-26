@@ -410,7 +410,13 @@ class TranslationCodebook:
         self.bins = None  # (bins_per_dim,) bin centers shared across all dimensions
         self.is_fitted = False
         
-    def fit(self, translations: np.ndarray, percentile: float = 95.0, verbose: bool = True) -> Dict:
+    def fit(
+        self,
+        translations: np.ndarray,
+        percentile: float = 95.0,
+        interval_scale: float = 1.0,
+        verbose: bool = True,
+    ) -> Dict:
         """
         Fit translation codebook by creating uniform grid covering specified percentile.
         All dimensions share the same bin structure (same range and number of bins).
@@ -447,6 +453,17 @@ class TranslationCodebook:
         translations_flat = translations.flatten()
         self.global_min = np.percentile(translations_flat, lower_percentile)
         self.global_max = np.percentile(translations_flat, upper_percentile)
+
+        # Optionally expand the interval symmetrically around 0
+        # Ensure the range crosses 0 so that scaling makes sense
+        if interval_scale != 1.0:
+            assert self.global_min < 0 and self.global_max > 0, (
+                f"Translation percentile range must cross 0 before applying interval_scale, "
+                f"got [{self.global_min:.4f}, {self.global_max:.4f}]"
+            )
+            assert interval_scale > 1.0, f"interval_scale must be > 1, got {interval_scale}"
+            self.global_min *= interval_scale
+            self.global_max *= interval_scale
         
         if verbose:
             print(f"Global translation range (covering {percentile}% of data):")
@@ -710,7 +727,14 @@ class ScaleCodebook:
         self.log_codebook = None  # (codebook_size,) codebook entries in log-space
         self.is_fitted = False
         
-    def fit(self, scales: np.ndarray, percentile: float = 95.0, eps: float = 1e-8, verbose: bool = True) -> Dict:
+    def fit(
+        self,
+        scales: np.ndarray,
+        percentile: float = 95.0,
+        interval_scale: float = 1.0,
+        eps: float = 1e-8,
+        verbose: bool = True,
+    ) -> Dict:
         """
         Fit scale codebook by creating uniform 1D grid in log-space covering specified percentile.
         
@@ -743,11 +767,22 @@ class ScaleCodebook:
         
         self.log_min = np.percentile(log_scales, lower_percentile)
         self.log_max = np.percentile(log_scales, upper_percentile)
+
+        # Optionally expand the interval symmetrically around 0 in log-space
+        # This assumes the log-scale range crosses 0 (i.e., some scales < 1 and some > 1)
+        if interval_scale != 1.0:
+            assert self.log_min < 0 and self.log_max > 0, (
+                f"Scale log-percentile range must cross 0 before applying interval_scale, "
+                f"got [{self.log_min:.4f}, {self.log_max:.4f}]"
+            )
+            assert interval_scale > 1.0, f"interval_scale must be > 1, got {interval_scale}"
+            self.log_min *= interval_scale
+            self.log_max *= interval_scale
         
         if verbose:
             min_scale = np.exp(self.log_min)
             max_scale = np.exp(self.log_max)
-            print(f"Scale range in log-space (covering {percentile}% of data):")
+            print(f"Scale range in log-space (after optional interval_scale, covering ~{percentile}% of data):")
             print(f"  log=[{self.log_min:.4f}, {self.log_max:.4f}] -> "
                   f"scale=[{min_scale:.4f}, {max_scale:.4f}]")
         
@@ -956,6 +991,7 @@ def build_translation_codebook_from_cache(
     codebook_size: int,
     output_path: str,
     percentile: float = 95.0,
+    interval_scale: float = 1.0,
 ) -> TranslationCodebook:
     """
     Build translation codebook from a dataset cache file.
@@ -981,7 +1017,7 @@ def build_translation_codebook_from_cache(
     
     # Create and fit codebook
     codebook = TranslationCodebook(codebook_size)
-    stats = codebook.fit(translations, percentile=percentile, verbose=True)
+    stats = codebook.fit(translations, percentile=percentile, interval_scale=interval_scale, verbose=True)
     
     # Save codebook
     codebook.save(output_path)
@@ -1004,6 +1040,7 @@ def build_scale_codebook_from_cache(
     codebook_size: int,
     output_path: str,
     percentile: float = 95.0,
+    interval_scale: float = 1.0,
     eps: float = 1e-8,
 ) -> ScaleCodebook:
     """
@@ -1031,7 +1068,7 @@ def build_scale_codebook_from_cache(
     
     # Create and fit codebook
     codebook = ScaleCodebook(codebook_size)
-    stats = codebook.fit(scales, percentile=percentile, eps=eps, verbose=True)
+    stats = codebook.fit(scales, percentile=percentile, interval_scale=interval_scale, eps=eps, verbose=True)
     
     # Save codebook
     codebook.save(output_path)
@@ -1065,6 +1102,8 @@ if __name__ == '__main__':
                        help='Maximum k-means iterations (rotation only)')
     parser.add_argument('--percentile', type=float, default=95.0,
                        help='Percentage of data to cover (translation/scale only)')
+    parser.add_argument('--interval_scale', type=float, default=1.0,
+                       help='Scale factor (>1) to expand translation/scale intervals around 0')
     parser.add_argument('--seed', type=int, default=42,
                        help='Random seed')
     
@@ -1084,6 +1123,7 @@ if __name__ == '__main__':
             codebook_size=args.codebook_size,
             output_path=args.output_path,
             percentile=args.percentile,
+            interval_scale=args.interval_scale,
         )
     elif args.type == 'scale':
         build_scale_codebook_from_cache(
@@ -1091,5 +1131,6 @@ if __name__ == '__main__':
             codebook_size=args.codebook_size,
             output_path=args.output_path,
             percentile=args.percentile,
+            interval_scale=args.interval_scale,
         )
 
