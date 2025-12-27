@@ -24,17 +24,17 @@
 # 其他公共参数配置
 # export OFFLOAD_DEVICE=cpu
 # export ZERO_STAGE=1
-export MIXED_PRECISION=bf16
+# export MIXED_PRECISION=bf16
 # # export OMP_NUM_THREADS=1
 # export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # echo -e "EXTRA_ARGS=$EXTRA_ARGS"
 
 # 获取当前脚本的绝对路径
-script_path="$(dirname "$(realpath "$0")")"
+# script_path="$(dirname "$(realpath "$0")")"
 # 切换到脚本所在的目录
-cd "$script_path"
-export PYTHONPATH=.
+# cd "$script_path"
+# export PYTHONPATH=.
 
 # 配置多节点训练
 # export MACHINE_TYPE=normal
@@ -147,8 +147,8 @@ export PYTHONPATH=.
 
 # echo "$process_num total process num"
 
-pip install wandb pudb
-export WANDB_API_KEY=f5b896f87730635708b9b81c5d7728ae1a8b4903   # ATTETNION:需要改成个人的key
+. /root/clashctl/scripts/cmd/clashctl.sh
+export WANDB_API_KEY=3c417f941b483432f09ba32cebabecae043cf11f   # ATTETNION:需要改成个人的key
 wandb login
 # if [ "$h200_count" -eq 8 ]; then
 #     export WANDB_API_KEY=f5b896f87730635708b9b81c5d7728ae1a8b4903   # ATTETNION:需要改成个人的key
@@ -220,7 +220,7 @@ wandb login
 #     --seed 42
 export MASTER_PORT=29500
 
-export OUTPUT_DIR=checkpoints/1021_2B_64A800_Samba_DEEMOStoken_$(date +%Y-%m-%d_%H)
+export OUTPUT_DIR=checkpoints/1226_gpt_init_debug$(date +%Y-%m-%d_%H)
 
 # torchrun \
 #     --nnodes=1 \
@@ -243,17 +243,17 @@ export OUTPUT_DIR=checkpoints/1021_2B_64A800_Samba_DEEMOStoken_$(date +%Y-%m-%d_
 
 # --nproc_per_node $MLP_WORKER_GPU --master_addr $MLP_WORKER_0_HOST --node_rank $MLP_ROLE_INDEX --master_port $MLP_WORKER_0_PORT --nnodes $MLP_WORKER_NUM
 
-
-torchrun \
-    --nnodes=$MLP_WORKER_NUM \
-    --node_rank=$MLP_ROLE_INDEX \
-    --nproc_per_node=$MLP_WORKER_GPU \
-    --master_addr=$MLP_WORKER_0_HOST \
-    --master_port=$MLP_WORKER_0_PORT \
-    pretrain.py \
-    --train_data_dir /data4/ruixu/LLMDATA/slim \
-    --val_data_dir /data4/ruixu/LLMDATA/slim \
-    --resume /deemos-research-area-d/meshgen/code/HG_DEEMOS/out/HY1024_tsz128x16k_100B_ScaleUp20k_unlockCondition_Diff_LLaMA_551M/Samba-DEEMOS-12-23-06/iter-045000-ckpt.pth
+python third_party/HGDEEMOS/pretrain.py --config_path src/configs/gpt/gpt_1225.yaml --resume False
+# torchrun \
+#     --nnodes=$MLP_WORKER_NUM \
+#     --node_rank=$MLP_ROLE_INDEX \
+#     --nproc_per_node=$MLP_WORKER_GPU \
+#     --master_addr=$MLP_WORKER_0_HOST \
+#     --master_port=$MLP_WORKER_0_PORT \
+#     pretrain.py \
+#     --train_data_dir /data4/ruixu/LLMDATA/slim \
+#     --val_data_dir /data4/ruixu/LLMDATA/slim \
+#     --resume /deemos-research-area-d/meshgen/code/HG_DEEMOS/out/HY1024_tsz128x16k_100B_ScaleUp20k_unlockCondition_Diff_LLaMA_551M/Samba-DEEMOS-12-23-06/iter-045000-ckpt.pth
     # --warm_start_ckpt /deemos-research-area-d/meshgen/code/Samba/out/tsz128x16k_100B_Samba_2.2B_22L/Samba-DEEMOS-11-14-06/iter-132000-ckpt.pth
     
 

@@ -36,7 +36,7 @@ from multiprocessing.pool import Pool
 import time
 import trimesh
 
-from utils.surface import extract_mesh_from_face 
+from myutils.surface import extract_mesh_from_face 
 ic.disable()
 # from utils import load_step_with_timeout, load_abc_step, load_furniture_step
 

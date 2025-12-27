@@ -21,7 +21,7 @@ from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_MakeFace
 from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
 from OCC.Core.ShapeFix import ShapeFix_ShapeTolerance
 
-from utils.surface import extract_mesh_from_face
+from myutils.surface import extract_mesh_from_face
 
 
 _dataset = None

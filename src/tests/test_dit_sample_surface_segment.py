@@ -28,7 +28,7 @@ from src.flow.surface_flow import ZLDMPipeline, get_new_scheduler
 from src.tests.test_vae_v1 import to_json
 from src.tools.surface_to_canonical_space import from_canonical
 from src.utils.surface_latent_tools import decode_and_sample_with_rts, decode_latent
-from utils.surface import visualize_json_interset
+from myutils.surface import visualize_json_interset
 
 # Colors for is_closed visualization
 # Format: [R, G, B] in range [0, 1]

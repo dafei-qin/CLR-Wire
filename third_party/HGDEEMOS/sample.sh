@@ -1,9 +1,11 @@
-CUDA_VISIBLE_DEVICES=0 torchrun --nproc-per-node=1 --master_port=12345 sample.py \
-    --model_path "/deemos-research-area-d/meshgen/code/HG_DEEMOS/out/tsz128x16k_100B_ScaleUp20k_FixCondition_Diff_LLaMA_2121M/Samba-DEEMOS-12-09-09/iter-122500-ckpt.pth" \
-    --model_id 2121 \
-    --steps 50000 \
-    --input_path /deemos-research-area-d/meshgen/code/Samba/data/testdata \
-    --output_path mesh_output \
-    --repeat_num 4 \
-    --uid_list "" \
-    --temperature 0.5 \
+# conda activate cad
+xvfb-run python third_party/HGDEEMOS/batch_infer_kvcache.py \
+    --config_path src/configs/gpt/gpt_1225.yaml \
+    --ckpt /deemos-research-area-d/CADgen/CLR-Wire/out/GPT_INIT_142M/debug2/iter-004760-final-ckpt.pth \
+    --num_samples 100 \
+    --max_new_tokens 1000 \
+    --max_seq_len 1000 \
+    --temperature 0.0 \
+    --device cuda \
+    --dtype fp32 \
+    --output_dir /deemos-research-area-d/CADgen/CLR-Wire/out/GPT_INIT_142M/debug2/

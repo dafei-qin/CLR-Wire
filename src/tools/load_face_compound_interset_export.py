@@ -6,8 +6,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from utils.surface import write_to_step
-from utils.surf_tools import surf_surf_interset
+from myutils.surface import write_to_step
+from myutils.surface import surf_surf_interset
 from occwl.compound import Compound
 
 from occwl.io import load_step, save_step

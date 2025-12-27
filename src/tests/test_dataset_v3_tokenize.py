@@ -14,7 +14,7 @@ sys.path.append(r'F:\WORK\CAD\CLR-Wire')
 from src.dataset.dataset_v3_tokenize import dataset_compound_tokenize
 from src.dataset.dataset_v2 import dataset_compound, SURFACE_TYPE_MAP, SCALAR_DIM_MAP
 from src.tools.surface_to_canonical_space import from_canonical
-from utils.surface import visualize_json_interset
+from myutils.surface import visualize_json_interset
 
 
 def recover_bspline_from_canonical(shift, rotation, scale, control_points_canonical):

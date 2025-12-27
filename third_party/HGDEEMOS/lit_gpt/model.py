@@ -20,8 +20,18 @@ KVCache = Tuple[torch.Tensor, torch.Tensor]
 FlashAttention2Available = RequirementCache("flash-attn>=2.0.0.post1")
 # from .miche_conditioner import PointConditioner
 from einops import rearrange, reduce, repeat
-import os
+
 from hy3dshape.models.autoencoders import ShapeVAE
+
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).parent))
+# Add project root to sys.path to import src.utils
+
+project_root = Path(__file__).parent.parent.parent.parent.resolve()
+sys.path.insert(0, str(project_root))
+from src.utils.latent_tools import init_model, to_latent
+
 
 
 CausalLMOutput = namedtuple("CausalLMOutput", ["logits"])
@@ -154,7 +164,7 @@ class Hourglass(torch.nn.Module):
     
 
 class GPT(nn.Module):
-    def __init__(self, config: Config, build_conditioner: bool = True, freeze_conditioner: bool = True) -> None:
+    def __init__(self, config: Config, use_michelangelo: bool = False, michelangelo_config_path: str = None, michelangelo_ckpt_path: str = None, build_conditioner: bool = True, freeze_conditioner: bool = True) -> None:
         super().__init__()
         assert config.padded_vocab_size is not None
         self.config = config
@@ -174,37 +184,42 @@ class GPT(nn.Module):
         # self.conditioner = PointConditioner(model_name='miche-256-feature', freeze=True)
         # self.conditioner.eval()
         self.conditioner = None
-        if build_conditioner:
-            # 根据 config.yaml 创建 ShapeVAE（只使用明确指定的参数）
-            self.conditioner = ShapeVAE(
-                num_latents=1024,
-                embed_dim=64,
-                num_freqs=8,
-                include_pi=False,
-                heads=16,
-                width=1024,
-                num_encoder_layers=8,
-                num_decoder_layers=12,
-                qkv_bias=False,
-                qk_norm=True,
-                scale_factor=1.0039506158752403,
-                geo_decoder_mlp_expand_ratio=4,
-                geo_decoder_downsample_ratio=1,
-                geo_decoder_ln_post=True,
-                point_feats=4,
-                pc_size=81920,
-                pc_sharpedge_size=0,
-                downsample_ratio=80,
-            )
-            
-            if freeze_conditioner:
-                for p in self.conditioner.parameters():
-                    p.requires_grad = False
-                self.conditioner.eval()
-            else:
-                for p in self.conditioner.parameters():
-                    p.requires_grad = True
-                self.conditioner.train()
+        self.use_michelangelo = use_michelangelo
+        if use_michelangelo:
+            self.michel = init_model(michelangelo_config_path, michelangelo_ckpt_path)
+            self.michel.eval()
+        else:
+            if build_conditioner:
+                # 根据 config.yaml 创建 ShapeVAE（只使用明确指定的参数）
+                self.conditioner = ShapeVAE(
+                    num_latents=1024,
+                    embed_dim=64,
+                    num_freqs=8,
+                    include_pi=False,
+                    heads=16,
+                    width=1024,
+                    num_encoder_layers=8,
+                    num_decoder_layers=12,
+                    qkv_bias=False,
+                    qk_norm=True,
+                    scale_factor=1.0039506158752403,
+                    geo_decoder_mlp_expand_ratio=4,
+                    geo_decoder_downsample_ratio=1,
+                    geo_decoder_ln_post=True,
+                    point_feats=4,
+                    pc_size=81920,
+                    pc_sharpedge_size=0,
+                    downsample_ratio=80,
+                )
+                
+                if freeze_conditioner:
+                    for p in self.conditioner.parameters():
+                        p.requires_grad = False
+                    self.conditioner.eval()
+                else:
+                    for p in self.conditioner.parameters():
+                        p.requires_grad = True
+                    self.conditioner.train()
         self.norm = nn.LayerNorm(config.n_embd)
         
         # ========== Condition Tokens 降采样配置 ==========
@@ -212,10 +227,14 @@ class GPT(nn.Module):
         # - 4096 个 spatial tokens (64×64 grid)
         # - 1024 维特征（Hunyuan3D-2.1 的 width）
         # 降采样以节省 CrossAttention 的显存和计算
+
         self.condition_downsample_factor = 1  # 4096 → 1024 tokens (节省75%显存)
         self.condition_downsample_method = 'learnable'  # 'pool' 或 'learnable'
         
-        shapevae_width = 1024  # Hunyuan3D-2.1 的 width 参数
+        if self.use_michelangelo:
+            shapevae_width = 768
+        else:
+            shapevae_width = 1024  # Hunyuan3D-2.1 的 width 参数
         
         if self.condition_downsample_factor > 1:
             if self.condition_downsample_method == 'learnable':
@@ -297,7 +316,7 @@ class GPT(nn.Module):
         assert block_size >= T, f"Cannot forward sequence of length {T}, block size is only {block_size}"
 
         if self.rope_cache is None:
-            self.rope_cache = self.build_rope_cache(idx)
+            self.rope_cache = self.build_rope_cache(idx, dtype=torch.float)
         # passing `attn_mask` to SDPA downgrades it to use the inefficient implementation. since we only need the mask
         # for the kv-cache support (only during inference), we only create it in that situation
         # this will be resolved by https://github.com/pytorch/pytorch/issues/96099
@@ -340,8 +359,8 @@ class GPT(nn.Module):
                 raise ValueError(f"pc tensor is empty (numel() == 0)")
             if pc.dim() < 2:
                 raise ValueError(f"pc tensor must have at least 2 dimensions, but got shape {pc.shape}")
-            if self.conditioner is None:
-                raise ValueError("pc is provided but conditioner is None. Please set build_conditioner=True when initializing the model.")
+            # if self.conditioner is None:
+            #     raise ValueError("pc is provided but conditioner is None. Please set build_conditioner=True when initializing the model.")
             
             # ========== Condition Encoding: 点云 → Latent Codes → Features ==========
             # ShapeVAE两阶段编码：
@@ -349,16 +368,21 @@ class GPT(nn.Module):
             # 2. decode(): latent codes → 语义特征 (通过 post_kl + Transformer)
             
             # Stage 1: 编码为 latent codes
-     
-            latent_codes = self.conditioner.encode(pc)
-            # latent_codes: (bs, num_latents, embed_dim)
-            # Hunyuan3D-2.1: (bs, 4096, 64)
-            
-            # Stage 2: 解码为语义特征
-            cond_embeds = self.conditioner.decode(latent_codes)
-            # print(f"cond_embeds: {cond_embeds.shape}, latent_codes: {latent_codes.shape}")
-            # cond_embeds: (bs, num_latents, width)
-            # Hunyuan3D-2.1: (bs, 4096, 1024) ← 注意：width=1024 不是 64！
+
+            if self.use_michelangelo:
+                shape_embed, shape_latents = self.michel.model.encode_shape_embed(pc, return_latents=True)
+                # shape_zq, posterior = self.conditioner.model.shape_model.encode_kl_embed(shape_latents, sample_posterior=True)
+                cond_embeds = shape_latents
+            else:
+                latent_codes = self.conditioner.encode(pc)
+                # latent_codes: (bs, num_latents, embed_dim)
+                # Hunyuan3D-2.1: (bs, 4096, 64)
+                
+                # Stage 2: 解码为语义特征
+                cond_embeds = self.conditioner.decode(latent_codes)
+                # print(f"cond_embeds: {cond_embeds.shape}, latent_codes: {latent_codes.shape}")
+                # cond_embeds: (bs, num_latents, width)
+                # Hunyuan3D-2.1: (bs, 4096, 1024) ← 注意：width=1024 不是 64！
             
             # ========== Token 降采样 ==========
             if self.condition_downsample_factor > 1:
@@ -408,11 +432,11 @@ class GPT(nn.Module):
     def from_name(cls, name: str, **kwargs: Any) -> Self:
         return cls(Config.from_name(name, **kwargs))
 
-    def build_rope_cache(self, idx: torch.Tensor) -> RoPECache:
+    def build_rope_cache(self, idx: torch.Tensor, dtype=torch.bfloat16) -> RoPECache:
         return build_rope_cache(
             seq_len=self.config.block_size,
             n_elem=int(self.config.rotary_percentage * self.config.head_size),
-            dtype=torch.bfloat16,
+            dtype=dtype,
             device="cpu",
             condense_ratio=self.config.condense_ratio,
         )

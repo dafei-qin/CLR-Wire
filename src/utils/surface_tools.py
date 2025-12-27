@@ -256,7 +256,7 @@ def params_to_samples(params, surface_type_idx, num_samples_u, num_samples_v, su
     else:
         surface_type = surface_json['type']
         if surface_type == 'bspline_surface':
-            points = sample_bspline_surface(np.array(surface_json['poles'])[..., :3], num_samples_u, num_samples_v)
+            points = sample_bspline_surface(torch.tensor(surface_json['poles'])[..., :3], num_samples_u, num_samples_v)
             assert torch.isfinite(points).all(), "bspline points contains inf/nan"
             return points
         else:

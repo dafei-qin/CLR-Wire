@@ -44,7 +44,7 @@ class Config:
     # credit https://arxiv.org/pdf/2305.13245.pdf
     n_query_groups: Optional[int] = None
     shared_attention_norm: bool = False
-    _norm_class: Literal["LayerNorm", "RMSNorm"] = "LayerNorm"
+    _norm_class: Literal["LayerNorm", "RMSNorm", "FusedRMSNorm"] = "LayerNorm"
     norm_eps: float = 1e-5
     _mlp_class: Literal["GptNeoxMLP", "LLaMAMLP"] = "GptNeoxMLP"
     intermediate_size: Optional[int] = None

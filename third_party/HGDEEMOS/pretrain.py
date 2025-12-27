@@ -35,119 +35,60 @@ from datetime import datetime
 import numpy as np
 import trimesh
 import warnings
+import einops
 
 
 # Dafei's import
 
 sys.path.insert(0, str(Path(__file__).parent))
+# Add project root to sys.path to import src.utils
+project_root = Path(__file__).parent.parent.parent.resolve()
+sys.path.insert(0, str(project_root))
+
 from src.utils.import_tools import load_dataset_from_config, load_model_from_config
-from src.utils.latent_tools import init_model, to_latent
+from src.utils.gpt_tools import tokenize_bspline_poles
 from omegaconf import OmegaConf
 
 warnings.filterwarnings("ignore", message="When using.*NO_SHARD.*")
 
-model_name = "Diff_LLaMA_551M" # change to "Samba_1.3B" for 1.3B model
-train_config = "HY1024_tsz128x16k_100B_ScaleUp20k_unlockCondition" # chanage to "tsz512x4k_100B" for 1.3B model
-name = train_config +"_" + model_name
+# ========== 训练参数（默认值，将从 YAML 配置文件中读取） ==========
+# 这些变量将在 setup() 函数中从 config_dict.trainer 读取并更新
+# model_name = "Diff_LLaMA_551M"  # 默认值
+# train_config = "HY1024_tsz128x16k_100B_ScaleUp20k_unlockCondition"  # 默认值
+# name = None  # 将在 setup 中计算
+# out_dir = None  # 将在 setup 中设置
+# devices = torch.cuda.device_count() or 1
+# use_sample_dataset = True
+# freeze_conditioner = False
+# conditioner_lr_scale = 1.0
+# fsdp_state_dict_type = "full"
+# max_tokens = 1e9
+# global_batch_size = 32
+# micro_batch_size = 8
+# learning_rate = 1e-4
+# total_evals = 400
+# warmup_tokens = None  # 将在 setup 中计算
+# log_step_interval = 10
+# save_step_interval = 2500
+# eval_step_interval = 100000000000000
+# num_extrapol = 4
+# weight_decay = 1e-1
+# beta1 = 0.9
+# beta2 = 0.95
+# grad_clip = 1.0
+# decay_lr = True
+# min_lr = 1e-5
+# num_epochs = 20
+# batch_size = None  # 将在 setup 中计算
+# gradient_accumulation_steps = None  # 将在 setup 中计算
+# log_iter_interval = None  # 将在 setup 中计算
 
-out_dir = Path(os.getenv("LIGHTNING_ARTIFACTS_DIR", "out")) / name / f"Samba-DEEMOS-{datetime.now().strftime('%m-%d-%H')}"
-PAD_TOKEN_ID = 4737
-devices = torch.cuda.device_count() or 1
-# 是否使用自定义的 Sample_Dataset（不做 padding，变长样本以 list 组织）
-use_sample_dataset = True
-
-# ========== ShapeVAE Conditioner 训练配置 ==========
-# 是否冻结 conditioner（False 表示解锁训练）
-freeze_conditioner = False
-# conditioner 的学习率倍率（相对于主学习率）
-# 通常 pretrained 模型微调时使用较小的学习率
-conditioner_lr_scale = 1.0
-
-# ========== Checkpoint 配置 ==========
-# FSDP state_dict 类型：
-#   - "full": 完整 state dict（兼容性好，但保存/加载慢，20G ckpt 可能需要几分钟）
-#   - "sharded": 分片 state dict（快，但 checkpoint 分散在多个文件）
-# 注意：切换类型后，旧的 checkpoint 可能无法加载
-fsdp_state_dict_type = "full"  # 默认使用 full 保持兼容性
-
-# # Hyperparameters
-# if "20B" in name:
-#     # single node
-#     nodes = 1 # max 8
-#     max_tokens = int(1e11) // 5 # 20 billion
-# elif "100B" in name:
-#     # multi-node
-#     nodes = 8 # max 8
-#     max_tokens = int(1e11) # 100 billion
-
-# if "512x4k" in name:
-#     #4k
-#     global_batch_size = 512 // nodes
-#     micro_batch_size = 6
-# elif "256x8k" in name:
-#     #8k
-#     global_batch_size = 256 // nodes
-#     micro_batch_size = 4
-# elif "128x16k" in name:
-#     #16k
-#     global_batch_size = 320 // nodes
-#     micro_batch_size = 5
-# elif "64x32k" in name:
-#     #32k
-#     global_batch_size = 64 // nodes
-#     micro_batch_size = 1
-# elif "1024x2k" in name:
-#     #2k
-#     global_batch_size = 1024 // nodes
-#     micro_batch_size = 16
-
-# overfit
-max_tokens = 1e9
-global_batch_size = 256
-micro_batch_size = 32
+# hparams 将在 setup 函数中从配置读取后创建
+hparams = {}
 
 
-learning_rate = 1e-4
+wandb_logger = WandbLogger(project="CAD_GPT_Pretrain_debug")
 
-total_evals = 400
-warmup_tokens = int(max_tokens * 0.05)
-log_step_interval = 10
-# eval_iters = total_evals // micro_batch_size # 50 # 25
-save_step_interval = 2500  # 500
-eval_step_interval = 100000000000000
-
-num_extrapol = 4
-
-weight_decay = 1e-1
-beta1 = 0.9
-beta2 = 0.95
-grad_clip = 1.0
-decay_lr = True
-min_lr = 1e-5
-
-# 训练总轮数（按 epoch 计数）
-num_epochs = 60
-
-
-batch_size = global_batch_size // devices
-gradient_accumulation_steps = batch_size // micro_batch_size
-assert gradient_accumulation_steps > 0
-
-# log_iter_interval = log_step_interval * gradient_accumulation_steps
-log_iter_interval = log_step_interval
-
-# Treat all dataset equally by their size. If you want to use a different weight for a dataset, add it to the list with the weight.
-# train_data_config = [
-#     ("train_slim", 1.0),
-# ]
-
-# val_data_config = [
-#     ("validation", 1.0),
-# ]
-
-hparams = {k: v for k, v in locals().items() if isinstance(v, (int, float, str, bool)) and not k.startswith("_")}
-
-wandb_logger = WandbLogger(project="Pretrain-LLM-Hourglass-551M-DEEMOS", entity="ruixu-hku")
 
 # ---------------------------
 # Chamfer Distance 计算函数（优化版本）
@@ -323,7 +264,7 @@ def save_checkpoint_with_conditioner(fabric, checkpoint_path: Path, state: dict)
             state['freeze_conditioner'] = freeze_conditioner
     
     # 保存完整的 state（包含 conditioner）
-    fabric.save(checkpoint_path, state)
+    fabric.save(checkpoint_path, {key: value for key, value in state.items() if key != 'vae'})
     
     # 清理临时添加的 key
     if 'conditioner_state_dict' in state:
@@ -342,54 +283,9 @@ def load_checkpoint_with_conditioner(fabric, checkpoint_path: Path, state: dict,
     加载 checkpoint，包含主模型和 conditioner。
     """
     # 加载 checkpoint
-    fabric.load(checkpoint_path, state)
+    fabric.load(checkpoint_path, {key:value for key, value in state.items() if key != 'vae'})
     
-    raw_model = model.module if hasattr(model, 'module') else model
-    
-    # 尝试加载 conditioner（如果存在）
-    if hasattr(raw_model, 'conditioner') and raw_model.conditioner is not None:
-        # 检查 checkpoint 中是否有 conditioner
-        if 'conditioner_state_dict' in state:
-            if fabric.global_rank == 0:
-                fabric.print(f"📂 Loading conditioner from checkpoint...")
-            
-            conditioner_state = state['conditioner_state_dict']
-            saved_freeze = state.get('freeze_conditioner', True)
-            
-            # 广播给所有 ranks（如果是多GPU）
-            if fabric.world_size > 1:
-                object_list = [conditioner_state]
-                torch.distributed.broadcast_object_list(object_list, src=0)
-                conditioner_state = object_list[0]
-            
-            # 加载 state_dict
-            raw_model.conditioner.load_state_dict(conditioner_state)
-            
-            # 确保精度一致（转为 fp32）
-            if next(raw_model.conditioner.parameters()).device != fabric.device:
-                move_module_strict(raw_model.conditioner, fabric.device)
-            
-            for param in raw_model.conditioner.parameters():
-                if param.dtype != torch.float32:
-                    param.data = param.data.to(torch.float32)
-            
-            for buffer in raw_model.conditioner.buffers():
-                if buffer.dtype not in [torch.long, torch.int, torch.bool]:
-                    if buffer.dtype != torch.float32:
-                        buffer.data = buffer.data.to(torch.float32)
-            
-            # 清理临时 key
-            del state['conditioner_state_dict']
-            if 'freeze_conditioner' in state:
-                del state['freeze_conditioner']
-            
-            if fabric.global_rank == 0:
-                fabric.print(f"✅ Conditioner loaded successfully!")
-                fabric.print(f"   └── Was saved with freeze_conditioner={saved_freeze}, current={freeze_conditioner}")
-        else:
-            if fabric.global_rank == 0:
-                fabric.print(f"⚠️  No conditioner found in checkpoint")
-                fabric.print(f"   ShapeVAE will use default initialization (train from scratch or resume)")
+
 
 def setup(
     config_path: Optional[str] = None,
@@ -406,40 +302,157 @@ def setup(
     elif config_path is not None:
         print(f"⚠️  Config file not found: {config_path}, using default settings")
     
+    # ========== 从配置文件读取训练参数 ==========
+    global model_name, train_config, name, out_dir, devices, use_sample_dataset
+    global freeze_conditioner, conditioner_lr_scale, fsdp_state_dict_type
+    global max_tokens, global_batch_size, micro_batch_size, learning_rate
+    global total_evals, warmup_tokens, log_step_interval, save_step_interval
+    global eval_step_interval, num_extrapol, weight_decay, beta1, beta2
+    global grad_clip, decay_lr, min_lr, num_epochs, batch_size
+    global gradient_accumulation_steps, log_iter_interval
+    
+    if config_dict is not None and "trainer" in config_dict:
+        trainer_cfg = config_dict.trainer
+        print("📋 Loading trainer parameters from config...")
+        
+        # 读取所有训练参数
+        if "model_name" in trainer_cfg:
+            model_name = trainer_cfg.model_name
+        if "train_config" in trainer_cfg:
+            train_config = trainer_cfg.train_config
+        if "out_dir" in trainer_cfg:
+            out_dir = Path(trainer_cfg.out_dir)
+        if "use_sample_dataset" in trainer_cfg:
+            use_sample_dataset = trainer_cfg.use_sample_dataset
+        if "freeze_conditioner" in trainer_cfg:
+            freeze_conditioner = trainer_cfg.freeze_conditioner
+        if "conditioner_lr_scale" in trainer_cfg:
+            conditioner_lr_scale = trainer_cfg.conditioner_lr_scale
+        if "fsdp_state_dict_type" in trainer_cfg:
+            fsdp_state_dict_type = trainer_cfg.fsdp_state_dict_type
+        if "max_tokens" in trainer_cfg:
+            max_tokens = float(trainer_cfg.max_tokens)
+        if "global_batch_size" in trainer_cfg:
+            global_batch_size = trainer_cfg.global_batch_size
+        if "micro_batch_size" in trainer_cfg:
+            micro_batch_size = trainer_cfg.micro_batch_size
+        if "learning_rate" in trainer_cfg:
+            learning_rate = float(trainer_cfg.learning_rate)
+        if "total_evals" in trainer_cfg:
+            total_evals = trainer_cfg.total_evals
+        if "warmup_tokens" in trainer_cfg and trainer_cfg.warmup_tokens is not None:
+            warmup_tokens = int(trainer_cfg.warmup_tokens)
+        elif "warmup_tokens" not in trainer_cfg or trainer_cfg.warmup_tokens is None:
+            # 如果没有设置或为 null，则计算
+            warmup_tokens = int(max_tokens * 0.05)
+        if "log_step_interval" in trainer_cfg:
+            log_step_interval = trainer_cfg.log_step_interval
+        if "save_step_interval" in trainer_cfg:
+            save_step_interval = trainer_cfg.save_step_interval
+        if "eval_step_interval" in trainer_cfg:
+            eval_step_interval = trainer_cfg.eval_step_interval
+        if "num_extrapol" in trainer_cfg:
+            num_extrapol = trainer_cfg.num_extrapol
+        if "weight_decay" in trainer_cfg:
+            weight_decay = float(trainer_cfg.weight_decay)
+        if "beta1" in trainer_cfg:
+            beta1 = trainer_cfg.beta1
+        if "beta2" in trainer_cfg:
+            beta2 = trainer_cfg.beta2
+        if "grad_clip" in trainer_cfg:
+            grad_clip = trainer_cfg.grad_clip
+        if "decay_lr" in trainer_cfg:
+            decay_lr = trainer_cfg.decay_lr
+        if "min_lr" in trainer_cfg:
+            min_lr = float(trainer_cfg.min_lr)
+        if "num_epochs" in trainer_cfg:
+            num_epochs = trainer_cfg.num_epochs
+        
+        print(f"   ✓ Loaded {len([k for k in trainer_cfg.keys()])} trainer parameters")
+    else:
+        print("⚠️  No 'trainer' section in config, using default values")
+        # 使用默认值计算
+        warmup_tokens = int(max_tokens * 0.05)
+    
+    # ========== 计算派生参数 ==========
+    # 计算 name（如果未设置）
+
+    name = train_config + "_" + model_name
+    
+    # 计算 batch_size 和 gradient_accumulation_steps
+    devices = torch.cuda.device_count() or 1
+    batch_size = global_batch_size // devices
+    gradient_accumulation_steps = batch_size // micro_batch_size
+    assert gradient_accumulation_steps > 0, f"gradient_accumulation_steps must be > 0, got {gradient_accumulation_steps}"
+    
+    # 计算 log_iter_interval
+    log_iter_interval = log_step_interval
+    
+    # 确保 out_dir 已设置
+    if out_dir is None:
+        # 如果没有在配置中设置，使用默认路径
+        out_dir = Path(os.getenv("LIGHTNING_ARTIFACTS_DIR", "out")) / name / f"Samba-DEEMOS-{datetime.now().strftime('%m-%d-%H')}"
+        out_dir = Path(out_dir)
+    
+    print(f"📊 Training configuration:")
+    print(f"   - Model: {model_name}, Config: {train_config}")
+    print(f"   - Output dir: {out_dir}")
+    print(f"   - Devices: {devices}, Batch size: {batch_size}, Micro batch: {micro_batch_size}")
+    print(f"   - Gradient accumulation steps: {gradient_accumulation_steps}")
+    print(f"   - Learning rate: {learning_rate}, Max tokens: {max_tokens}")
+    print(f"   - Warmup tokens: {warmup_tokens}")
+    
+    # ========== 创建 hparams 字典（用于保存 checkpoint） ==========
+    global hparams
+    # 收集所有训练相关的超参数
+    hparams = {
+        "model_name": model_name,
+        "train_config": train_config,
+        "name": name,
+        "out_dir": str(out_dir),
+        "devices": devices,
+        "use_sample_dataset": use_sample_dataset,
+        "freeze_conditioner": freeze_conditioner,
+        "conditioner_lr_scale": conditioner_lr_scale,
+        "fsdp_state_dict_type": fsdp_state_dict_type,
+        "max_tokens": max_tokens,
+        "global_batch_size": global_batch_size,
+        "micro_batch_size": micro_batch_size,
+        "learning_rate": learning_rate,
+        "total_evals": total_evals,
+        "warmup_tokens": warmup_tokens,
+        "log_step_interval": log_step_interval,
+        "save_step_interval": save_step_interval,
+        "eval_step_interval": eval_step_interval,
+        "num_extrapol": num_extrapol,
+        "weight_decay": weight_decay,
+        "beta1": beta1,
+        "beta2": beta2,
+        "grad_clip": grad_clip,
+        "decay_lr": decay_lr,
+        "min_lr": min_lr,
+        "num_epochs": num_epochs,
+        "batch_size": batch_size,
+        "gradient_accumulation_steps": gradient_accumulation_steps,
+        "log_iter_interval": log_iter_interval,
+    }
+    
     # ========== 加载模型 ==========
     if config_dict is not None and "model" in config_dict:
         # 使用配置文件加载模型
         print("📦 Loading model from config...")
-        model = load_model_from_config(config_dict, device=None, strict=False)
+        # print(config_dict.model.params.config)
+        # exit()
+        # 将 OmegaConf 对象转换为普通字典，避免 Literal 类型注解验证错误
+        config_params = OmegaConf.to_container(config_dict.model.params.config, resolve=True)
+        config_obj = Config(**config_params)
+        # 将整个 config_dict 转换为普通字典，避免 OmegaConf 类型验证
+        config_dict_plain = OmegaConf.to_container(config_dict, resolve=True)
+        config_dict_plain["model"]["params"]["config"] = config_obj
+        model = load_model_from_config(config_dict_plain, device=None, strict=False)
+        vae = load_model_from_config(config_dict, section='vae')
         
-        # 获取模型配置（如果是 GPT 模型）
-        if hasattr(model, 'config'):
-            config = model.config
-        else:
-            # 如果模型没有 config 属性，尝试从配置文件创建
-            model_name_from_config = config_dict.get("model", {}).get("params", {}).get("model_name", model_name)
-            config = Config.from_name(model_name_from_config)
-            config.padded_vocab_size = (2*4**3) + (8**3) + (16**3) + 1 + 1
-            config.block_size = 270000
-        
-        # 从配置文件读取 freeze_conditioner（如果存在）
-        if "freeze_conditioner" in config_dict:
-            freeze_conditioner = config_dict.get("freeze_conditioner", False)
-            print(f"📋 Using freeze_conditioner from config: {freeze_conditioner}")
-    else:
-        # 向后兼容：使用硬编码方式创建模型
-        print("📦 Loading model using legacy method...")
-        config = Config.from_name(model_name)
-        # config.padded_vocab_size = (2*4**3) + (8**3) + (16**3) + 1 + 1  # 4736 + 2
-        config.padded_vocab_size = 1026  # 4736 + 2
-        config.block_size = 1000
-        # config.block_size = 270000
 
-        # 根据 freeze_conditioner 配置决定是否冻结 conditioner
-        model = GPT(config, freeze_conditioner=False, build_conditioner=False)
-        model.apply(partial(model._init_weights, n_layer=config.n_layer))
-
-    # 可选：从旧ckpt进行warm-start，仅加载匹配权重（忽略多出来的新层）
     if warm_start_ckpt is not None:
         try:
             ckpt = torch.load(warm_start_ckpt, map_location="cpu")
@@ -449,32 +462,7 @@ def setup(
         except Exception as e:
             print(f"Warm-start failed: {e}")
 
-    # 2) 根据配置决定是否冻结 conditioner
-    if hasattr(model, "conditioner") and isinstance(model.conditioner, torch.nn.Module):
-        if freeze_conditioner:
-            # 冻结 conditioner
-            for p in model.conditioner.parameters():
-                p.requires_grad = False
-            model.conditioner.eval()
-            print("🔒 Conditioner is FROZEN (not trainable)")
-        else:
-            # 解锁 conditioner，保持 train 模式
-            for p in model.conditioner.parameters():
-                p.requires_grad = True
-            # 递归设置所有子模块为 train 模式（包括 BatchNorm/LayerNorm）
-            def set_train_recursive(module):
-                module.train()
-                for child in module.children():
-                    set_train_recursive(child)
-            set_train_recursive(model.conditioner)
-            print("🔓 Conditioner is UNFROZEN (trainable)")
-            print(f"   Total conditioner params: {sum(p.numel() for p in model.conditioner.parameters()):,}")
-
-    # 3) 准备 ignored_modules
-    # 注意：即使 conditioner 参与训练，我们仍然将其放入 ignored_modules
-    # 这样可以避免 FSDP 包装 ShapeVAE 的复杂结构，同时梯度仍然可以正常流动
-    # conditioner 的参数会由 DataParallel-like 方式处理（每个 rank 完整副本）
-    ignored = [m for m in [getattr(model, "conditioner", None)] if isinstance(m, torch.nn.Module)]
+    ignored = [m for m in [getattr(model, "michel", None)] if isinstance(m, torch.nn.Module)]
 
     # 4) 创建 FSDPStrategy（初始化时就传入 ignored_modules）
     strategy = FSDPStrategy(
@@ -489,54 +477,16 @@ def setup(
     fabric = L.Fabric(
         devices=devices,
         strategy=strategy,
-        precision="bf16-mixed",
+        # precision="bf16-mixed",
+        precision="32",
         loggers=[wandb_logger],
     )
     fabric.launch()
 
-    # 6) ========== 精度管理策略（统一为 fp32 参数 + bf16 计算）==========
-    # 目标：让 conditioner 与主网络保持相同的 mixed precision 策略
-    # - 参数存储：fp32（高精度，避免累积误差）
-    # - 前向计算：bf16（自动转换，利用 Tensor Core）
-    # - 梯度累积：fp32（数值稳定）
-    # - 优化器状态：fp32（Adam 动量/方差）
-    if hasattr(model, "conditioner") and isinstance(model.conditioner, torch.nn.Module):
-        # 策略1: 移动到目标设备
-        move_module_strict(model.conditioner, fabric.device)
-        
-        # 策略2: 统一转换为 fp32（与 FSDP 主网络一致）
-        # ⚠️ 注意：不要转为 bf16！那会导致梯度也是 bf16，精度不足
-        for name, param in model.conditioner.named_parameters():
-            if param.dtype != torch.float32:
-                param.data = param.data.to(torch.float32)
-        
-        # 策略3: 转换所有 buffers 为 fp32
-        for name, buffer in model.conditioner.named_buffers():
-            if buffer.dtype not in [torch.long, torch.int, torch.bool]:  # 保留整数类型
-                if buffer.dtype != torch.float32:
-                    buffer.data = buffer.data.to(torch.float32)
-        
-        print(f"✅ Conditioner precision unified to fp32 (same as main network)")
-        print(f"   Device: {fabric.device}")
-        print(f"   Params dtype: {next(model.conditioner.parameters()).dtype}")
-        print(f"   Training: bf16-mixed (fp32 params → bf16 compute → fp32 grads)")
-        print(f"   Memory overhead: ~{sum(p.numel() for p in model.conditioner.parameters()) * 2 / 1024**2:.1f} MB (vs bf16)")
-
-    # 7) 统一非-conditioner 参数为 fp32，防止 FSDP 扁平化时报 "mixed dtypes"
-    def cast_non_conditioner_fp32(m: torch.nn.Module):
-        cond = getattr(m, "conditioner", None)
-        for sub in m.modules():
-            if sub is cond:
-                continue
-            for p in sub.parameters(recurse=False):
-                if p.dtype != torch.float32:
-                    p.data = p.data.to(torch.float32)
-    # cast_non_conditioner_fp32(model)
-
     # 8) 进入主流程
-    main(fabric, model, config_dict, train_data_dir, val_data_dir, resume)
+    main(fabric, model, vae, config_dict, train_data_dir, val_data_dir, resume)
 
-def main(fabric, model, config_dict, train_data_dir, val_data_dir, resume, **overides):
+def main(fabric, model, vae, config_dict, train_data_dir, val_data_dir, resume, **overides):
     monitor = Monitor(fabric, window_size=1, time_unit="seconds", log_iter_interval=log_iter_interval)
 
     if fabric.global_rank == 0:
@@ -566,6 +516,10 @@ def main(fabric, model, config_dict, train_data_dir, val_data_dir, resume, **ove
 
     # 统一由 Fabric/FSDP 搬到各自 rank 的设备
     model = fabric.setup(model)
+    vae = fabric.setup(vae)
+    # 标记 VAE 的 encode 方法为 forward 方法，以便 FSDP 正确处理
+    # 根据 Lightning Fabric 的要求，需要在 setup 后标记自定义的 forward 方法
+    vae.mark_forward_method('encode')
 
     # ========== 构建优化器（区分 conditioner 和主干的学习率） ==========
     if not freeze_conditioner and hasattr(model, "conditioner") and model.conditioner is not None:
@@ -605,7 +559,7 @@ def main(fabric, model, config_dict, train_data_dir, val_data_dir, resume, **ove
     
     optimizer = fabric.setup_optimizers(optimizer)
 
-    state = {"model": model, "optimizer": optimizer, "hparams": hparams, "iter_num": 0, "step_count": 0, "epoch": 0}
+    state = {"model": model, "vae": vae,  "optimizer": optimizer, "hparams": hparams, "iter_num": 0, "step_count": 0, "epoch": 0}
 
     if resume is True:
         resume = sorted(out_dir.glob("*.pth"))[-1]
@@ -672,8 +626,14 @@ def main(fabric, model, config_dict, train_data_dir, val_data_dir, resume, **ove
     if fabric.device.type == "cuda":
         fabric.print(f"Memory used: {torch.cuda.max_memory_allocated() / 1e9:.02f} GB")
 
+
+
+
+
+
 def train(fabric, state, train_dataloader, val_dataloader, monitor, resume):
     model = state["model"]
+    vae = state["vae"]
     optimizer = state["optimizer"]
 
     # if val_dataloader is not None:
@@ -777,6 +737,17 @@ def train(fabric, state, train_dataloader, val_dataloader, monitor, resume):
             pass
         idddx = 0
         for train_data in train_dataloader:
+            train_data = [_t[train_data[-1]] for _t in train_data[:-1]]
+            points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask = train_data
+
+
+
+
+            # First, tokenize the bspline poles
+            all_tokens_padded = tokenize_bspline_poles(vae, train_dataloader.dataset, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask)
+
+            
+
             idddx += 1
             if state["iter_num"] >= max_iters:
                 break
@@ -792,72 +763,20 @@ def train(fabric, state, train_dataloader, val_dataloader, monitor, resume):
 
             iter_t0 = time.perf_counter()
 
-            # 处理点云 pc（可选，不参与 GPT 损失，但移动到当前设备）
-            pc_list = None
-            if isinstance(train_data, dict):
-                pc_list = train_data.get('pc', None)
-                if pc_list is None:
-                    pc_list = train_data.get('pc_normal', None)
+            pc = torch.cat([points, normals], dim=-1).to(fabric.device)
             
-            # 检查 pc_list 是否为 None 或空列表，避免 torch.stack 崩溃
-            if pc_list is None or len(pc_list) == 0:
-                fabric.print(f"Warning: pc_list is None or empty at iter {state['iter_num']}. Skipping this batch.")
-                state["iter_num"] += 1
-                continue
-            
-            pc = torch.stack(pc_list, dim=0).to(fabric.device)  # 确保与模型同设备
-            
-            # 检查 pc 的形状
-            if pc.dim() != 3 or pc.shape[1] != 81920 or pc.shape[2] != 7:
-                fabric.print(f"Warning: pc has unexpected shape {pc.shape} at iter {state['iter_num']}. Skipping this batch.")
-                state["iter_num"] += 1
-                continue
-            # 处理 tokens：padding/截断到固定长度
-            token_lists = train_data['token_list_0'] if isinstance(train_data, dict) and 'token_list_0' in train_data else None
-            maxL = 0
-            minL = 9999999
-            lengths = []  # 记录每个样本的有效长度（截断后）
-            if token_lists is not None and len(token_lists) > 0:
-                pad_id = 4737  # 使用 EOS_TOKEN_ID 作为 padding
-                max_len = 9001  # 固定长度上限
-                padded_token_tensors = []
-                
-                for t in token_lists:
-                    t_tensor = t if torch.is_tensor(t) else torch.tensor(t, dtype=torch.long)
-                    orig_len = t_tensor.numel()
-                    
-                    # 记录原始统计（仅用于日志）
-                    maxL = max(maxL, orig_len)
-                    minL = min(minL, orig_len)
-                    
-                    # 截断或 padding 到 max_len
-                    if orig_len >= max_len:
-                        # 需要截断
-                        padded_t = t_tensor[:max_len]
-                        L_eff = max_len  # 有效长度 = max_len
-                    else:
-                        # 需要 padding
-                        pad_len = max_len - orig_len
-                        pad = torch.full((pad_len,), pad_id, dtype=torch.long, device=t_tensor.device)
-                        padded_t = torch.cat([t_tensor, pad], dim=0)
-                        L_eff = orig_len  # 有效长度 = 原始长度
-                    
-                    padded_token_tensors.append(padded_t)
-                    lengths.append(L_eff)  # 记录截断后的有效长度
-                
-                merged_token_tensor = torch.stack(padded_token_tensors, dim=0).to(fabric.device)
-                lengths = torch.tensor(lengths, device=fabric.device, dtype=torch.long)  # 转为 tensor
-            else:
-                merged_token_tensor = None
-                lengths = None
 
-            # 检查 merged_token_tensor 是否为 None
-            if merged_token_tensor is None or lengths is None:
-                fabric.print(f"Warning: merged_token_tensor or lengths is None at iter {state['iter_num']}. "
-                           f"train_data keys: {list(train_data.keys()) if isinstance(train_data, dict) else 'not a dict'}. "
-                           f"Skipping this batch.")
-                state["iter_num"] += 1
-                continue
+            all_tokens_padded = all_tokens_padded.to(fabric.device)
+            lengths = train_dataloader.dataset.max_tokens - (all_tokens_padded == train_dataloader.dataset.pad_id).sum(dim=1)
+            lengths = torch.tensor(lengths, device=fabric.device, dtype=torch.long)
+            maxL = max(lengths)
+            minL = min(lengths)
+
+
+
+
+            merged_token_tensor = all_tokens_padded
+
 
             input_token = merged_token_tensor[:, :-1].contiguous()
             target_token = merged_token_tensor[:, 1:].contiguous()
@@ -868,8 +787,7 @@ def train(fabric, state, train_dataloader, val_dataloader, monitor, resume):
             pos = torch.arange(seq_len, device=fabric.device).unsqueeze(0)  # (1, T)
             pad_mask = (pos < valid_lens.unsqueeze(1)).to(torch.float32)  # (B, T), True 表示有效位置
 
-            # print(f"input_token: {input_token.shape}, target_token: {target_token.shape}, pc: {pc.shape}, batch_size: {batch_size}, seq_len: {seq_len}, gradient_accumulation_steps: {gradient_accumulation_steps}")
-            # print(f"pc[0]: {pc[0][:5]}, pc[1]: {pc[1][:5]}, pc[2]: {pc[2][:5]}, pc[3]: {pc[3][:5]}")
+
             is_accumulating = (state["iter_num"] + 1) % gradient_accumulation_steps != 0
             
             # 监控 condition embeddings 统计信息（每 500 步）
@@ -877,6 +795,7 @@ def train(fabric, state, train_dataloader, val_dataloader, monitor, resume):
             
             with fabric.no_backward_sync(model, enabled=is_accumulating):
                 logits = model(input_token, pc=pc, window_size=9000).logits
+
                 
                 # 使用位置 mask 计算 loss（不依赖 token id）
                 # logits: (B, T, vocab_size), target_token: (B, T)
@@ -891,67 +810,12 @@ def train(fabric, state, train_dataloader, val_dataloader, monitor, resume):
                 per_sample_loss = masked_loss.sum(dim=1) / valid_lens.to(masked_loss.dtype)  # (B,)
                 loss = per_sample_loss.mean()  # scalar
                 
-                # 监控 condition 信息
-                # if monitor_condition:
-                #     with torch.no_grad():
-                #         # 获取 condition embeddings（通过完整的 encode + decode 流程）
-                #         try:
-                #             # 访问 conditioner（需要处理 FSDP 包装）
-                #             raw_model = model.module if hasattr(model, 'module') else model
-                #             if hasattr(raw_model, 'conditioner') and raw_model.conditioner is not None:
-                #                 # Stage 1: 编码为 latent codes
-                #                 latent_codes = raw_model.conditioner.encode(pc, sample_posterior=False)
-                #                 # latent_codes: (bs, num_latents, embed_dim)
-                                
-                #                 # Stage 2: 解码为特征
-                #                 cond_embeds = raw_model.conditioner.decode(latent_codes)
-                #                 # cond_embeds: (bs, num_latents, width)
-                                
-                #                 # 应用降采样（如果配置了）
-                #                 if hasattr(raw_model, 'condition_downsample_factor') and raw_model.condition_downsample_factor > 1:
-                #                     from einops import rearrange
-                #                     factor = raw_model.condition_downsample_factor
-                #                     if hasattr(raw_model, 'condition_downsample') and raw_model.condition_downsample is not None:
-                #                         # 可学习降采样 - 确保 dtype 匹配
-                #                         target_dtype = next(raw_model.condition_downsample.parameters()).dtype
-                #                         cond_embeds_downsampled = rearrange(cond_embeds, 'b (n f) d -> b n (f d)', f=factor)
-                #                         cond_embeds_downsampled = cond_embeds_downsampled.to(target_dtype)
-                #                         cond_embeds_downsampled = raw_model.condition_downsample(cond_embeds_downsampled)
-                #                     else:
-                #                         # 平均池化
-                #                         cond_embeds_downsampled = rearrange(cond_embeds, 'b (n f) d -> b n f d', f=factor)
-                #                         cond_embeds_downsampled = cond_embeds_downsampled.mean(dim=2)
-                #                 else:
-                #                     cond_embeds_downsampled = cond_embeds
-                                
-                #                 # Project 到 model dimension（确保 dtype 完全匹配）
-                #                 linear_dtype = raw_model.linear.weight.dtype
-                #                 linear_device = raw_model.linear.weight.device
-                #                 cond_embeds_downsampled = cond_embeds_downsampled.to(dtype=linear_dtype, device=linear_device)
-                #                 cond_embeds_proj = raw_model.linear(cond_embeds_downsampled)
-                                
-                #                 condition_stats = {
-                #                     "condition/latent_codes_mean": latent_codes.float().mean().item(),
-                #                     "condition/latent_codes_std": latent_codes.float().std().item(),
-                #                     "condition/decoded_mean": cond_embeds.float().mean().item(),
-                #                     "condition/decoded_std": cond_embeds.float().std().item(),
-                #                     "condition/proj_mean": cond_embeds_proj.float().mean().item(),
-                #                     "condition/proj_std": cond_embeds_proj.float().std().item(),
-                #                     "condition/num_tokens": cond_embeds_proj.shape[1],
-                #                 }
-                                
-                #                 fabric.print(f"\n[Condition Stats @ iter {state['iter_num']}]")
-                #                 fabric.print(f"  Latent codes: mean={condition_stats['condition/latent_codes_mean']:.4f}, "
-                #                            f"std={condition_stats['condition/latent_codes_std']:.4f}")
-                #                 fabric.print(f"  Decoded features: mean={condition_stats['condition/decoded_mean']:.4f}, "
-                #                            f"std={condition_stats['condition/decoded_std']:.4f}")
-                #                 fabric.print(f"  Projected: mean={condition_stats['condition/proj_mean']:.4f}, "
-                #                            f"std={condition_stats['condition/proj_std']:.4f}")
-                #                 fabric.print(f"  Num context tokens: {condition_stats['condition/num_tokens']}")
-                                
-                #                 fabric.log_dict(condition_stats, state["step_count"])
-                #         except Exception as e:
-                #             fabric.print(f"Warning: Failed to monitor condition stats: {e}")
+                with torch.no_grad():
+                    pred_tokens = torch.argmax(logits, dim=-1)
+                    acc = (pred_tokens == target_token) * pad_mask
+                    acc_per_sample = acc.sum(dim=1) / valid_lens.to(acc.dtype)
+                    acc = acc.mean()
+
                 
                 fabric.backward(loss / gradient_accumulation_steps)
 
@@ -1027,7 +891,7 @@ def train(fabric, state, train_dataloader, val_dataloader, monitor, resume):
             # 打印训练信息（包含 CD loss）
             
             fabric.print(
-                f"iter {state['iter_num']} step {state['step_count']}: loss {loss.item():.4f}, "
+                f"iter {state['iter_num']} step {state['step_count']}: loss {loss.item():.4f}, acc {acc_per_sample.mean().item():.4f}, "
                 f"iter: {idddx}/{len(train_dataloader)} , epoch: {state['epoch']}, gap: {maxL-minL}, lr: {lr}, iter time:"
                 f" {(t1 - iter_t0) * 1000:.2f}ms{' (optimizer.step)' if not is_accumulating else ''}"
                 f" remaining time: {remaining_hours:.2f} hours. "
@@ -1139,12 +1003,12 @@ def create_dataloaders(
     Returns:
         train_dataloader, val_dataloader
     """
-    def collate_as_list(batch):
-        out = {}
-        for item in batch:
-            for k, v in item.items():
-                out.setdefault(k, []).append(v)
-        return out
+    # def collate_as_list(batch):
+    #     out = {}
+    #     for item in batch:
+    #         for k, v in item.items():
+    #             out.setdefault(k, []).append(v)
+    #     return out
 
     # ========== 加载数据集 ==========
     if config_dict is not None:
@@ -1178,10 +1042,10 @@ def create_dataloaders(
         batch_size=batch_size,
         num_workers=8,  # 增加 worker 数量（原来是4）
         pin_memory=True,
-        collate_fn=collate_as_list,
+        # collate_fn=collate_as_list,
         sampler=sampler,
         prefetch_factor=8,  # 每个 worker 预取4个批次（默认是2）
-        persistent_workers=False,  
+        persistent_workers=True,  
     )
 
     # 返回数据加载器（验证集可能为 None）
