@@ -1,0 +1,97 @@
+# ========== 输出目录 ==========
+# 训练输出和 checkpoints
+out/
+*.pth
+*.ckpt
+*.pt
+*.pkl
+*.h5
+*.hdf5
+
+# Mesh 输出
+mesh_output/
+mesh_output_conditioner/
+
+# ========== 日志和监控 ==========
+# Wandb 日志
+wandb/
+.wandb/
+
+# TensorBoard 日志
+runs/
+logs/
+*.log
+
+# ========== Python 缓存 ==========
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# 虚拟环境
+venv/
+env/
+ENV/
+.venv
+
+# ========== IDE 和编辑器 ==========
+# VSCode
+.vscode/
+*.code-workspace
+
+# PyCharm
+.idea/
+*.iml
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ========== 系统文件 ==========
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Linux
+*~
+.directory
+.Trash-*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ========== 临时文件 ==========
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+.cache/
+
+# ========== 数据文件（如果很大） ==========
+# 根据实际情况取消注释
+# data/
+# *.npy
+# *.npz
+
+# ========== 编译文件 ==========
+# Cython
+*.c
+*.cpp
+*.o
+*.so
+
+# ========== 其他 ==========
+# 环境变量文件
+.env
+.env.local
+
+# 备份文件
+*.bak
+*.backup
+
