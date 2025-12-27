@@ -4,8 +4,8 @@ import polyscope as ps
 import polyscope.imgui as psim
 
 from itertools import combinations
-from utils.surface import visualize_json_interset, sample_line
-from utils.surf_tools import surf_surf_interset
+from myutils.surface import visualize_json_interset, sample_line
+from myutils.surface import surf_surf_interset
 
 if __name__ == "__main__":
 

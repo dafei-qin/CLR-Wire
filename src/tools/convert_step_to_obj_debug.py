@@ -30,7 +30,7 @@ from OCC.Core.Bnd import Bnd_Box
 
 from icecream import ic
 
-from utils.surface import extract_mesh_from_face
+from myutils.surface import extract_mesh_from_face
 
 
 def step_to_obj(step_filename, obj_filename):

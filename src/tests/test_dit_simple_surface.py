@@ -27,7 +27,7 @@ from src.utils.import_tools import load_model_from_config, load_dataset_from_con
 from src.flow.surface_flow import ZLDMPipeline, get_new_scheduler
 from src.tests.test_vae_v1 import to_json
 from src.tools.surface_to_canonical_space import from_canonical
-from utils.surface import visualize_json_interset
+from myutils.surface import visualize_json_interset
 from omegaconf import OmegaConf
 
 # Colors for is_closed visualization

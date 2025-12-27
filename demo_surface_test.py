@@ -14,7 +14,7 @@ import os
 # Add the src directory to the path
 sys.path.append('src')
 from dataset.dataset_v1 import dataset_compound
-from utils.surface import visualize_json_interset
+from myutils.surface import visualize_json_interset
 import polyscope as ps
 
 def demo_json_file_test():

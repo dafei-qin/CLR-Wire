@@ -15,7 +15,7 @@ sys.path.append(r'F:\WORK\CAD\CLR-Wire')
 
 from src.dataset.dataset_v1 import dataset_compound
 from src.vae.vae_v1 import SurfaceVAE
-from utils.surface import visualize_json_interset
+from myutils.surface import visualize_json_interset
 
 
 def to_json(params_tensor, types_tensor, mask_tensor, dataset):

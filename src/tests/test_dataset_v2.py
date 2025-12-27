@@ -13,7 +13,7 @@ sys.path.append(r'F:\WORK\CAD\CLR-Wire')
 
 from src.dataset.dataset_v2 import dataset_compound, SURFACE_TYPE_MAP, SCALAR_DIM_MAP
 from src.tools.surface_to_canonical_space import to_canonical, from_canonical
-from utils.surface import visualize_json_interset
+from myutils.surface import visualize_json_interset
 
 def apply_scale_to_control_points(control_points: np.ndarray, scale: float) -> np.ndarray:
     """

@@ -20,7 +20,7 @@ from src.dataset.dataset_v1 import (
 )
 
 # Import surface building functions from utils
-from utils.surface import build_plane_face, build_second_order_surface
+from myutils.surface import build_plane_face, build_second_order_surface
 
 
 def _to_numpy(array) -> np.ndarray:

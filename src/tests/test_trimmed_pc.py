@@ -12,7 +12,7 @@ import polyscope.imgui as psim
 project_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(project_root))
 
-from utils.surface import visualize_json_interset
+from myutils.surface import visualize_json_interset
 
 # Global variables
 _npz_files = []
