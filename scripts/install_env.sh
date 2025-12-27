@@ -9,6 +9,6 @@ pip install trimesh beartype lightning safetensors open3d
 pip install omegaconf sageattention triton scikit-image transformers gpustat
 pip install wandb pudb
 pip install libigl h5py
-cd csrc/rotary && pip install .
-cd ../layer_norm && pip install .
-cd ../xentropy && pip install .
+cd csrc/rotary && python setup.py install 
+cd ../layer_norm && python setup.py install 
+cd ../xentropy && python setup.py install 
