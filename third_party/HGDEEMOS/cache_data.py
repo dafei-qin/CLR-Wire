@@ -30,7 +30,7 @@ from omegaconf import OmegaConf
 
 
 if __name__ == '__main__':
-    config = OmegaConf.load("src/configs/gpt/dataset_cache.yaml")
+    config = OmegaConf.load("src/configs/gpt/cache_sht.yaml")
     dataset = load_dataset_from_config(config, section='data_train')
     
     list_npz_path = []

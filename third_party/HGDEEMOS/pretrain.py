@@ -516,6 +516,10 @@ def main(fabric, model, vae, config_dict, train_data_dir, val_data_dir, resume, 
 
     # 统一由 Fabric/FSDP 搬到各自 rank 的设备
     model = fabric.setup(model)
+    raw_model = model.module if hasattr(model, 'module') else model
+    if hasattr(raw_model, 'michel') and raw_model.michel is not None:
+        move_module_strict(raw_model.michel, fabric.device)
+        fabric.print(f"✅ michel module moved to {fabric.device}")
     vae = fabric.setup(vae)
     # 标记 VAE 的 encode 方法为 forward 方法，以便 FSDP 正确处理
     # 根据 Lightning Fabric 的要求，需要在 setup 后标记自定义的 forward 方法

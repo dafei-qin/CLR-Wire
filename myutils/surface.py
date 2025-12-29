@@ -25,7 +25,6 @@ from OCC.Core.BRepTools import breptools_UVBounds
 from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
 # from OCC.Core.BRepAlgo import BRepAlgo_Section
 from OCC.Core.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Section
-from OCC.Display.SimpleGui import init_display
 from OCC.Core.BRepLib import breplib
 from OCC.Core.ShapeFix import ShapeFix_Shape, ShapeFix_Wire, ShapeFix_Edge, ShapeFix_ShapeTolerance
 from OCC.Core.ShapeExtend import ShapeExtend_DONE1
