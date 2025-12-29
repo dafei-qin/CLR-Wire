@@ -1,0 +1,27 @@
+# Configuration for cached dataset visualization
+# Use this when you have a pre-cached dataset file
+
+dataset:
+  # Use cached dataset
+  use_cache: true
+  
+  # Path to cache file (update this to your actual cache file path)
+  cache_file: './path/to/your/cache.pkl'
+  # Example: cache_file: './data/abc_cache/tokenized_data.pkl'
+  
+  # Common parameters (should match the cache generation settings)
+  rts_codebook_dir: './assets/codebook'
+  max_tokens: 1000
+  canonical: true
+  detect_closed: false
+  bspline_fit_threshold: 0.01  # 1e-2
+  codebook_size: 1024
+  replica: 1
+  
+  # Augmentation settings
+  # Note: Cached dataset can still apply rotation augmentation on-the-fly
+  rotation_augment: true  # Enable rotation augmentation
+  
+# Note: The cached dataset already includes reordering logic
+# The visualization will show the final sequence after both augmentation and reordering
+
