@@ -37,8 +37,8 @@ if __name__ == '__main__':
     list_tokens = []
     list_poles = []
 
-    #for idx in tqdm(range(len(dataset))):
-    for idx in tqdm(range(100)):
+    for idx in tqdm(range(len(dataset))):
+    # for idx in tqdm(range(100)):
         points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, solid_valid = dataset[idx]
         if not solid_valid:
             continue
@@ -51,7 +51,7 @@ if __name__ == '__main__':
         list_poles.append(all_bspline_poles)
 
 
-    with open('/deemos-research-area-d/meshgen/cad_data/caches/test.pkl', 'wb') as f:
+    with open('/deemos-research-area-d/meshgen/cad_data/caches/5_8.pkl', 'wb') as f:
         pickle.dump({'npz_path': list_npz_path, 'tokens': list_tokens, 'poles': list_poles}, f)
 
 
