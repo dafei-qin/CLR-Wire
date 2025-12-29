@@ -97,6 +97,7 @@ vae:
   checkpoint_file_name: model-10.pt
 
 data_train:
+  # name: src.dataset.dataset_v4_tokenize_all.dataset_compound_tokenize_all_cache
   name: src.dataset.dataset_v4_tokenize_all.dataset_compound_tokenize_all_cache
   params:
     # json_dir: /deemos-research-area-d/meshgen/cad_data/abc_step_pc/5
