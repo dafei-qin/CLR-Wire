@@ -548,16 +548,11 @@ def main(fabric, model, vae, config_dict, train_data_dir, val_data_dir, resume, 
     raw_model = model.module if hasattr(model, 'module') else model
     if hasattr(raw_model, 'michel') and raw_model.michel is not None:
         move_module_strict(raw_model.michel, fabric.device)
-        use_michelangelo_grad = config_dict['trainer']['use_michelangelo_grad']
-        if use_michelangelo_grad:
-            for param in raw_model.michel.parameters():
-                param.requires_grad = True
-        else:
-            for param in raw_model.michel.parameters():
-                param.requires_grad = False
-
+        raw_model.michel.eval()
+        for param in raw_model.michel.parameters():
+            param.requires_grad = False
         fabric.print(f"✅ michel module moved to {fabric.device}")
-        fabric.print(f"✅ michel module grad set to {use_michelangelo_grad}")
+        fabric.print(f"✅ michel module eval frozen grad")
     vae = fabric.setup(vae)
     # freeze vae
     vae.eval()
@@ -921,14 +916,14 @@ def train(fabric, state, train_dataloader, val_dataloader, monitor, resume):
                 # ========== 同步 conditioner 梯度（如果解锁训练） ==========
                 # 由于 conditioner 在 FSDP 的 ignored_modules 中，多 GPU 时梯度不会自动同步
                 # 需要手动进行 all-reduce
-                # if not freeze_conditioner and fabric.world_size > 1:
-                #     raw_model = model.module if hasattr(model, 'module') else model
-                #     if hasattr(raw_model, 'conditioner') and raw_model.conditioner is not None:
-                #         for param in raw_model.conditioner.parameters():
-                #             if param.grad is not None:
-                #                 # all-reduce 梯度并取平均
-                #                 torch.distributed.all_reduce(param.grad, op=torch.distributed.ReduceOp.SUM)
-                #                 param.grad.div_(fabric.world_size)
+                if not freeze_conditioner and fabric.world_size > 1:
+                    raw_model = model.module if hasattr(model, 'module') else model
+                    if hasattr(raw_model, 'conditioner') and raw_model.conditioner is not None:
+                        for param in raw_model.conditioner.parameters():
+                            if param.grad is not None:
+                                # all-reduce 梯度并取平均
+                                torch.distributed.all_reduce(param.grad, op=torch.distributed.ReduceOp.SUM)
+                                param.grad.div_(fabric.world_size)
                 
                 fabric.clip_gradients(model, optimizer, max_norm=grad_clip)
                 

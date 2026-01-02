@@ -27,12 +27,116 @@ import random
 from omegaconf import OmegaConf
 import polyscope as ps
 from PIL import Image
+import colorsys
 # Import model and config classes
 from lit_gpt.model import GPT, Config
 from src.utils.import_tools import load_model_from_config, load_dataset_from_config
 from src.utils.gpt_tools import tokenize_bspline_poles
 from sft.datasets.serializaitonDEEMOS import deserialize
 from myutils.surface import visualize_json_interset
+
+
+def save_surfaces_as_mesh(surfaces, output_path):
+    """
+    将 surfaces 转换为 mesh 并保存为 .obj 文件。
+    每个 surface 使用不同颜色以便区分。
+    
+    Args:
+        surfaces: 从 dataset.detokenize 返回的 surface 列表
+        output_path: 输出 .obj 文件路径
+    """
+    if not surfaces or len(surfaces) == 0:
+        print(f"Warning: No surfaces to save for {output_path}")
+        return
+    
+    # 使用 visualize_json_interset 获取 vertices 和 faces
+    vis_data = visualize_json_interset(surfaces, plot=False, plot_gui=False, tol=1e-5, ps_header="")
+    
+    if not vis_data or len(vis_data) == 0:
+        print(f"Warning: No visualization data generated for {output_path}")
+        return
+    
+    # 生成颜色列表（使用不同颜色区分每个 surface）
+    num_surfaces = len(vis_data)
+    colors = generate_distinct_colors(num_surfaces)
+    
+    mesh_list = []
+    for i, (surface_key, surface_data) in enumerate(vis_data.items()):
+        if 'vertices' in surface_data and 'faces' in surface_data:
+            vertices = surface_data['vertices']
+            faces = surface_data['faces']
+            
+            # 确保 vertices 和 faces 是 numpy 数组
+            if isinstance(vertices, torch.Tensor):
+                vertices = vertices.detach().cpu().numpy()
+            if isinstance(faces, torch.Tensor):
+                faces = faces.detach().cpu().numpy()
+            
+            # 创建 trimesh mesh
+            try:
+                mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
+                
+                # 设置面颜色
+                if mesh.visual.kind is None:
+                    mesh.visual = trimesh.visual.ColorVisuals()
+                
+                # 为每个面设置颜色
+                face_colors = np.tile(colors[i], (len(mesh.faces), 1))
+                mesh.visual.face_colors = face_colors
+                
+                mesh_list.append(mesh)
+            except Exception as e:
+                print(f"Warning: Failed to create mesh for surface {i} (key: {surface_key}): {e}")
+                continue
+    
+    if len(mesh_list) == 0:
+        print(f"Warning: No valid meshes to save for {output_path}")
+        return
+    
+    # 合并所有 mesh
+    try:
+        combined_mesh = trimesh.util.concatenate(mesh_list)
+        
+        # 确保输出路径是 .obj 格式
+        output_path = Path(output_path)
+        if output_path.suffix.lower() != '.obj':
+            output_path = output_path.with_suffix('.obj')
+        
+        # 保存 mesh
+        combined_mesh.export(str(output_path))
+        print(f"  Mesh保存到: {output_path} (包含 {len(mesh_list)} 个 surfaces)")
+    except Exception as e:
+        print(f"Error: Failed to save mesh to {output_path}: {e}")
+
+
+def generate_distinct_colors(num_colors):
+    """
+    生成一组易于区分的颜色。
+    
+    Args:
+        num_colors: 需要生成的颜色数量
+    
+    Returns:
+        numpy array of shape (num_colors, 4) with RGBA values in [0, 255]
+    """
+    if num_colors == 0:
+        return np.array([])
+    
+    # 使用 HSV 色彩空间生成均匀分布的颜色
+    colors = []
+    for i in range(num_colors):
+        hue = i / num_colors
+        saturation = 0.7 + 0.3 * (i % 2)  # 交替使用高饱和度和中等饱和度
+        value = 0.8 + 0.2 * ((i // 2) % 2)  # 交替使用亮度和中等亮度
+        
+        # 转换为 RGB
+        rgb = colorsys.hsv_to_rgb(hue, saturation, value)
+        
+        # 转换为 [0, 255] 范围并添加 alpha
+        rgba = [int(c * 255) for c in rgb] + [255]
+        colors.append(rgba)
+    
+    return np.array(colors, dtype=np.uint8)
 
 
 def visualize_points(all_points, radius=0.002):
@@ -152,6 +256,8 @@ def render_three_views(surfaces, all_points, base_output_path, view_distance=5.0
             if 'vertices' in surface_data and 'faces' in surface_data:
                 vertices = surface_data['vertices']
                 faces = surface_data['faces']
+                if vertices.shape[0] == 0:
+                    continue
                 surface_index = surface_data.get('surface_index', 0)
                 surface_type = surface_data.get('surface_type', 'unknown')
                 ps.register_surface_mesh(
@@ -516,9 +622,9 @@ def main():
 
 
 
-    for idd in range(args.num_samples * 2):
+    for idx in range(args.start_idx, end_idx):
         # idx  = nums[idd]
-        idx = idd % args.num_samples
+        # idx = idd % args.num_samples
         print(f"\n处理样本 {idx}/{end_idx-1}...")
 
         # 获取样本数据
@@ -537,14 +643,10 @@ def main():
 
         # 保存单份点云（可选）
         if pc is not None:
-            ply_filename = f'{output_dir}/{idd}_pc_sample_{idx}.ply'
+            ply_filename = f'{output_dir}/{idx}.ply'
             pointcloud = trimesh.points.PointCloud(pc[0].detach().cpu().numpy()[..., :3])
             pointcloud.export(ply_filename)
             print(f"  点云保存到: {ply_filename}")
-        
-        pred_path = output_dir / f'{idd}_sample_{idx}_pred.png'
-        gt_path = output_dir / f'{idd}_sample_{idx}_gt.png'
-        pc_path = output_dir / f'{idd}_sample_{idx}_pc.png'
 
         target_dtype = next(model.conditioner.parameters()).dtype if hasattr(model, "conditioner") and model.conditioner is not None else next(model.parameters()).dtype
         pc = pc.to(args.device, dtype=target_dtype)
@@ -587,19 +689,26 @@ def main():
             surfaces_pred = dataset.detokenize(tokens.numpy(), bspline_poles_for_detok)
             surfaces_gt = dataset.detokenize(tokens_gt.numpy(), bspline_poles_for_detok_gt)
 
+            # 保存 mesh 到 .obj 文件
+            pred_mesh_path = output_dir / f'{idx}_batch_{b}_pred.obj'
+            gt_mesh_path = output_dir / f'{idx}_batch_{b}_gt.obj'
+            
+            save_surfaces_as_mesh(surfaces_pred, str(pred_mesh_path))
+            if b == 0:
+                save_surfaces_as_mesh(surfaces_gt, str(gt_mesh_path))
 
-            # Extract base path without extension for three views
-            pred_base = str(pred_path).replace('.png', '')
-            gt_base = str(gt_path).replace('.png', '')
-            pc_base = str(pc_path).replace('.png', '')
+            # 渲染三视图
+            pred_base = str(output_dir / f'{idx}_batch_{b}_pred').replace('.png', '')
+            gt_base = str(output_dir / f'{idx}_batch_{b}_gt').replace('.png', '')
+            pc_base = str(output_dir / f'{idx}_batch_{b}_pc').replace('.png', '')
             
             # Render three views for each type
             pred_paths = render_three_views(surfaces_pred, None, pred_base)
             gt_paths = render_three_views(surfaces_gt, None, gt_base)
-            pc_paths = render_three_views(None, pc[0, ..., :3].detach().cpu().numpy(), pc_base)
+            pc_paths = render_three_views(None, pc[0, ..., :3].detach().cpu().float().numpy(), pc_base)
             
             # Create 3x3 grid combining all views
-            grid_output_path = output_dir / f'{idd}_sample_{idx}_grid.jpg'
+            grid_output_path = output_dir / f'{idx}_batch_{b}_grid.jpg'
             create_three_views_grid(pc_paths, gt_paths, pred_paths, str(grid_output_path))
 
 
