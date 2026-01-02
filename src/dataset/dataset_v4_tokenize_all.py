@@ -14,6 +14,7 @@ from tqdm import tqdm
 import sys
 from pathlib import Path
 import random
+from scipy.spatial.transform import Rotation as R
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 
@@ -86,7 +87,7 @@ class dataset_compound_tokenize_all(Dataset):
     # size + 1: start
     # size + 2: end
     # size + 3: pad
-    def __init__(self, json_dir: str, rts_codebook_dir: str, max_tokens: int = 1000, canonical: bool = True, detect_closed: bool = False, bspline_fit_threshold: float = 1e-2, codebook_size=1024, replica=1, rotation_augment: bool = False):
+    def __init__(self, json_dir: str, rts_codebook_dir: str, max_tokens: int = 1000, canonical: bool = True, detect_closed: bool = False, bspline_fit_threshold: float = 1e-2, codebook_size=1024, replica=1, rotation_augment: bool = False, point_augment: bool = False, point_augment_intensity: float = 0.005, pc_shape: int = 16384):
         
         self.tokens_per_surface = 14
 
@@ -121,7 +122,9 @@ class dataset_compound_tokenize_all(Dataset):
 
         self.replica = replica
         self.rotation_augment = rotation_augment
-        
+        self.point_augment = point_augment
+        self.pc_shape = pc_shape
+        self.point_augment_intensity = point_augment_intensity
         self.rotation_angles = [0, 90, 180, 270]
         self.rotation_axes = [
             [1, 0, 0],
@@ -135,6 +138,7 @@ class dataset_compound_tokenize_all(Dataset):
         return int(len(self.dataset_compound )* self.replica)
 
 
+    
     def detokenize(self, tokens, bspline_poles):
         # Input tokens with bspline placements and bspline list for filling the bspline surface info
         # Output surfaces
@@ -142,11 +146,30 @@ class dataset_compound_tokenize_all(Dataset):
         codes = self.unwarp_codes(tokens)
         codes = codes.reshape(-1, 14)
         surface_type = codes[:, 0]
+
+        # Handle invalid surface type
+        surface_type[surface_type > 5] = 0
         surface_code = codes[:, 1:7]
+        surface_code[surface_code >= self.codebook_size] = 0
+
         rts_code = codes[:, 7:14]
+
+        # Flag invalid rts codes
+        rts_code_invalid = (rts_code >= self.codebook_size)
+        rts_code[rts_code_invalid] = 0
+
         shifts = self.translation_codebook.decode(rts_code[:, :3])
         rotations = self.rotation_codebook.decode(rts_code[:, 3:6])
         scales = self.scale_codebook.decode(rts_code[:, 6:7])
+
+        # Handle invalid rts
+        shifts[rts_code_invalid[:, :3]] = 0
+        if rts_code_invalid[:, 3:6].any():
+            rotations_euler = R.from_matrix(rotations).as_euler('xyz')
+            rotations_euler[rts_code_invalid[:, 3:6]] = 0
+            rotations = R.from_euler('xyz', rotations_euler).as_matrix()
+
+        scales[rts_code_invalid[:, 6:7]] = 1
 
         surfaces = []
         bspline_idx = 0
@@ -227,6 +250,25 @@ class dataset_compound_tokenize_all(Dataset):
         points = points[..., 0]
         return tokens_new, points
 
+    def apply_pc_augment(self, points, normals):
+        # points: (N, 3)
+        # augment the points
+        # 4. random jitter with gaussian noise
+        noise = np.random.normal(0, self.point_augment_intensity, points.shape)
+        points = points + noise
+        noise = np.random.normal(0, self.point_augment_intensity, points.shape)
+        normals = normals + noise
+        normals = normals / (np.linalg.norm(normals, axis=1, keepdims=True) + 1e-6)
+        return points, normals
+
+    def downsample_pc(self, points, normals):
+        # points: (N, 3)
+        # downsample the points
+        # 1. random sample self.pc_shape points
+        indices = np.random.choice(len(points), self.pc_shape, replace=False)
+        points = points[indices]
+        normals = normals[indices]
+        return points, normals
 
     def reordering(self, tokens, poles, graph):
 
@@ -309,6 +351,11 @@ class dataset_compound_tokenize_all(Dataset):
 
         points = np.array(npz_data['points'], dtype=np.float32)  # (N_i, 3)
         normals = np.array(npz_data['normals'], dtype=np.float32)  # List of arrays, each (N_i, 3)
+
+        if self.point_augment:
+            points, normals = self.apply_pc_augment(points, normals)
+        if self.pc_shape != len(points):
+            points, normals = self.downsample_pc(points, normals)
 
         if len(points.shape) != 2:
             solid_valid = False
@@ -459,8 +506,8 @@ class dataset_compound_tokenize_all(Dataset):
 
 class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
     # TODO: add rotation augmentation
-    def __init__(self, cache_file: str, rts_codebook_dir: str, max_tokens: int = 1000, canonical: bool = True, detect_closed: bool = False, bspline_fit_threshold: float = 1e-2, codebook_size=1024, replica=1, rotation_augment: bool = False):
-        super().__init__('', rts_codebook_dir, max_tokens, canonical, detect_closed, bspline_fit_threshold, codebook_size, replica, rotation_augment)
+    def __init__(self, cache_file: str, rts_codebook_dir: str, max_tokens: int = 1000, canonical: bool = True, detect_closed: bool = False, bspline_fit_threshold: float = 1e-2, codebook_size=1024, replica=1, rotation_augment: bool = False, point_augment: bool = False, point_augment_intensity: float = 0.005, pc_shape: int = 16384):
+        super().__init__('', rts_codebook_dir, max_tokens, canonical, detect_closed, bspline_fit_threshold, codebook_size, replica, rotation_augment, point_augment, point_augment_intensity, pc_shape)
         self.cache_file = cache_file
         self.data = pickle.load(open(self.cache_file, 'rb'))
         self.npz_path = self.data['npz_path']
@@ -480,6 +527,12 @@ class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
 
         points = np.array(npz_data['points'], dtype=np.float32)  # (N_i, 3)
         normals = np.array(npz_data['normals'], dtype=np.float32)  # List of arrays, each (N_i, 3)
+
+        if self.point_augment:
+            points, normals = self.apply_pc_augment(points, normals)
+        if self.pc_shape != len(points):
+            points, normals = self.downsample_pc(points, normals)
+
         nodes = npz_data['graph_nodes']
         edges = npz_data['graph_edges']
         graph = nx.Graph()
