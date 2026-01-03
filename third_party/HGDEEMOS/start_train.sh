@@ -220,7 +220,7 @@ wandb login
 #     --seed 42
 export MASTER_PORT=29500
 
-export OUTPUT_DIR=checkpoints/1226_gpt_init_debug$(date +%Y-%m-%d_%H)
+# export OUTPUT_DIR=checkpoints/1226_gpt_init_debug$(date +%Y-%m-%d_%H)
 
 # torchrun \
 #     --nnodes=1 \
@@ -243,7 +243,7 @@ export OUTPUT_DIR=checkpoints/1226_gpt_init_debug$(date +%Y-%m-%d_%H)
 
 # --nproc_per_node $MLP_WORKER_GPU --master_addr $MLP_WORKER_0_HOST --node_rank $MLP_ROLE_INDEX --master_port $MLP_WORKER_0_PORT --nnodes $MLP_WORKER_NUM
 
-python third_party/HGDEEMOS/pretrain.py --config_path src/configs/gpt/gpt_1225.yaml --resume False
+python third_party/HGDEEMOS/pretrain.py --config_path src/configs/gpt/gpt_0102_michel_A800.yaml --resume False
 # torchrun \
 #     --nnodes=$MLP_WORKER_NUM \
 #     --node_rank=$MLP_ROLE_INDEX \
