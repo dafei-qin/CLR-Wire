@@ -191,16 +191,16 @@ class GPT(nn.Module):
         else:
             if build_conditioner:
                 # 根据 config.yaml 创建 ShapeVAE（只使用明确指定的参数）
-                shapevae_width = 512
+                shapevae_width = 1024
                 self.conditioner = ShapeVAE(
-                    num_latents=1024,
+                    num_latents=512,
                     embed_dim=64,
                     num_freqs=8,
                     include_pi=False,
                     heads=16,
                     width=shapevae_width, # Changed from 1024 to 512
-                    num_encoder_layers=8,
-                    num_decoder_layers=12,
+                    num_encoder_layers=6,
+                    num_decoder_layers=8,
                     qkv_bias=False,
                     qk_norm=True,
                     scale_factor=1.0039506158752403,
