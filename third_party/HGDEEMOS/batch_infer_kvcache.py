@@ -619,6 +619,10 @@ def main():
     end_idx = min(args.start_idx + args.num_samples, len(dataset))
     print(f"处理样本 {args.start_idx} 到 {end_idx-1}...")
     random.seed(928)
+    
+    num_iter = os.path.basename(args.ckpt).split('-')[1]
+    
+
 
 
 
@@ -690,17 +694,17 @@ def main():
             surfaces_gt = dataset.detokenize(tokens_gt.numpy(), bspline_poles_for_detok_gt)
 
             # 保存 mesh 到 .obj 文件
-            pred_mesh_path = output_dir / f'{idx}_batch_{b}_pred.obj'
-            gt_mesh_path = output_dir / f'{idx}_batch_{b}_gt.obj'
+            pred_mesh_path = output_dir / f'{idx}_batch_{b}_iter_{num_iter}_pred.obj'
+            gt_mesh_path = output_dir / f'{idx}_batch_{b}_iter_{num_iter}_gt.obj'
             
             save_surfaces_as_mesh(surfaces_pred, str(pred_mesh_path))
             if b == 0:
                 save_surfaces_as_mesh(surfaces_gt, str(gt_mesh_path))
 
             # 渲染三视图
-            pred_base = str(output_dir / f'{idx}_batch_{b}_pred').replace('.png', '')
-            gt_base = str(output_dir / f'{idx}_batch_{b}_gt').replace('.png', '')
-            pc_base = str(output_dir / f'{idx}_batch_{b}_pc').replace('.png', '')
+            pred_base = str(output_dir / f'{idx}_batch_{b}_iter_{num_iter}_pred').replace('.png', '')
+            gt_base = str(output_dir / f'{idx}_batch_{b}_iter_{num_iter}_gt').replace('.png', '')
+            pc_base = str(output_dir / f'{idx}_batch_{b}_iter_{num_iter}_pc').replace('.png', '')
             
             # Render three views for each type
             pred_paths = render_three_views(surfaces_pred, None, pred_base)
@@ -708,7 +712,7 @@ def main():
             pc_paths = render_three_views(None, pc[0, ..., :3].detach().cpu().float().numpy(), pc_base)
             
             # Create 3x3 grid combining all views
-            grid_output_path = output_dir / f'{idx}_batch_{b}_grid.jpg'
+            grid_output_path = output_dir / f'{idx}_batch_{b}_iter_{num_iter}_grid.jpg'
             create_three_views_grid(pc_paths, gt_paths, pred_paths, str(grid_output_path))
 
 
