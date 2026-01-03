@@ -18,7 +18,7 @@ from pathlib import Path
 import json
 
 # Import surface building functions
-from utils.surface import build_bspline_surface
+from myutils.surface import build_bspline_surface
 
 
 class BSplineSurfaceViewer:

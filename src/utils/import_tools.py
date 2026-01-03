@@ -36,7 +36,8 @@ def _clean_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Te
 def load_model_from_config(
     cfg: Union[Dict[str, Any], Any],
     device: Union[str, torch.device, None] = None,
-    strict: bool = True
+    strict: bool = True,
+    section: str = 'model',
 ) -> Tuple[torch.nn.Module, Dict[str, Any]]:
     """
     Instantiate model from config and load checkpoint.
@@ -52,7 +53,7 @@ def load_model_from_config(
         checkpoint_file_name: model-xx.pt
     """
     cfg_dict = _to_dict(cfg)
-    model_cfg = cfg_dict.get("model", {})
+    model_cfg = cfg_dict.get(section, {})
 
     target = model_cfg.get("name", None)
     if target is None or "." not in target:

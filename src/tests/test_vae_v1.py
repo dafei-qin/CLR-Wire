@@ -20,7 +20,7 @@ from src.utils.numpy_tools import orthonormal_basis_from_normal
 from src.utils.config import NestedDictToClass, load_config
 from src.utils.import_tools import load_model_from_config, load_dataset_from_config
 
-from utils.surface import visualize_json_interset
+from myutils.surface import visualize_json_interset
 
 # Colors for is_closed visualization
 # Format: [R, G, B] in range [0, 1]

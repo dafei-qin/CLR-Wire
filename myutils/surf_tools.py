@@ -10,7 +10,7 @@ from OCC.Core.ShapeAnalysis import ShapeAnalysis_FreeBounds
 
 import polyscope as ps
 
-from utils.surface import sample_line
+from myutils.surface import sample_line
 
 def surf_surf_interset(face_m, face_n, face_group=None, tol=1e-2, plot=True, plot_header=''):
 

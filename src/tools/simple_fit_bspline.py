@@ -22,12 +22,12 @@ if not (PROJECT_ROOT / "utils" / "surface.py").exists():
 
 # Now import correctly:
 try:
-    from utils.surface import (
+    from myutils.surface import (
         build_plane_face,
         build_second_order_surface,
         build_bspline_surface
     )
-    print("✅ Successfully imported from utils.surface")
+    print("✅ Successfully imported from myutils.surface")
 except ImportError as e:
     print("❌ Import failed:", e)
     print("sys.path includes:")

@@ -1,0 +1,132 @@
+trainer:
+    # Model and training config names
+    model_name: "GPT_INIT_142M"  # change to "Samba_1.3B" for 1.3B model
+    train_config: "train_1229_cache_79"  # change to "tsz512x4k_100B" for 1.3B model
+    train_name: "first_try_20_epochs"
+    # Output directory
+    out_dir: "/data/ssd/CAD/checkpoints/GPT_INIT_142M/train0/"
+    
+  
+    use_sample_dataset: false  # 是否使用自定义的 Sample_Dataset（不做 padding，变长样本以 list 组织）
+    
+    # ShapeVAE Conditioner 训练配置
+    freeze_conditioner: false  # 是否冻结 conditioner（False 表示解锁训练）
+    conditioner_lr_scale: 1.0  # conditioner 的学习率倍率（相对于主学习率），通常 pretrained 模型微调时使用较小的学习率
+    
+    # Checkpoint 配置
+    # FSDP state_dict 类型：
+    #   - "full": 完整 state dict（兼容性好，但保存/加载慢，20G ckpt 可能需要几分钟）
+    #   - "sharded": 分片 state dict（快，但 checkpoint 分散在多个文件）
+    # 注意：切换类型后，旧的 checkpoint 可能无法加载
+    fsdp_state_dict_type: "full"  # 默认使用 full 保持兼容性
+    
+    # Training hyperparameters
+    max_tokens: 1e9
+    global_batch_size: 128
+    micro_batch_size: 16
+    learning_rate: 1e-4
+    total_evals: 400
+    warmup_tokens: null  # will be calculated as int(max_tokens * 0.05) at runtime
+    log_step_interval: 10
+    save_step_interval: 15000
+    eval_step_interval: 100000000000000
+    num_extrapol: 4
+    
+    # Optimizer parameters
+    weight_decay: 1e-1
+    beta1: 0.9
+    beta2: 0.95
+    grad_clip: 1.0
+    decay_lr: true
+    min_lr: 1e-5
+    
+    # Training epochs
+    num_epochs: 100
+    
+    # Note: batch_size and gradient_accumulation_steps are calculated at runtime:
+    # batch_size = global_batch_size // devices
+    # gradient_accumulation_steps = batch_size // micro_batch_size
+    use_michelangelo_grad: false
+  
+  
+  
+  
+  
+model: 
+  name: lit_gpt.model.GPT
+  params:
+    config:
+      org: Lightning-AI
+      name: Diff_LLaMA_142M
+      block_size: 1000
+      vocab_size: 1028 # 1024 + start + end + placeholder + pad
+      padding_multiple: 64
+      padded_vocab_size: 1028 # 1024 + start + end + placeholder + pad
+      n_layer: 15
+      n_head: 12
+      n_embd: 768
+      rotary_percentage: 1.0
+      parallel_residual: false
+      bias: false
+      n_query_groups: 12
+      shared_attention_norm: false
+      _norm_class: FusedRMSNorm
+      norm_eps: 1.0e-5
+      _mlp_class: LLaMAMLP
+      intermediate_size: 3072
+      condense_ratio: 1
+    use_michelangelo: true
+    michelangelo_config_path: ./third_party/Michelangelo/configs/aligned_shape_latents/shapevae-256.yaml
+    michelangelo_ckpt_path: ./third_party/Michelangelo/checkpoints/aligned_shape_latents/shapevae-256.ckpt
+
+    build_conditioner: false
+    freeze_conditioner: false
+
+vae:
+  name: src.vae.vae_v4_dcae_fsq.DCAE_FSQ_VAE
+  pred_is_closed: true
+  load_ckpt: true  # Don't load checkpoint on initialization (trainer will handle resume)
+  params:
+      input_size: 4
+      in_channels: 3
+      latent_channels: 3
+      width_base: 64
+      fsq_levels: [8, 5, 5, 5]
+      num_codebooks: 6
+  
+  checkpoint_folder: checkpoints/train_1223_vae_v4_bspline_only_dcae_fsq_6tokens_1024
+  checkpoint_file_name: model-10.pt
+
+data_train:
+  name: src.dataset.dataset_v4_tokenize_all.dataset_compound_tokenize_all_cache
+  params:
+    # json_dir: /deemos-research-area-d/meshgen/cad_data/abc_step_pc/5
+    cache_file: /data/ssd/CAD/data/abc_step_pc/cache_356789.pkl
+    rts_codebook_dir: assets/codebook_scale_1.2
+    max_tokens: 1000
+    canonical: true
+    detect_closed: false
+    bspline_fit_threshold: 1e-2
+    codebook_size: 1024
+    replica: 1
+    rotation_augment: true
+    point_augment: true
+    point_augment_intensity: 0.005
+    pc_shape: 16384
+
+data_val:
+  name: src.dataset.dataset_v4_tokenize_all.dataset_compound_tokenize_all_cache
+  params:
+    # json_dir: /deemos-research-area-d/meshgen/cad_data/abc_step_pc/5
+    cache_file: /data/ssd/CAD/data/abc_step_pc/cache_8.pkl
+    rts_codebook_dir: assets/codebook_scale_1.2
+    max_tokens: 1000
+    canonical: true
+    detect_closed: false
+    bspline_fit_threshold: 1e-2
+    codebook_size: 1024
+    replica: 1
+    rotation_augment: false
+    point_augment: false
+    point_augment_intensity: 0.005
+    pc_shape: 16384

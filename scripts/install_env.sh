@@ -9,6 +9,10 @@ pip install trimesh beartype lightning safetensors open3d
 pip install omegaconf sageattention triton scikit-image transformers gpustat
 pip install wandb pudb
 pip install libigl h5py
-cd csrc/rotary && pip install .
-cd ../layer_norm && pip install .
-cd ../xentropy && pip install .
+pip install diffusers
+pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu124
+pip install opencv-python
+pip install jsonargparse
+cd csrc/rotary && python setup.py install 
+cd ../layer_norm && python setup.py install 
+cd ../xentropy && python setup.py install 

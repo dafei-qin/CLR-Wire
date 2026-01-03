@@ -25,7 +25,7 @@ sys.path.insert(0, str(project_root))
 
 from src.tests.test_vae_v1 import to_json
 from src.tools.surface_to_canonical_space import from_canonical
-from utils.surface import visualize_json_interset
+from myutils.surface import visualize_json_interset
 
 # Colors for is_closed visualization
 # Format: [R, G, B] in range [0, 1]

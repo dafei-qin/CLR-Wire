@@ -22,7 +22,7 @@ from src.utils.config import NestedDictToClass, load_config
 
 
 
-from utils.surface import visualize_json_interset
+from myutils.surface import visualize_json_interset
 
 
 def normalize_path(path_value: Optional[str]) -> str:
@@ -190,7 +190,7 @@ def build_bspline_json(
     idx: int,
 ) -> Dict[str, Any]:
     """
-    Compose a bspline surface dict consumable by utils.surface.build_bspline_surface via visualize_json_interset.
+    Compose a bspline surface dict consumable by myutils.surface.build_bspline_surface via visualize_json_interset.
     Converts gap-encoded knots to cumulative normalized knot vectors.
     Crops multiplicities and poles to their valid extents.
     """

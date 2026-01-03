@@ -139,7 +139,7 @@ class DCAE_FSQ_VAE(nn.Module):
             z_quantized: (B, C_latent, H', W') quantized latent, e.g., (B, 3, 2, 2)
             indices: (B, num_codebooks) codebook indices
         """
-        batch_size = x.size(0)
+        batch_size = x.shape[0]
         
         # DC-AE encode: (B, 3, 4, 4) → (B, 3, 2, 2)
         z_continuous = self.dcae.encode(x)

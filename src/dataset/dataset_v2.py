@@ -30,8 +30,10 @@ from icecream import ic
 
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.tools.surface_to_canonical_space import to_canonical, from_canonical, compute_rotation_matrix
+from myutils.surface import get_approx_face
 
 # Import for bspline surface handling
 from OCC.Core.Geom import Geom_BSplineSurface
@@ -41,7 +43,6 @@ from OCC.Core.TColStd import TColStd_Array1OfInteger, TColStd_Array1OfReal, TCol
 from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_MakeFace
 from OCC.Core.BRep import BRep_Tool
 from OCC.Core.GeomAdaptor import GeomAdaptor_Surface
-from utils.surface import get_approx_face
 
 from copy import copy
 

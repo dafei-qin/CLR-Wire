@@ -28,7 +28,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 from src.dataset.dataset_latent import LatentDataset
 from src.vae.vae_v1 import SurfaceVAE
 from src.tools.surface_to_canonical_space import from_canonical
-from utils.surface import visualize_json_interset
+from myutils.surface import visualize_json_interset
 from src.utils.surface_latent_tools import decode_and_sample_with_rts
 from src.utils.import_tools import load_model_from_config
 

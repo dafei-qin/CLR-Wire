@@ -21,8 +21,8 @@ from src.utils.config import NestedDictToClass, load_config
 from src.utils.import_tools import load_model_from_config, load_dataset_from_config
 from src.utils.surface_tools import params_to_samples_with_rts
 from src.utils.rts_tools import RotationCodebook, TranslationCodebook, ScaleCodebook
-from utils.surface import write_to_step
-from utils.surface import visualize_json_interset
+from myutils.surface import write_to_step
+from myutils.surface import visualize_json_interset
 from pathlib import Path
 
 # Colors for is_closed visualization
