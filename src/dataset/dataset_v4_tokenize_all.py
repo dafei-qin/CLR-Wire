@@ -506,14 +506,19 @@ class dataset_compound_tokenize_all(Dataset):
 
 class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
     # TODO: add rotation augmentation
-    def __init__(self, cache_file: str, rts_codebook_dir: str, max_tokens: int = 1000, canonical: bool = True, detect_closed: bool = False, bspline_fit_threshold: float = 1e-2, codebook_size=1024, replica=1, rotation_augment: bool = False, point_augment: bool = False, point_augment_intensity: float = 0.005, pc_shape: int = 16384):
+    def __init__(self, cache_file: str, rts_codebook_dir: str, max_tokens: int = 1000, canonical: bool = True, detect_closed: bool = False, bspline_fit_threshold: float = 1e-2, codebook_size=1024, replica=1, rotation_augment: bool = False, point_augment: bool = False, point_augment_intensity: float = 0.005, pc_shape: int = 16384, replace_file_header=''):
         super().__init__('', rts_codebook_dir, max_tokens, canonical, detect_closed, bspline_fit_threshold, codebook_size, replica, rotation_augment, point_augment, point_augment_intensity, pc_shape)
         self.cache_file = cache_file
         self.data = pickle.load(open(self.cache_file, 'rb'))
         self.npz_path = self.data['npz_path']
+        self.replace_file_header = replace_file_header
+        if self.replace_file_header != '':
+            self.npz_path = [p.replace('/data/ssd/CAD/data/abc_step_pc', self.replace_file_header) for p in self.npz_path]
+
         self.tokens = self.data['tokens']
         self.poles = self.data['poles']
         self.json_names = [p.replace('.npz', '.json') for p in self.npz_path]
+        
 
     def __len__(self):
         return len(self.npz_path) * int(self.replica)
