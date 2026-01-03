@@ -115,6 +115,7 @@ data_train:
     point_augment: true
     point_augment_intensity: 0.005
     pc_shape: 16384
+    emphasize_long: false
 
 data_val:
   name: src.dataset.dataset_v4_tokenize_all.dataset_compound_tokenize_all_cache
