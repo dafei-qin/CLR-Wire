@@ -282,7 +282,9 @@ def load_checkpoint_with_conditioner(fabric, checkpoint_path: Path, state: dict,
     加载 checkpoint，包含主模型和 conditioner。
     """
     # 加载 checkpoint
-    fabric.load(checkpoint_path, {key:value for key, value in state.items() if key != 'vae'})
+    state = {key:value for key, value in state.items() if key != 'vae'}
+    fabric.load(checkpoint_path, state)
+    return state
     
 
 
@@ -646,7 +648,9 @@ def main(fabric, model, vae, config_dict, train_data_dir, val_data_dir, resume, 
         if skip_optimizer:
             # 只加载模型权重，不加载 optimizer
             state_model_only = {"model": model, "iter_num": 0, "step_count": 0, "epoch": 0}
-            load_checkpoint_with_conditioner(fabric, resume_path, state_model_only, model)
+            state_load = load_checkpoint_with_conditioner(fabric, resume_path, state_model_only, model)
+            state_load['vae'] = state['vae']
+            state = state_load
             
             # 恢复训练状态
             state["iter_num"] = state_model_only.get("iter_num", 0)
@@ -656,8 +660,11 @@ def main(fabric, model, vae, config_dict, train_data_dir, val_data_dir, resume, 
             fabric.print(f"✅ Model weights loaded, optimizer re-initialized")
             fabric.print(f"   Resumed from iter={state['iter_num']}, step={state['step_count']}, epoch={state['epoch']}")
         else:
-            # 正常加载（包含 optimizer）
-            load_checkpoint_with_conditioner(fabric, resume_path, state, model)
+            # 正常加载（包含 optimizer
+
+            state_load = load_checkpoint_with_conditioner(fabric, resume_path, state, model)
+            state_load['vae'] = state['vae']
+            state = state_load
             fabric.print(f"✅ Full checkpoint loaded (model + optimizer + conditioner)")
         print(f"state['iter_num'] = {state['iter_num']}, state['step_count'] = {state['step_count']}, state['epoch'] = {state['epoch']}")
         

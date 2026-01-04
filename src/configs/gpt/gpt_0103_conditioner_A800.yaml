@@ -18,7 +18,7 @@ trainer:
     #   - "full": 完整 state dict（兼容性好，但保存/加载慢，20G ckpt 可能需要几分钟）
     #   - "sharded": 分片 state dict（快，但 checkpoint 分散在多个文件）
     # 注意：切换类型后，旧的 checkpoint 可能无法加载
-    fsdp_state_dict_type: "full"  # 默认使用 full 保持兼容性
+    fsdp_state_dict_type: "NO_SHARD"  # 默认使用 full 保持兼容性
     
     # Training hyperparameters
     max_tokens: 1e9
