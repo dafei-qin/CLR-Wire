@@ -223,7 +223,7 @@ class dataset_compound_tokenize_all(Dataset):
         # Unpadded tokens as input
         angle = random.choice(self.rotation_angles)
         axis = random.choice(self.rotation_axes)
-        print('choice angle: ', angle, 'axis: ', axis)
+        # print('choice angle: ', angle, 'axis: ', axis)
         
         assert tokens.shape[-1] == 14
 
@@ -602,6 +602,7 @@ class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
             else:
                 points = np.zeros((16384, 3), dtype=np.float32)
                 normals = np.zeros((16384, 3), dtype=np.float32)
+                solid_valid = False
                 return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, solid_valid
 
             tokens = self.warp_codes(tokens)
