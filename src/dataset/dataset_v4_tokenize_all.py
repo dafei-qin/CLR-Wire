@@ -125,7 +125,7 @@ class dataset_compound_tokenize_all(Dataset):
         self.point_augment = point_augment
         self.pc_shape = pc_shape
         self.point_augment_intensity = point_augment_intensity
-        self.rotation_angles = [0, 90, 180, 270]
+        self.rotation_angles = list(range(0, 360, 15))
         self.rotation_axes = [
             [1, 0, 0],
             [0, 1, 0],
@@ -223,6 +223,7 @@ class dataset_compound_tokenize_all(Dataset):
         # Unpadded tokens as input
         angle = random.choice(self.rotation_angles)
         axis = random.choice(self.rotation_axes)
+        print('choice angle: ', angle, 'axis: ', axis)
         
         assert tokens.shape[-1] == 14
 
@@ -531,7 +532,10 @@ class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
             print(f"Emphasizing long tokens, 1.5 repeat for > 400 tokens, after 100 epochs")
         for i in range(len(self.npz_path)):
             token_length = len(self.tokens[i])
-            if token_length < 200:
+            if token_length < 100:
+                repeat = 0
+
+            elif token_length >= 100 and token_length < 200:
                 repeat = 1
             elif token_length >= 200 and token_length < 400:
                 repeat = 2
@@ -582,12 +586,24 @@ class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
         all_bspline_valid_mask = np.zeros((self.max_num_surfaces), dtype=bool)
 
         if self.rotation_augment:
+            trys = 5
             tokens = self.unwarp_codes(tokens)
-            tokens, points, solid_valid = self.apply_rotation_augment(tokens, points)
-            if not solid_valid:
+            while trys > 0:
+                tokens_new, points_new, solid_valid_new = self.apply_rotation_augment(tokens, points)
+                if not solid_valid_new:
+                    trys -= 1
+                    continue
+                else:
+                    break
+            if solid_valid_new:
+                tokens = tokens_new
+                points = points_new
+                solid_valid = solid_valid_new
+            else:
                 points = np.zeros((16384, 3), dtype=np.float32)
                 normals = np.zeros((16384, 3), dtype=np.float32)
                 return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, solid_valid
+
             tokens = self.warp_codes(tokens)
 
         
@@ -633,6 +649,15 @@ if __name__ == '__main__':
 
     config = OmegaConf.load('./src/configs/gpt/gpt_0102_michel_A800.yaml')
     dataset = load_dataset_from_config(config, section='data_train')
-    for idx in tqdm(range(len(dataset))):
+    num_rot_aug_invalid = 0
+    num_total_invalid = 0
+    for idx in tqdm(range(1000)):
         print(idx)
         data = dataset[idx]
+        if data[-1] == -2:
+            num_rot_aug_invalid += 1
+        if data[-1] != True:
+            num_total_invalid += 1
+
+    print(num_rot_aug_invalid)
+    print(num_total_invalid)

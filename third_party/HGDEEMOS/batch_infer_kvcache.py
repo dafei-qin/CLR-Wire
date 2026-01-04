@@ -574,6 +574,7 @@ def main():
                        help="Number of samples to process")
     parser.add_argument("--start_idx", type=int, default=300000,
                        help="Starting index of samples to process")
+    parser.add_argument("--do_inference", type=str, default='True', help="Whether to do inference")
     parser.add_argument("--output_dir", type=str, default="meshes/TestData_1201_NoScaleUp_50k_no_dynamic_window",
                        help="Output directory")
     args = parser.parse_args()
@@ -601,6 +602,7 @@ def main():
 
     # 加载模型
     print("加载模型...")
+    args.do_inference = args.do_inference.lower() == 'true'
     model = load_model(
         args.ckpt, 
         config_dict=config_dict,
@@ -633,10 +635,13 @@ def main():
 
         # 获取样本数据
 
-        for j in range(4):
+        for j in range(16):
             # 4 times of augmentation
 
             train_data = dataset[idx]
+            if train_data[-1] != True:
+                print(f'invalid sample found for idx: {idx} with batch {j}')
+                continue
             train_data = [_t[train_data[-1]] for _t in train_data[:-1]]
             train_data = [torch.from_numpy(_t).to(args.device) for _t in train_data]
             points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask = train_data
@@ -660,20 +665,28 @@ def main():
 
             # ===== 批量推理：把起始 token 和点云在 batch 维复制 4 份，同时解码 =====
             B = 2
-            tokens_batch = generate_with_kvcache(
-                model,
-                start_token_id=dataset.start_id,
-                pc=pc,  # 函数内部会扩成 [B, N, C]
-                max_new_tokens=args.max_new_tokens,
-                max_seq_length=args.max_seq_len,
-                temperature=args.temperature,
-                batch_size=B,
-                eos_token_id=dataset.end_id
-            )
+            print('do_inference: ', args.do_inference)
+            if args.do_inference:
+                tokens_batch = generate_with_kvcache(
+                    model,
+                    start_token_id=dataset.start_id,
+                    pc=pc,  # 函数内部会扩成 [B, N, C]
+                    max_new_tokens=args.max_new_tokens,
+                    max_seq_length=args.max_seq_len,
+                    temperature=args.temperature,
+                    batch_size=B,
+                    eos_token_id=dataset.end_id
+                )
+            else:
+                tokens_batch = None
 
             # 生成并保存每个 batch 的 mesh
             for b in range(1):
-                tokens = tokens_batch[b]
+                if tokens_batch is None:
+                    tokens =  all_tokens_padded[0]
+                    tokens = tokens[~(tokens == dataset.pad_id)]
+                else:
+                    tokens = tokens_batch[b]
                 tokens = torch.tensor(tokens).to(args.device)
                 
 
