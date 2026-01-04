@@ -510,7 +510,7 @@ class dataset_compound_tokenize_all(Dataset):
 
 class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
     # TODO: add rotation augmentation
-    def __init__(self, cache_file: str, rts_codebook_dir: str, max_tokens: int = 1000, canonical: bool = True, detect_closed: bool = False, bspline_fit_threshold: float = 1e-2, codebook_size=1024, replica=1, rotation_augment: bool = False, point_augment: bool = False, point_augment_intensity: float = 0.005, pc_shape: int = 16384, replace_file_header=''):
+    def __init__(self, cache_file: str, rts_codebook_dir: str, max_tokens: int = 1000, canonical: bool = True, detect_closed: bool = False, bspline_fit_threshold: float = 1e-2, codebook_size=1024, replica=1, rotation_augment: bool = False, point_augment: bool = False, point_augment_intensity: float = 0.005, pc_shape: int = 16384, replace_file_header='', emphasize_long=False):
         super().__init__('', rts_codebook_dir, max_tokens, canonical, detect_closed, bspline_fit_threshold, codebook_size, replica, rotation_augment, point_augment, point_augment_intensity, pc_shape)
         self.cache_file = cache_file
         self.data = pickle.load(open(self.cache_file, 'rb'))
@@ -525,7 +525,10 @@ class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
         self._npz_path = []
         self._tokens = []
         self._poles = []
+        self.emphasize_long = emphasize_long
         print(f"Length of original dataset: {len(self.npz_path)}")
+        if self.emphasize_long:
+            print(f"Emphasizing long tokens, 1.5 repeat for > 400 tokens, after 100 epochs")
         for i in range(len(self.npz_path)):
             token_length = len(self.tokens[i])
             if token_length < 200:
@@ -536,6 +539,9 @@ class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
                 repeat = 4
             elif token_length >= 600:
                 repeat = 8
+
+            if self.emphasize_long and token_length >= 400:
+                repeat = int(repeat * 1.5)
 
             self._npz_path.extend([self.npz_path[i]] * repeat)
             self._tokens.extend([self.tokens[i]] * repeat)

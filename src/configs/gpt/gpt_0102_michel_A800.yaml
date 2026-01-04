@@ -41,7 +41,7 @@ trainer:
     min_lr: 1e-5
     
     # Training epochs
-    num_epochs: 100
+    num_epochs: 200
     
     # Note: batch_size and gradient_accumulation_steps are calculated at runtime:
     # batch_size = global_batch_size // devices
@@ -114,6 +114,7 @@ data_train:
     point_augment: true
     point_augment_intensity: 0.005
     pc_shape: 16384
+    emphasize_long: true # 1.5 repeat for > 400 tokens, after 100 epochs
 
 data_val:
   name: src.dataset.dataset_v4_tokenize_all.dataset_compound_tokenize_all_cache
