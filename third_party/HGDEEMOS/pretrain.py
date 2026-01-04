@@ -659,6 +659,7 @@ def main(fabric, model, vae, config_dict, train_data_dir, val_data_dir, resume, 
             # 正常加载（包含 optimizer）
             load_checkpoint_with_conditioner(fabric, resume_path, state, model)
             fabric.print(f"✅ Full checkpoint loaded (model + optimizer + conditioner)")
+        print(f"state['iter_num'] = {state['iter_num']}, state['step_count'] = {state['step_count']}, state['epoch'] = {state['epoch']}")
         
         t1 = time.perf_counter()
         fabric.print(f"⏱️  Total resume time: {t1 - t0:.2f}s")
