@@ -141,6 +141,11 @@ class dataset_compound_tokenize_all(Dataset):
 
         codes = self.unwarp_codes(tokens)
         codes = codes.reshape(-1, 14)
+        
+        # Handle empty codes (no valid surfaces after truncation)
+        if len(codes) == 0:
+            return []
+        
         surface_type = codes[:, 0]
         surface_code = codes[:, 1:7]
         rts_code = codes[:, 7:14]
