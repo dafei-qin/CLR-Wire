@@ -586,15 +586,16 @@ class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
         all_bspline_valid_mask = np.zeros((self.max_num_surfaces), dtype=bool)
 
         if self.rotation_augment:
-            trys = 5
+            tries = 10
             tokens = self.unwarp_codes(tokens)
-            while trys > 0:
+            tokens_new = None
+            points_new = None
+            solid_valid_new = False
+            while tries > 0:
                 tokens_new, points_new, solid_valid_new = self.apply_rotation_augment(tokens, points)
-                if not solid_valid_new:
-                    trys -= 1
-                    continue
-                else:
+                if solid_valid_new:
                     break
+                tries -= 1
             if solid_valid_new:
                 tokens = tokens_new
                 points = points_new
@@ -612,7 +613,13 @@ class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
 
         # Do the reordering base on the rotated version
 
-        tokens, poles = self.reordering(self.unwarp_codes(tokens), poles, graph)
+        try:
+            tokens, poles = self.reordering(self.unwarp_codes(tokens), poles, graph)
+        except Exception as e:
+            print(f"Error in reordering: {e}")
+            with open('./assets/GPT_train/error_reordering.txt', 'a') as f:
+                f.write(f"{self.npz_path[idx % len(self.npz_path)]}\n")
+            return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, False
         tokens = self.warp_codes(tokens)
 
 

@@ -22,13 +22,13 @@ trainer:
     
     # Training hyperparameters
     max_tokens: 1e9
-    global_batch_size: 1280
+    global_batch_size: 640
     micro_batch_size: 80
     learning_rate: 1e-4
     total_evals: 400
     warmup_tokens: null  # will be calculated as int(max_tokens * 0.05) at runtime
     log_step_interval: 10
-    save_step_interval: 5000
+    save_step_interval: 2500
     eval_step_interval: 100000000000000
     num_extrapol: 4
     
