@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 import random
 from scipy.spatial.transform import Rotation as R
+import matplotlib.pyplot as plt
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 
@@ -87,7 +88,7 @@ class dataset_compound_tokenize_all(Dataset):
     # size + 1: start
     # size + 2: end
     # size + 3: pad
-    def __init__(self, json_dir: str, rts_codebook_dir: str, max_tokens: int = 1000, canonical: bool = True, detect_closed: bool = False, bspline_fit_threshold: float = 1e-2, codebook_size=1024, replica=1, rotation_augment: bool = False, point_augment: bool = False, point_augment_intensity: float = 0.005, pc_shape: int = 16384):
+    def __init__(self, json_dir: str, rts_codebook_dir: str, max_tokens: int = 1000, canonical: bool = True, detect_closed: bool = False, bspline_fit_threshold: float = 1e-2, codebook_size=1024, replica=1, rotation_augment: bool = False, point_augment: bool = False, point_augment_intensity: float = 0.005, pc_shape: int = 16384, use_dfs=False):
         
         self.tokens_per_surface = 14
 
@@ -131,6 +132,7 @@ class dataset_compound_tokenize_all(Dataset):
             [0, 1, 0],
             [0, 0, 1]
         ]
+        self.use_dfs = use_dfs
     # def rts_augment(self, shifts, rotations, scales):
 
 
@@ -225,6 +227,8 @@ class dataset_compound_tokenize_all(Dataset):
         
 
     def apply_rotation_augment(self, tokens, points):
+
+        # Only influence the rts, letting the surface parameters untouched
         # Unpadded tokens as input
         angle = random.choice(self.rotation_angles)
         axis = random.choice(self.rotation_axes)
@@ -285,8 +289,13 @@ class dataset_compound_tokenize_all(Dataset):
         surface_centers = samples.mean(axis=(1, 2)) # (B, 3)
         first_surface_idx = np.where(surface_centers[:, -1] == surface_centers[:, -1].min())[0][0]
 
-        old_order = list(nx.bfs_tree(graph, source=0))
-        new_order = list(nx.bfs_tree(graph, source=first_surface_idx))
+        if self.use_dfs:
+            old_order = list(nx.dfs_tree(graph, source=0))
+            new_order = list(nx.dfs_tree(graph, source=first_surface_idx))
+
+        else:
+            old_order = list(nx.bfs_tree(graph, source=0))
+            new_order = list(nx.bfs_tree(graph, source=first_surface_idx))
         
         # Create mapping from node to position in old_order
         old_to_pos = {node: pos for pos, node in enumerate(old_order)}
@@ -349,6 +358,10 @@ class dataset_compound_tokenize_all(Dataset):
         return samples
 
 
+    def compute_surface_scale(self, all_tokens, all_bspline_poles):
+        samples = self.samples_from_tokens(all_tokens, all_bspline_poles)
+        surface_max_length = (samples.max(axis=(1, 2)) - samples.min(axis=(1, 2))).max(axis=-1) # (B, 8, 8, 3) -> (B) max length of each surface
+        return surface_max_length
 
     def __getitem__(self, idx):
         # all_recon_surfaces, all_codes, types_tensor, all_shifts, all_rotations, all_scales = self.dataset_compound[idx]
@@ -371,12 +384,16 @@ class dataset_compound_tokenize_all(Dataset):
 
         # masks_list = npz_data['masks']  # List of arrays, each (N_i,)
         nodes = npz_data['graph_nodes']
+        # print(nodes)
         edges = npz_data['graph_edges']
         graph = nx.Graph()
         graph.add_nodes_from(nodes)
         graph.add_edges_from(edges)
 
-        bfs_nodes = list(nx.bfs_tree(graph, source=0))
+        if self.use_dfs:
+            bfs_nodes = list(nx.dfs_tree(graph, source=0))
+        else:   
+            bfs_nodes = list(nx.bfs_tree(graph, source=0))
 
 
         all_recon_surfaces, all_codes, types_tensor, all_shifts, all_rotations, all_scales, all_orig_surfaces = self.dataset_compound[idx % len(self.dataset_compound)]
@@ -390,7 +407,10 @@ class dataset_compound_tokenize_all(Dataset):
         if len(nodes) != len(all_recon_surfaces):
             # Should be bspline drop
             solid_valid = False
-            return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, solid_valid, 
+            return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, solid_valid
+
+
+        # print('0', solid_valid)
         all_shifts_code = self.translation_codebook.encode(all_shifts)
         all_rotations_code = self.rotation_codebook.encode(all_rotations)
         all_scales_code = self.scale_codebook.encode(all_scales)
@@ -460,7 +480,7 @@ class dataset_compound_tokenize_all(Dataset):
                     solid_valid = False
                     return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, solid_valid
 
-        
+
         # Then we do the tokenization of updated rts.
         all_shifts_code = self.translation_codebook.encode(all_shifts)
         all_rotations_code = self.rotation_codebook.encode(all_rotations)
@@ -472,6 +492,7 @@ class dataset_compound_tokenize_all(Dataset):
         
         
         for node in bfs_nodes:
+            # print(node)
             surface = all_recon_surfaces[node]
             if surface['type'] == 'bspline_surface':
                 # Special marker for bspline for later fsq tokenize
@@ -494,16 +515,27 @@ class dataset_compound_tokenize_all(Dataset):
             all_bspline_poles = np.stack(all_bspline_poles, axis=0)
             all_bspline_valid_mask[:len(all_bspline_poles)] = True
 
+        all_tokens = np.stack(all_tokens, axis=0)
 
+        # print('2', solid_valid)
+        # print(all_tokens.shape)
         # Do the augmentaion if needed
         if self.rotation_augment:
             all_tokens, points, solid_valid = self.apply_rotation_augment(all_tokens, points)
             if not solid_valid:
                 return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, solid_valid
-        all_tokens = np.stack(all_tokens, axis=0)
+
+
+        # print(all_tokens.shape)
+        
+        all_tokens, all_bspline_poles = self.reordering(all_tokens, all_bspline_poles, graph)
+
+
+        
         all_tokens = self.warp_codes(all_tokens)
 
 
+        # print('3', solid_valid)
         if len(all_tokens) > self.max_tokens:
             solid_valid = False
         else:
@@ -511,13 +543,14 @@ class dataset_compound_tokenize_all(Dataset):
             all_tokens_padded[:len(all_tokens)] = all_tokens
             all_bspline_poles_padded[:len(all_bspline_poles)] = all_bspline_poles
 
+
         return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, solid_valid
 
 
 class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
     # TODO: add rotation augmentation
-    def __init__(self, cache_file: str, rts_codebook_dir: str, max_tokens: int = 1000, canonical: bool = True, detect_closed: bool = False, bspline_fit_threshold: float = 1e-2, codebook_size=1024, replica=1, rotation_augment: bool = False, point_augment: bool = False, point_augment_intensity: float = 0.005, pc_shape: int = 16384, replace_file_header='', emphasize_long=False):
-        super().__init__('', rts_codebook_dir, max_tokens, canonical, detect_closed, bspline_fit_threshold, codebook_size, replica, rotation_augment, point_augment, point_augment_intensity, pc_shape)
+    def __init__(self, cache_file: str, rts_codebook_dir: str, max_tokens: int = 1000, canonical: bool = True, detect_closed: bool = False, bspline_fit_threshold: float = 1e-2, codebook_size=1024, replica=1, rotation_augment: bool = False, point_augment: bool = False, point_augment_intensity: float = 0.005, pc_shape: int = 16384, replace_file_header='', emphasize_long=False, use_dfs=False, min_surface_threshold: float = 0.01):
+        super().__init__('', rts_codebook_dir, max_tokens, canonical, detect_closed, bspline_fit_threshold, codebook_size, replica, rotation_augment, point_augment, point_augment_intensity, pc_shape, use_dfs)
         self.cache_file = cache_file
         self.data = pickle.load(open(self.cache_file, 'rb'))
         self.npz_path = self.data['npz_path']
@@ -532,9 +565,38 @@ class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
         self._tokens = []
         self._poles = []
         self.emphasize_long = emphasize_long
+        self.min_surface_threshold = min_surface_threshold
+        print(f"Minimum surface scale threshold: {self.min_surface_threshold}")
+
+
         print(f"Length of original dataset: {len(self.npz_path)}")
+
+
+        for i in tqdm(range(len(self.npz_path))):
+            samples = self.samples_from_tokens(self.tokens[i], self.poles[i])
+            min_surface_scale = (samples.max(axis=(1, 2)) - samples.min(axis=(1, 2))).min(axis=-1)
+            min_surface_scale = min_surface_scale.min()
+            if min_surface_scale < self.min_surface_threshold:
+                continue
+            else:
+                self._npz_path.append(self.npz_path[i])
+                self._tokens.append(self.tokens[i])
+                self._poles.append(self.poles[i])
+
+        
+
+        print(f"Length of dataset after min_scale filtering: {len(self.npz_path)}")
+
+        self.npz_path = self._npz_path
+        self.tokens = self._tokens
+        self.poles = self._poles
+        self._npz_path = []
+        self._tokens = []
+        self._poles = []
+
         if self.emphasize_long:
             print(f"Emphasizing long tokens, 1.5 repeat for > 400 tokens, after 100 epochs")
+
         for i in range(len(self.npz_path)):
             token_length = len(self.tokens[i])
             if token_length < 100:
@@ -585,6 +647,7 @@ class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
         
         
         tokens = self.tokens[idx % len(self.tokens)]
+
 
         all_tokens_padded = np.zeros((self.max_tokens), dtype=int) + self.pad_id
         all_bspline_poles_padded = np.zeros((self.max_num_surfaces, 4, 4, 4), dtype=np.float32)
@@ -653,11 +716,14 @@ if __name__ == '__main__':
     from src.utils.import_tools import load_dataset_from_config
     from omegaconf import OmegaConf
 
-    config = OmegaConf.load('./src/configs/gpt/gpt_0102_michel_A800.yaml')
+    # config = OmegaConf.load('./src/configs/gpt/gpt_0102_michel_A800.yaml')
+    config = OmegaConf.load('./src/configs/gpt/cache_laptop.yaml')
     dataset = load_dataset_from_config(config, section='data_train')
     num_rot_aug_invalid = 0
     num_total_invalid = 0
-    for idx in tqdm(range(1000)):
+    scales_min = []
+    scales_max = []
+    for idx in tqdm(range(5000)):
         print(idx)
         data = dataset[idx]
         if data[-1] == -2:
@@ -665,5 +731,79 @@ if __name__ == '__main__':
         if data[-1] != True:
             num_total_invalid += 1
 
+        if data[-1] != True:
+            continue
+        tokens = data[2]
+        poles = data[3]
+        poles_mask = data[4]
+        actual_length = dataset.max_tokens - (tokens == dataset.pad_id).sum().item()
+        tokens = tokens[:actual_length]
+        poles = poles[poles_mask]
+        surface_scale = dataset.compute_surface_scale(tokens, poles)
+        scales_min.append(min(surface_scale))
+        scales_max.append(max(surface_scale))
+
     print(num_rot_aug_invalid)
     print(num_total_invalid)
+    print(scales_min)
+    print(scales_max)
+    
+    # Calculate and print statistics for scales_max and scales_min
+    scales_max_array = np.array(scales_max)
+    scales_min_array = np.array(scales_min)
+    
+    print('\n=== Statistics for scales_max ===')
+    print(f'Mean: {np.mean(scales_max_array):.6f}')
+    print(f'Median: {np.median(scales_max_array):.6f}')
+    print(f'95% percentile: {np.percentile(scales_max_array, 95):.6f}')
+    print(f'5% percentile: {np.percentile(scales_max_array, 5):.6f}')
+    
+    print('\n=== Statistics for scales_min ===')
+    print(f'Mean: {np.mean(scales_min_array):.6f}')
+    print(f'Median: {np.median(scales_min_array):.6f}')
+    print(f'95% percentile: {np.percentile(scales_min_array, 95):.6f}')
+    print(f'5% percentile: {np.percentile(scales_min_array, 5):.6f}')
+    
+    # Plot distribution of scales_min and scales_max
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+    
+    # Calculate statistics for plotting
+    max_mean = np.mean(scales_max_array)
+    max_median = np.median(scales_max_array)
+    max_95 = np.percentile(scales_max_array, 95)
+    
+    min_mean = np.mean(scales_min_array)
+    min_median = np.median(scales_min_array)
+    min_95 = np.percentile(scales_min_array, 95)
+    
+    # Plot scales_max distribution
+    ax1.hist(scales_max, bins=50, alpha=0.7, color='blue', edgecolor='black')
+    ax1.axvline(max_mean, color='green', linestyle='--', linewidth=2, label=f'Mean: {max_mean:.4f}')
+    ax1.axvline(max_median, color='orange', linestyle='--', linewidth=2, label=f'Median: {max_median:.4f}')
+    ax1.axvline(max_95, color='purple', linestyle='--', linewidth=2, label=f'95%: {max_95:.4f}')
+    ax1.set_xlabel('Surface Scale (Max)')
+    ax1.set_ylabel('Frequency')
+    ax1.set_title('Distribution of scales_max')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    
+    # Plot scales_min distribution
+    ax2.hist(scales_min, bins=50, alpha=0.7, color='red', edgecolor='black')
+    ax2.axvline(min_mean, color='green', linestyle='--', linewidth=2, label=f'Mean: {min_mean:.4f}')
+    ax2.axvline(min_median, color='orange', linestyle='--', linewidth=2, label=f'Median: {min_median:.4f}')
+    ax2.axvline(min_95, color='purple', linestyle='--', linewidth=2, label=f'95%: {min_95:.4f}')
+    ax2.set_xlabel('Surface Scale (Min)')
+    ax2.set_ylabel('Frequency')
+    ax2.set_title('Distribution of scales_min')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    # Save the figure
+    output_dir = Path('assets')
+    output_dir.mkdir(exist_ok=True)
+    output_path = output_dir / 'surface_size_dist_max, min.jpg'
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    print(f'Distribution plot saved to {output_path}')
+    plt.close()
