@@ -474,7 +474,7 @@ def generate_with_kvcache(
     # ---- 第一个 token ----
     # input_pos 形状按模型实现可广播；保持 [1] 即可在大多数实现下广播到 batch
     input_pos = torch.tensor([0], dtype=torch.long, device=device)
-    out = model(seq, max_seq_length=max_seq_length, input_pos=input_pos, pc=pc).logits  # [B, 1, V]
+    out = model(seq, max_seq_length=max_seq_length, input_pos=input_pos, pc=pc).logits  # [B, 1, V] - Cache PC features
     logits = out[:, -1, :]  # [B, V]
 
     if temperature > 0:
@@ -492,9 +492,9 @@ def generate_with_kvcache(
     # ---- 后续 tokens ----
     for t in tqdm(range(1, max_new_tokens), total=max_new_tokens - 1, desc="Decoding", leave=False):
         input_pos = torch.tensor([t], dtype=torch.long, device=device)
-        token_in = seq[:, :]  # [B, 1]
-        # out = model(token_in, max_seq_length=max_seq_length, input_pos=input_pos, pc=None).logits  # [B, 1, V]
-        out = model(token_in, max_seq_length=max_seq_length, pc=pc).logits  # [B, 1, V]
+        token_in = seq[:, -1:]  # [B, 1] - Only pass the latest token for KV cache
+        # Reuse cached PC features by passing pc=None
+        out = model(token_in, max_seq_length=max_seq_length, input_pos=input_pos, pc=None).logits  # [B, 1, V]
         logits = out[:, -1, :]  # [B, V]
         if temperature > 0:
             probs = torch.softmax(logits / temperature, dim=-1)
