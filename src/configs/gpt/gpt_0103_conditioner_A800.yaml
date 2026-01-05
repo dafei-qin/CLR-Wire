@@ -1,10 +1,10 @@
 trainer:
     # Model and training config names
-    model_name: "GPT_INIT_142M_CONDITIONER"  # change to "Samba_1.3B" for 1.3B model
-    train_config: "train_0103_cache_excl-029"  # change to "tsz512x4k_100B" for 1.3B model
+    model_name: "GPT_INIT_142M"  # change to "Samba_1.3B" for 1.3B model
+    train_config: "train_0105_small_vae_excl_2"  # change to "tsz512x4k_100B" for 1.3B model
     train_name: "train0"
     # Output directory
-    out_dir: "/deemos-research-area-d/meshgen/cad/checkpoints/GPT_INIT_142M_CONDITIONER/train0/"
+    out_dir: "/deemos-research-area-d/meshgen/cad/checkpoints/GPT_INIT_142M/train_0105_small_vae_excl_2/"
     
   
     use_sample_dataset: false  # 是否使用自定义的 Sample_Dataset（不做 padding，变长样本以 list 组织）
@@ -114,7 +114,7 @@ data_train:
     rotation_augment: true
     point_augment: true
     point_augment_intensity: 0.005
-    pc_shape: 16384
+    pc_shape: 8192
     emphasize_long: false
 
 data_val:
@@ -133,4 +133,4 @@ data_val:
     rotation_augment: true
     point_augment: true
     point_augment_intensity: 0.005
-    pc_shape: 16384
+    pc_shape: 8192
