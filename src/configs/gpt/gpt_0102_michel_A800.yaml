@@ -115,12 +115,13 @@ data_train:
     point_augment_intensity: 0.005
     pc_shape: 16384
     emphasize_long: true # 1.5 repeat for > 400 tokens, after 100 epochs
+    min_surface_threshold: 0.01
 
 data_val:
   name: src.dataset.dataset_v4_tokenize_all.dataset_compound_tokenize_all_cache
   params:
     # json_dir: /deemos-research-area-d/meshgen/cad_data/abc_step_pc/5
-    cache_file: /deemos-research-area-d/meshgen/cad/data/abc_step_pc/cache_0.pkl
+    cache_file: /deemos-research-area-d/meshgen/cad/data/abc_step_pc/cache_6.pkl
     replace_file_header: /deemos-research-area-d/meshgen/cad/data/abc_step_pc
     rts_codebook_dir: assets/codebook_scale_1.2
     max_tokens: 1000
@@ -133,3 +134,4 @@ data_val:
     point_augment: true
     point_augment_intensity: 0.005
     pc_shape: 16384
+    min_surface_threshold: 0.01
