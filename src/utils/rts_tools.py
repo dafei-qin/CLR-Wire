@@ -14,20 +14,11 @@ import random
 from tqdm import tqdm
 
 
-def rotate_under_axis(angles, axes):
-    angles = [0, 90, 180, 270]
-    axes = [
-        # [1, 0, 0], 
-        # [0, 1, 0], 
-        [0, 0, 1]   
-    ]
-
-    rotation_angle = random.choice(angles)   # 从角度列表中选择一个角度
-    rotation_axis = random.choice(axes)    # 从旋转轴列表中选择一个轴
-    # rotation_angle = angles[3]
-    radian = np.pi / 180 * rotation_angle
+def rotate_under_axis(angle, axis):
     
-    rotation = R.from_rotvec(radian * np.array(rotation_axis))
+    radian = np.pi / 180 * angle
+    
+    rotation = R.from_rotvec(radian * np.array(axis))
 
     return rotation
     

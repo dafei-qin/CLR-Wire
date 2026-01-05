@@ -1,10 +1,10 @@
 trainer:
     # Model and training config names
-    model_name: "GPT_INIT_142M"  # change to "Samba_1.3B" for 1.3B model
-    train_config: "train_1229_cache_79"  # change to "tsz512x4k_100B" for 1.3B model
-    train_name: "first_try_20_epochs"
+    model_name: "GPT_INIT_142M_MICHEL_GRAD"  # change to "Samba_1.3B" for 1.3B model
+    train_config: "train_0101_cache_9_michel_grad"  # change to "tsz512x4k_100B" for 1.3B model
+    train_name: "train0"
     # Output directory
-    out_dir: "/data/ssd/CAD/checkpoints/GPT_INIT_142M/train0/"
+    out_dir: "/data/ssd/CAD/checkpoints/GPT_INIT_142M_MICHEL_GRAD/train0/"
     
   
     use_sample_dataset: false  # 是否使用自定义的 Sample_Dataset（不做 padding，变长样本以 list 组织）
@@ -22,8 +22,8 @@ trainer:
     
     # Training hyperparameters
     max_tokens: 1e9
-    global_batch_size: 128
-    micro_batch_size: 16
+    global_batch_size: 64
+    micro_batch_size: 8
     learning_rate: 1e-4
     total_evals: 400
     warmup_tokens: null  # will be calculated as int(max_tokens * 0.05) at runtime
@@ -41,12 +41,13 @@ trainer:
     min_lr: 1e-5
     
     # Training epochs
-    num_epochs: 20
+    num_epochs: 100
     
     # Note: batch_size and gradient_accumulation_steps are calculated at runtime:
     # batch_size = global_batch_size // devices
     # gradient_accumulation_steps = batch_size // micro_batch_size
-    use_michelangelo_grad: false
+
+    use_michelangelo_grad: true
   
   
   
@@ -77,7 +78,8 @@ model:
       condense_ratio: 1
     use_michelangelo: true
     michelangelo_config_path: ./third_party/Michelangelo/configs/aligned_shape_latents/shapevae-256.yaml
-    michelangelo_ckpt_path: ./third_party/Michelangelo/checkpoints/aligned_shape_latents/shapevae-256.ckpt
+    # michelangelo_ckpt_path: ./third_party/Michelangelo/checkpoints/aligned_shape_latents/shapevae-256.ckpt
+
 
     build_conditioner: false
     freeze_conditioner: false

@@ -186,30 +186,31 @@ class GPT(nn.Module):
         self.conditioner = None
         self.use_michelangelo = use_michelangelo
         if use_michelangelo:
-            self.michel = init_model(michelangelo_config_path, michelangelo_ckpt_path)
+            self.michel = init_model(michelangelo_config_path, michelangelo_ckpt_path, device='cpu')
             self.michel.eval()
         else:
             if build_conditioner:
                 # 根据 config.yaml 创建 ShapeVAE（只使用明确指定的参数）
+                shapevae_width = 1024
                 self.conditioner = ShapeVAE(
-                    num_latents=1024,
+                    num_latents=512,
                     embed_dim=64,
                     num_freqs=8,
                     include_pi=False,
                     heads=16,
-                    width=1024,
-                    num_encoder_layers=8,
-                    num_decoder_layers=12,
+                    width=shapevae_width, # Changed from 1024 to 512
+                    num_encoder_layers=6,
+                    num_decoder_layers=8,
                     qkv_bias=False,
                     qk_norm=True,
                     scale_factor=1.0039506158752403,
                     geo_decoder_mlp_expand_ratio=4,
                     geo_decoder_downsample_ratio=1,
                     geo_decoder_ln_post=True,
-                    point_feats=4,
-                    pc_size=81920,
+                    point_feats=3, # Changed from 4 to 3
+                    pc_size=16384, # Changed from 81920 to 16384
                     pc_sharpedge_size=0,
-                    downsample_ratio=80,
+                    downsample_ratio=16, # Changed from 80 to 20
                 )
                 
                 if freeze_conditioner:
@@ -234,7 +235,7 @@ class GPT(nn.Module):
         if self.use_michelangelo:
             shapevae_width = 768
         else:
-            shapevae_width = 1024  # Hunyuan3D-2.1 的 width 参数
+            shapevae_width = shapevae_width  # Hunyuan3D-2.1 的 width 参数
         
         if self.condition_downsample_factor > 1:
             if self.condition_downsample_method == 'learnable':
@@ -316,7 +317,7 @@ class GPT(nn.Module):
         assert block_size >= T, f"Cannot forward sequence of length {T}, block size is only {block_size}"
 
         if self.rope_cache is None:
-            self.rope_cache = self.build_rope_cache(idx, dtype=torch.float)
+            self.rope_cache = self.build_rope_cache(idx, dtype=next(self.modules()).transformer.wte.weight.dtype)
         # passing `attn_mask` to SDPA downgrades it to use the inefficient implementation. since we only need the mask
         # for the kv-cache support (only during inference), we only create it in that situation
         # this will be resolved by https://github.com/pytorch/pytorch/issues/96099
@@ -408,10 +409,14 @@ class GPT(nn.Module):
                     cond_embeds = cond_embeds.mean(dim=2)
             
             # ========== Project to Model Dimension ==========
-            # ⚠️ 精度处理：将 cond_embeds 转换为与 linear 层相同的 dtype
-            # cond_embeds = cond_embeds.to(self.linear.weight.dtype)
+            # ⚠️ 精度处理：在 bf16-mixed 模式下，保持 float32 以避免梯度 dtype 不匹配
+            # - self.norm 的权重是 float32
+            # - CrossAttention 的参数是 float32
+            # - 如果 cond_embeds 是 bfloat16，梯度计算时会出现 dtype 不匹配
             cond_embeds = self.linear(cond_embeds)  # (bs, 4096, n_embd)
             cond_embeds = self.norm(cond_embeds)
+            # 在 bf16-mixed 模式下，保持 float32 以匹配模型参数的 dtype
+            # 这样梯度计算时不会出现 dtype 不匹配错误
         else:
             cond_embeds = None
             
@@ -437,7 +442,7 @@ class GPT(nn.Module):
             seq_len=self.config.block_size,
             n_elem=int(self.config.rotary_percentage * self.config.head_size),
             dtype=dtype,
-            device="cpu",
+            device=next(self.modules()).transformer.wte.weight.device,
             condense_ratio=self.config.condense_ratio,
         )
 

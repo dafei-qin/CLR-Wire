@@ -14,6 +14,7 @@ from tqdm import tqdm
 import sys
 from pathlib import Path
 import random
+from scipy.spatial.transform import Rotation as R
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 
@@ -86,7 +87,7 @@ class dataset_compound_tokenize_all(Dataset):
     # size + 1: start
     # size + 2: end
     # size + 3: pad
-    def __init__(self, json_dir: str, rts_codebook_dir: str, max_tokens: int = 1000, canonical: bool = True, detect_closed: bool = False, bspline_fit_threshold: float = 1e-2, codebook_size=1024, replica=1, rotation_augment: bool = False):
+    def __init__(self, json_dir: str, rts_codebook_dir: str, max_tokens: int = 1000, canonical: bool = True, detect_closed: bool = False, bspline_fit_threshold: float = 1e-2, codebook_size=1024, replica=1, rotation_augment: bool = False, point_augment: bool = False, point_augment_intensity: float = 0.005, pc_shape: int = 16384):
         
         self.tokens_per_surface = 14
 
@@ -121,8 +122,10 @@ class dataset_compound_tokenize_all(Dataset):
 
         self.replica = replica
         self.rotation_augment = rotation_augment
-        
-        self.rotation_angles = [0, 90, 180, 270]
+        self.point_augment = point_augment
+        self.pc_shape = pc_shape
+        self.point_augment_intensity = point_augment_intensity
+        self.rotation_angles = list(range(0, 360, 15))
         self.rotation_axes = [
             [1, 0, 0],
             [0, 1, 0],
@@ -135,6 +138,7 @@ class dataset_compound_tokenize_all(Dataset):
         return int(len(self.dataset_compound )* self.replica)
 
 
+    
     def detokenize(self, tokens, bspline_poles):
         # Input tokens with bspline placements and bspline list for filling the bspline surface info
         # Output surfaces
@@ -147,11 +151,30 @@ class dataset_compound_tokenize_all(Dataset):
             return []
         
         surface_type = codes[:, 0]
+
+        # Handle invalid surface type
+        surface_type[surface_type > 5] = 0
         surface_code = codes[:, 1:7]
+        surface_code[surface_code >= self.codebook_size] = 0
+
         rts_code = codes[:, 7:14]
+
+        # Flag invalid rts codes
+        rts_code_invalid = (rts_code >= self.codebook_size)
+        rts_code[rts_code_invalid] = 0
+
         shifts = self.translation_codebook.decode(rts_code[:, :3])
         rotations = self.rotation_codebook.decode(rts_code[:, 3:6])
         scales = self.scale_codebook.decode(rts_code[:, 6:7])
+
+        # Handle invalid rts
+        shifts[rts_code_invalid[:, :3]] = 0
+        if rts_code_invalid[:, 3:6].any():
+            rotations_euler = R.from_matrix(rotations).as_euler('xyz')
+            rotations_euler[rts_code_invalid[:, 3:6]] = 0
+            rotations = R.from_euler('xyz', rotations_euler).as_matrix()
+
+        scales[rts_code_invalid[:, 6:7]] = 1
 
         surfaces = []
         bspline_idx = 0
@@ -205,6 +228,7 @@ class dataset_compound_tokenize_all(Dataset):
         # Unpadded tokens as input
         angle = random.choice(self.rotation_angles)
         axis = random.choice(self.rotation_axes)
+        # print('choice angle: ', angle, 'axis: ', axis)
         
         assert tokens.shape[-1] == 14
 
@@ -222,16 +246,38 @@ class dataset_compound_tokenize_all(Dataset):
         shifts_new_code = self.translation_codebook.encode(shifts_new)
         rotations_new_decode = self.rotation_codebook.decode(rotations_new_code)
         shifts_new_decode = self.translation_codebook.decode(shifts_new_code)
-        assert np.abs(rotations_new_decode - rotations_new).mean() < 2e-3
-        assert np.abs(shifts_new_decode - shifts_new).mean() < 1e-3
+        try:
+            assert np.abs(rotations_new_decode - rotations_new).mean() < 2e-3
+            assert np.abs(shifts_new_decode - shifts_new).mean() < 1e-3
+        except AssertionError:
+            return None, None, False
 
         rtss_new = np.concatenate([shifts_new_code, rotations_new_code, rtss[:, 6:7]], axis=1)
         tokens_new = np.concatenate([tokens[:, :7], rtss_new], axis=1)
 
         points = rotation_to_apply.as_matrix() @ points[..., None]
         points = points[..., 0]
-        return tokens_new, points
+        return tokens_new, points, True
 
+    def apply_pc_augment(self, points, normals):
+        # points: (N, 3)
+        # augment the points
+        # 4. random jitter with gaussian noise
+        noise = np.random.normal(0, self.point_augment_intensity, points.shape)
+        points = points + noise
+        noise = np.random.normal(0, self.point_augment_intensity, points.shape)
+        normals = normals + noise
+        normals = normals / (np.linalg.norm(normals, axis=1, keepdims=True) + 1e-6)
+        return points, normals
+
+    def downsample_pc(self, points, normals):
+        # points: (N, 3)
+        # downsample the points
+        # 1. random sample self.pc_shape points
+        indices = np.random.choice(len(points), self.pc_shape, replace=False)
+        points = points[indices]
+        normals = normals[indices]
+        return points, normals
 
     def reordering(self, tokens, poles, graph):
 
@@ -314,6 +360,11 @@ class dataset_compound_tokenize_all(Dataset):
 
         points = np.array(npz_data['points'], dtype=np.float32)  # (N_i, 3)
         normals = np.array(npz_data['normals'], dtype=np.float32)  # List of arrays, each (N_i, 3)
+
+        if self.point_augment:
+            points, normals = self.apply_pc_augment(points, normals)
+        if self.pc_shape != len(points):
+            points, normals = self.downsample_pc(points, normals)
 
         if len(points.shape) != 2:
             solid_valid = False
@@ -446,8 +497,9 @@ class dataset_compound_tokenize_all(Dataset):
 
         # Do the augmentaion if needed
         if self.rotation_augment:
-            all_tokens, points = self.apply_rotation_augment(all_tokens, points)
-
+            all_tokens, points, solid_valid = self.apply_rotation_augment(all_tokens, points)
+            if not solid_valid:
+                return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, solid_valid
         all_tokens = np.stack(all_tokens, axis=0)
         all_tokens = self.warp_codes(all_tokens)
 
@@ -464,14 +516,48 @@ class dataset_compound_tokenize_all(Dataset):
 
 class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
     # TODO: add rotation augmentation
-    def __init__(self, cache_file: str, rts_codebook_dir: str, max_tokens: int = 1000, canonical: bool = True, detect_closed: bool = False, bspline_fit_threshold: float = 1e-2, codebook_size=1024, replica=1, rotation_augment: bool = False):
-        super().__init__('', rts_codebook_dir, max_tokens, canonical, detect_closed, bspline_fit_threshold, codebook_size, replica, rotation_augment)
+    def __init__(self, cache_file: str, rts_codebook_dir: str, max_tokens: int = 1000, canonical: bool = True, detect_closed: bool = False, bspline_fit_threshold: float = 1e-2, codebook_size=1024, replica=1, rotation_augment: bool = False, point_augment: bool = False, point_augment_intensity: float = 0.005, pc_shape: int = 16384, replace_file_header='', emphasize_long=False):
+        super().__init__('', rts_codebook_dir, max_tokens, canonical, detect_closed, bspline_fit_threshold, codebook_size, replica, rotation_augment, point_augment, point_augment_intensity, pc_shape)
         self.cache_file = cache_file
         self.data = pickle.load(open(self.cache_file, 'rb'))
         self.npz_path = self.data['npz_path']
+        self.replace_file_header = replace_file_header
+        if self.replace_file_header != '':
+            self.npz_path = [p.replace('/data/ssd/CAD/data/abc_step_pc', self.replace_file_header) for p in self.npz_path]
+
         self.tokens = self.data['tokens']
         self.poles = self.data['poles']
+
+        self._npz_path = []
+        self._tokens = []
+        self._poles = []
+        self.emphasize_long = emphasize_long
+        print(f"Length of original dataset: {len(self.npz_path)}")
+        if self.emphasize_long:
+            print(f"Emphasizing long tokens, 1.5 repeat for > 400 tokens, after 100 epochs")
+        for i in range(len(self.npz_path)):
+            token_length = len(self.tokens[i])
+            if token_length < 100:
+                repeat = 0
+
+            elif token_length >= 100 and token_length < 200:
+                repeat = 1
+            elif token_length >= 200 and token_length < 400:
+                repeat = 2
+            elif token_length >= 400 and token_length < 600:
+                repeat = 4
+            elif token_length >= 600:
+                repeat = 8
+
+            if self.emphasize_long and token_length >= 400:
+                repeat = int(repeat * 1.5)
+
+            self._npz_path.extend([self.npz_path[i]] * repeat)
+            self._tokens.extend([self.tokens[i]] * repeat)
+            self._poles.extend([self.poles[i]] * repeat)
+        print(f"Length of augmented dataset: {len(self._npz_path)}")
         self.json_names = [p.replace('.npz', '.json') for p in self.npz_path]
+        
 
     def __len__(self):
         return len(self.npz_path) * int(self.replica)
@@ -485,6 +571,12 @@ class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
 
         points = np.array(npz_data['points'], dtype=np.float32)  # (N_i, 3)
         normals = np.array(npz_data['normals'], dtype=np.float32)  # List of arrays, each (N_i, 3)
+
+        if self.point_augment:
+            points, normals = self.apply_pc_augment(points, normals)
+        if self.pc_shape != len(points):
+            points, normals = self.downsample_pc(points, normals)
+
         nodes = npz_data['graph_nodes']
         edges = npz_data['graph_edges']
         graph = nx.Graph()
@@ -493,9 +585,31 @@ class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
         
         
         tokens = self.tokens[idx % len(self.tokens)]
+
+        all_tokens_padded = np.zeros((self.max_tokens), dtype=int) + self.pad_id
+        all_bspline_poles_padded = np.zeros((self.max_num_surfaces, 4, 4, 4), dtype=np.float32)
+        all_bspline_valid_mask = np.zeros((self.max_num_surfaces), dtype=bool)
+
         if self.rotation_augment:
+            trys = 5
             tokens = self.unwarp_codes(tokens)
-            tokens, points = self.apply_rotation_augment(tokens, points)
+            while trys > 0:
+                tokens_new, points_new, solid_valid_new = self.apply_rotation_augment(tokens, points)
+                if not solid_valid_new:
+                    trys -= 1
+                    continue
+                else:
+                    break
+            if solid_valid_new:
+                tokens = tokens_new
+                points = points_new
+                solid_valid = solid_valid_new
+            else:
+                points = np.zeros((16384, 3), dtype=np.float32)
+                normals = np.zeros((16384, 3), dtype=np.float32)
+                solid_valid = False
+                return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, solid_valid
+
             tokens = self.warp_codes(tokens)
 
         
@@ -508,9 +622,7 @@ class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
 
 
 
-        all_tokens_padded = np.zeros((self.max_tokens), dtype=int) + self.pad_id
-        all_bspline_poles_padded = np.zeros((self.max_num_surfaces, 4, 4, 4), dtype=np.float32)
-        all_bspline_valid_mask = np.zeros((self.max_num_surfaces), dtype=bool)
+        
 
         all_tokens_padded[:len(tokens)] = tokens
         all_bspline_poles_padded[:len(poles)] = poles
@@ -526,13 +638,32 @@ class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
 
 
 if __name__ == '__main__':
-    dataset = dataset_compound_tokenize_all(json_dir='../data/abc_step_pc_0009', rts_codebook_dir='./assets/codebook', bspline_fit_threshold=1e-2)
+    # dataset = dataset_compound_tokenize_all(json_dir='../data/abc_step_pc_0009', rts_codebook_dir='./assets/codebook', bspline_fit_threshold=1e-2)
     
-    # for data in tqdm(dataset):
-    for idx in tqdm(range(len(dataset))):
-        points_list, normals_list, masks_list, tokens, bspline_poles, valid = dataset[idx]
+    # # for data in tqdm(dataset):
+    # for idx in tqdm(range(len(dataset))):
+    #     points_list, normals_list, masks_list, tokens, bspline_poles, valid = dataset[idx]
         
-        if valid:
-            surfaces = dataset.detokenize(tokens, bspline_poles)
-            print()
-    
+    #     if valid:
+    #         surfaces = dataset.detokenize(tokens, bspline_poles)
+    #         print()
+    import sys
+    from pathlib import Path
+    sys.path.append(str(Path(__file__).parent.parent))
+    from src.utils.import_tools import load_dataset_from_config
+    from omegaconf import OmegaConf
+
+    config = OmegaConf.load('./src/configs/gpt/gpt_0102_michel_A800.yaml')
+    dataset = load_dataset_from_config(config, section='data_train')
+    num_rot_aug_invalid = 0
+    num_total_invalid = 0
+    for idx in tqdm(range(1000)):
+        print(idx)
+        data = dataset[idx]
+        if data[-1] == -2:
+            num_rot_aug_invalid += 1
+        if data[-1] != True:
+            num_total_invalid += 1
+
+    print(num_rot_aug_invalid)
+    print(num_total_invalid)

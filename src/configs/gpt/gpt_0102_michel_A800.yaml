@@ -1,10 +1,10 @@
 trainer:
     # Model and training config names
     model_name: "GPT_INIT_142M"  # change to "Samba_1.3B" for 1.3B model
-    train_config: "train_1229_cache_79"  # change to "tsz512x4k_100B" for 1.3B model
+    train_config: "train_0102_cache_excl-029"  # change to "tsz512x4k_100B" for 1.3B model
     train_name: "first_try_20_epochs"
     # Output directory
-    out_dir: "/data/ssd/CAD/checkpoints/GPT_INIT_142M/train0/"
+    out_dir: "/deemos-research-area-d/meshgen/cad/checkpoints/GPT_INIT_142M/train0/"
     
   
     use_sample_dataset: false  # 是否使用自定义的 Sample_Dataset（不做 padding，变长样本以 list 组织）
@@ -22,13 +22,13 @@ trainer:
     
     # Training hyperparameters
     max_tokens: 1e9
-    global_batch_size: 128
-    micro_batch_size: 16
+    global_batch_size: 1280
+    micro_batch_size: 80
     learning_rate: 1e-4
     total_evals: 400
     warmup_tokens: null  # will be calculated as int(max_tokens * 0.05) at runtime
     log_step_interval: 10
-    save_step_interval: 15000
+    save_step_interval: 5000
     eval_step_interval: 100000000000000
     num_extrapol: 4
     
@@ -41,7 +41,7 @@ trainer:
     min_lr: 1e-5
     
     # Training epochs
-    num_epochs: 20
+    num_epochs: 200
     
     # Note: batch_size and gradient_accumulation_steps are calculated at runtime:
     # batch_size = global_batch_size // devices
@@ -101,7 +101,8 @@ data_train:
   name: src.dataset.dataset_v4_tokenize_all.dataset_compound_tokenize_all_cache
   params:
     # json_dir: /deemos-research-area-d/meshgen/cad_data/abc_step_pc/5
-    cache_file: /data/ssd/CAD/data/abc_step_pc/cache_9.pkl
+    cache_file: /deemos-research-area-d/meshgen/cad/data/abc_step_pc/cache_1345678_10surfs.pkl
+    replace_file_header: /deemos-research-area-d/meshgen/cad/data/abc_step_pc
     rts_codebook_dir: assets/codebook_scale_1.2
     max_tokens: 1000
     canonical: true
@@ -110,12 +111,17 @@ data_train:
     codebook_size: 1024
     replica: 1
     rotation_augment: true
+    point_augment: true
+    point_augment_intensity: 0.005
+    pc_shape: 16384
+    emphasize_long: true # 1.5 repeat for > 400 tokens, after 100 epochs
 
 data_val:
   name: src.dataset.dataset_v4_tokenize_all.dataset_compound_tokenize_all_cache
   params:
     # json_dir: /deemos-research-area-d/meshgen/cad_data/abc_step_pc/5
-    cache_file: /data/ssd/CAD/data/abc_step_pc/cache_6.pkl
+    cache_file: /deemos-research-area-d/meshgen/cad/data/abc_step_pc/cache_0.pkl
+    replace_file_header: /deemos-research-area-d/meshgen/cad/data/abc_step_pc
     rts_codebook_dir: assets/codebook_scale_1.2
     max_tokens: 1000
     canonical: true
@@ -124,4 +130,6 @@ data_val:
     codebook_size: 1024
     replica: 1
     rotation_augment: false
-
+    point_augment: true
+    point_augment_intensity: 0.005
+    pc_shape: 16384

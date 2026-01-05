@@ -1,56 +1,56 @@
 trainer:
-  # Model and training config names
-  model_name: "GPT_INIT_142M"  # change to "Samba_1.3B" for 1.3B model
-  train_config: "debug"  # change to "tsz512x4k_100B" for 1.3B model
+    # Model and training config names
+    model_name: "GPT_INIT_142M"  # change to "Samba_1.3B" for 1.3B model
+    train_config: "debug"  # change to "tsz512x4k_100B" for 1.3B model
+    
+    # Output directory
+    out_dir: "/deemos-research-area-d/CADgen/CLR-Wire/out/GPT_INIT_142M/debug2/"
+    
   
-  # Output directory
-  out_dir: "/deemos-research-area-d/CADgen/CLR-Wire/out/GPT_INIT_142M/debug2/"
+    use_sample_dataset: false  # 是否使用自定义的 Sample_Dataset（不做 padding，变长样本以 list 组织）
+    
+    # ShapeVAE Conditioner 训练配置
+    freeze_conditioner: false  # 是否冻结 conditioner（False 表示解锁训练）
+    conditioner_lr_scale: 1.0  # conditioner 的学习率倍率（相对于主学习率），通常 pretrained 模型微调时使用较小的学习率
+    
+    # Checkpoint 配置
+    # FSDP state_dict 类型：
+    #   - "full": 完整 state dict（兼容性好，但保存/加载慢，20G ckpt 可能需要几分钟）
+    #   - "sharded": 分片 state dict（快，但 checkpoint 分散在多个文件）
+    # 注意：切换类型后，旧的 checkpoint 可能无法加载
+    fsdp_state_dict_type: "full"  # 默认使用 full 保持兼容性
+    
+    # Training hyperparameters
+    max_tokens: 1e9
+    global_batch_size: 16
+    micro_batch_size: 4
+    learning_rate: 1e-4
+    total_evals: 400
+    warmup_tokens: null  # will be calculated as int(max_tokens * 0.05) at runtime
+    log_step_interval: 10
+    save_step_interval: 150
+    eval_step_interval: 100000000000000
+    num_extrapol: 4
+    
+    # Optimizer parameters
+    weight_decay: 1e-1
+    beta1: 0.9
+    beta2: 0.95
+    grad_clip: 1.0
+    decay_lr: true
+    min_lr: 1e-5
+    
+    # Training epochs
+    num_epochs: 20
+    
+    # Note: batch_size and gradient_accumulation_steps are calculated at runtime:
+    # batch_size = global_batch_size // devices
+    # gradient_accumulation_steps = batch_size // micro_batch_size
   
-
-  use_sample_dataset: false  # 是否使用自定义的 Sample_Dataset（不做 padding，变长样本以 list 组织）
   
-  # ShapeVAE Conditioner 训练配置
-  freeze_conditioner: false  # 是否冻结 conditioner（False 表示解锁训练）
-  conditioner_lr_scale: 1.0  # conditioner 的学习率倍率（相对于主学习率），通常 pretrained 模型微调时使用较小的学习率
   
-  # Checkpoint 配置
-  # FSDP state_dict 类型：
-  #   - "full": 完整 state dict（兼容性好，但保存/加载慢，20G ckpt 可能需要几分钟）
-  #   - "sharded": 分片 state dict（快，但 checkpoint 分散在多个文件）
-  # 注意：切换类型后，旧的 checkpoint 可能无法加载
-  fsdp_state_dict_type: "full"  # 默认使用 full 保持兼容性
   
-  # Training hyperparameters
-  max_tokens: 1e9
-  global_batch_size: 32
-  micro_batch_size: 1
-  learning_rate: 1e-4
-  total_evals: 400
-  warmup_tokens: null  # will be calculated as int(max_tokens * 0.05) at runtime
-  log_step_interval: 10
-  save_step_interval: 150
-  eval_step_interval: 100000000000000
-  num_extrapol: 4
   
-  # Optimizer parameters
-  weight_decay: 1e-1
-  beta1: 0.9
-  beta2: 0.95
-  grad_clip: 1.0
-  decay_lr: true
-  min_lr: 1e-5
-  
-  # Training epochs
-  num_epochs: 20
-  
-  # Note: batch_size and gradient_accumulation_steps are calculated at runtime:
-  # batch_size = global_batch_size // devices
-  # gradient_accumulation_steps = batch_size // micro_batch_size
-
-
-
-
-
 model: 
   name: lit_gpt.model.GPT
   params:
@@ -98,10 +98,10 @@ vae:
 
 data_train:
   # name: src.dataset.dataset_v4_tokenize_all.dataset_compound_tokenize_all_cache
-  name: src.dataset.dataset_v4_tokenize_all.dataset_compound_tokenize_all_cache
+  name: src.dataset.dataset_v4_tokenize_all.dataset_compound_tokenize_all
   params:
-    # json_dir: /deemos-research-area-d/meshgen/cad_data/abc_step_pc/5
-    cache_file: /deemos-research-area-d/meshgen/cad_data/caches/test.pkl
+    json_dir: /deemos-research-area-d/meshgen/cad_data/abc_step_pc/
+    # cache_file: /deemos-research-area-d/meshgen/cad_data/caches/test.pkl
     rts_codebook_dir: assets/codebook_scale_1.2
     max_tokens: 1000
     canonical: true
@@ -109,7 +109,7 @@ data_train:
     bspline_fit_threshold: 1e-2
     codebook_size: 1024
     replica: 10
-    rotation_augment: true
+    rotation_augment: false
 
 data_val:
   name: src.dataset.dataset_v4_tokenize_all.dataset_compound_tokenize_all_cache

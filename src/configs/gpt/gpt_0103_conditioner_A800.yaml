@@ -1,10 +1,10 @@
 trainer:
     # Model and training config names
-    model_name: "GPT_INIT_142M"  # change to "Samba_1.3B" for 1.3B model
-    train_config: "train_1229_cache_79"  # change to "tsz512x4k_100B" for 1.3B model
-    train_name: "first_try_20_epochs"
+    model_name: "GPT_INIT_142M_CONDITIONER"  # change to "Samba_1.3B" for 1.3B model
+    train_config: "train_0103_cache_excl-029"  # change to "tsz512x4k_100B" for 1.3B model
+    train_name: "train0"
     # Output directory
-    out_dir: "/data/ssd/CAD/checkpoints/GPT_INIT_142M/train0/"
+    out_dir: "/deemos-research-area-d/meshgen/cad/checkpoints/GPT_INIT_142M_CONDITIONER/train0/"
     
   
     use_sample_dataset: false  # 是否使用自定义的 Sample_Dataset（不做 padding，变长样本以 list 组织）
@@ -18,17 +18,17 @@ trainer:
     #   - "full": 完整 state dict（兼容性好，但保存/加载慢，20G ckpt 可能需要几分钟）
     #   - "sharded": 分片 state dict（快，但 checkpoint 分散在多个文件）
     # 注意：切换类型后，旧的 checkpoint 可能无法加载
-    fsdp_state_dict_type: "full"  # 默认使用 full 保持兼容性
+    fsdp_state_dict_type: full  # 默认使用 full 保持兼容性
     
     # Training hyperparameters
     max_tokens: 1e9
-    global_batch_size: 128
-    micro_batch_size: 16
+    global_batch_size: 896
+    micro_batch_size: 112
     learning_rate: 1e-4
     total_evals: 400
     warmup_tokens: null  # will be calculated as int(max_tokens * 0.05) at runtime
     log_step_interval: 10
-    save_step_interval: 15000
+    save_step_interval: 2500
     eval_step_interval: 100000000000000
     num_extrapol: 4
     
@@ -41,7 +41,7 @@ trainer:
     min_lr: 1e-5
     
     # Training epochs
-    num_epochs: 20
+    num_epochs: 100
     
     # Note: batch_size and gradient_accumulation_steps are calculated at runtime:
     # batch_size = global_batch_size // devices
@@ -75,11 +75,12 @@ model:
       _mlp_class: LLaMAMLP
       intermediate_size: 3072
       condense_ratio: 1
-    use_michelangelo: true
-    michelangelo_config_path: ./third_party/Michelangelo/configs/aligned_shape_latents/shapevae-256.yaml
-    michelangelo_ckpt_path: ./third_party/Michelangelo/checkpoints/aligned_shape_latents/shapevae-256.ckpt
+    use_michelangelo: false
+    # michelangelo_config_path: ./third_party/Michelangelo/configs/aligned_shape_latents/shapevae-256.yaml
+    # michelangelo_ckpt_path: ./third_party/Michelangelo/checkpoints/aligned_shape_latents/shapevae-256.ckpt
 
-    build_conditioner: false
+
+    build_conditioner: true
     freeze_conditioner: false
 
 vae:
@@ -101,7 +102,8 @@ data_train:
   name: src.dataset.dataset_v4_tokenize_all.dataset_compound_tokenize_all_cache
   params:
     # json_dir: /deemos-research-area-d/meshgen/cad_data/abc_step_pc/5
-    cache_file: /data/ssd/CAD/data/abc_step_pc/cache_9.pkl
+    cache_file: /deemos-research-area-d/meshgen/cad/data/abc_step_pc/cache_1345678_10surfs.pkl
+    replace_file_header: /deemos-research-area-d/meshgen/cad/data/abc_step_pc
     rts_codebook_dir: assets/codebook_scale_1.2
     max_tokens: 1000
     canonical: true
@@ -110,12 +112,17 @@ data_train:
     codebook_size: 1024
     replica: 1
     rotation_augment: true
+    point_augment: true
+    point_augment_intensity: 0.005
+    pc_shape: 16384
+    emphasize_long: false
 
 data_val:
   name: src.dataset.dataset_v4_tokenize_all.dataset_compound_tokenize_all_cache
   params:
     # json_dir: /deemos-research-area-d/meshgen/cad_data/abc_step_pc/5
-    cache_file: /data/ssd/CAD/data/abc_step_pc/cache_6.pkl
+    cache_file: /deemos-research-area-d/meshgen/cad/data/abc_step_pc/cache_0.pkl
+    replace_file_header: /deemos-research-area-d/meshgen/cad/data/abc_step_pc
     rts_codebook_dir: assets/codebook_scale_1.2
     max_tokens: 1000
     canonical: true
@@ -123,5 +130,7 @@ data_val:
     bspline_fit_threshold: 1e-2
     codebook_size: 1024
     replica: 1
-    rotation_augment: false
-
+    rotation_augment: true
+    point_augment: true
+    point_augment_intensity: 0.005
+    pc_shape: 16384

@@ -18,7 +18,7 @@ data_train:
   # name: src.dataset.dataset_v4_tokenize_all.dataset_compound_tokenize_all_cache
   name: src.dataset.dataset_v4_tokenize_all.dataset_compound_tokenize_all
   params:
-    json_dir: /data/ssd/CAD/data/abc_step_pc/6
+    json_dir: /data/ssd/CAD/data/abc_step_pc/4
     # cache_file: /deemos-research-area-d/meshgen/cad_data/caches/test.pkl
     rts_codebook_dir: assets/codebook_scale_1.2
     max_tokens: 1000
@@ -26,7 +26,7 @@ data_train:
     detect_closed: false
     bspline_fit_threshold: 1e-2
     codebook_size: 1024
-    replica: 10
+    replica: 1
     rotation_augment: false
 
 data_val:

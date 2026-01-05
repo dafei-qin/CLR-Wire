@@ -10,7 +10,7 @@ from typing import Optional
 import torch
 from tqdm.auto import tqdm
 import einops
-
+import json
 # Support running without installing as a package (match training script behavior)
 import sys
 wd = Path(__file__).parent.resolve()
@@ -27,12 +27,116 @@ import random
 from omegaconf import OmegaConf
 import polyscope as ps
 from PIL import Image
+import colorsys
 # Import model and config classes
 from lit_gpt.model import GPT, Config
 from src.utils.import_tools import load_model_from_config, load_dataset_from_config
 from src.utils.gpt_tools import tokenize_bspline_poles
 from sft.datasets.serializaitonDEEMOS import deserialize
 from myutils.surface import visualize_json_interset
+
+
+def save_surfaces_as_mesh(surfaces, output_path):
+    """
+    将 surfaces 转换为 mesh 并保存为 .obj 文件。
+    每个 surface 使用不同颜色以便区分。
+    
+    Args:
+        surfaces: 从 dataset.detokenize 返回的 surface 列表
+        output_path: 输出 .obj 文件路径
+    """
+    if not surfaces or len(surfaces) == 0:
+        print(f"Warning: No surfaces to save for {output_path}")
+        return
+    
+    # 使用 visualize_json_interset 获取 vertices 和 faces
+    vis_data = visualize_json_interset(surfaces, plot=False, plot_gui=False, tol=1e-5, ps_header="")
+    
+    if not vis_data or len(vis_data) == 0:
+        print(f"Warning: No visualization data generated for {output_path}")
+        return
+    
+    # 生成颜色列表（使用不同颜色区分每个 surface）
+    num_surfaces = len(vis_data)
+    colors = generate_distinct_colors(num_surfaces)
+    
+    mesh_list = []
+    for i, (surface_key, surface_data) in enumerate(vis_data.items()):
+        if 'vertices' in surface_data and 'faces' in surface_data:
+            vertices = surface_data['vertices']
+            faces = surface_data['faces']
+            
+            # 确保 vertices 和 faces 是 numpy 数组
+            if isinstance(vertices, torch.Tensor):
+                vertices = vertices.detach().cpu().numpy()
+            if isinstance(faces, torch.Tensor):
+                faces = faces.detach().cpu().numpy()
+            
+            # 创建 trimesh mesh
+            try:
+                mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
+                
+                # 设置面颜色
+                if mesh.visual.kind is None:
+                    mesh.visual = trimesh.visual.ColorVisuals()
+                
+                # 为每个面设置颜色
+                face_colors = np.tile(colors[i], (len(mesh.faces), 1))
+                mesh.visual.face_colors = face_colors
+                
+                mesh_list.append(mesh)
+            except Exception as e:
+                print(f"Warning: Failed to create mesh for surface {i} (key: {surface_key}): {e}")
+                continue
+    
+    if len(mesh_list) == 0:
+        print(f"Warning: No valid meshes to save for {output_path}")
+        return
+    
+    # 合并所有 mesh
+    try:
+        combined_mesh = trimesh.util.concatenate(mesh_list)
+        
+        # 确保输出路径是 .obj 格式
+        output_path = Path(output_path)
+        if output_path.suffix.lower() != '.obj':
+            output_path = output_path.with_suffix('.obj')
+        
+        # 保存 mesh
+        combined_mesh.export(str(output_path))
+        print(f"  Mesh保存到: {output_path} (包含 {len(mesh_list)} 个 surfaces)")
+    except Exception as e:
+        print(f"Error: Failed to save mesh to {output_path}: {e}")
+
+
+def generate_distinct_colors(num_colors):
+    """
+    生成一组易于区分的颜色。
+    
+    Args:
+        num_colors: 需要生成的颜色数量
+    
+    Returns:
+        numpy array of shape (num_colors, 4) with RGBA values in [0, 255]
+    """
+    if num_colors == 0:
+        return np.array([])
+    
+    # 使用 HSV 色彩空间生成均匀分布的颜色
+    colors = []
+    for i in range(num_colors):
+        hue = i / num_colors
+        saturation = 0.7 + 0.3 * (i % 2)  # 交替使用高饱和度和中等饱和度
+        value = 0.8 + 0.2 * ((i // 2) % 2)  # 交替使用亮度和中等亮度
+        
+        # 转换为 RGB
+        rgb = colorsys.hsv_to_rgb(hue, saturation, value)
+        
+        # 转换为 [0, 255] 范围并添加 alpha
+        rgba = [int(c * 255) for c in rgb] + [255]
+        colors.append(rgba)
+    
+    return np.array(colors, dtype=np.uint8)
 
 
 def visualize_points(all_points, radius=0.002):
@@ -152,6 +256,8 @@ def render_three_views(surfaces, all_points, base_output_path, view_distance=5.0
             if 'vertices' in surface_data and 'faces' in surface_data:
                 vertices = surface_data['vertices']
                 faces = surface_data['faces']
+                if vertices.shape[0] == 0:
+                    continue
                 surface_index = surface_data.get('surface_index', 0)
                 surface_type = surface_data.get('surface_type', 'unknown')
                 ps.register_surface_mesh(
@@ -468,6 +574,7 @@ def main():
                        help="Number of samples to process")
     parser.add_argument("--start_idx", type=int, default=300000,
                        help="Starting index of samples to process")
+    parser.add_argument("--do_inference", type=str, default='True', help="Whether to do inference")
     parser.add_argument("--output_dir", type=str, default="meshes/TestData_1201_NoScaleUp_50k_no_dynamic_window",
                        help="Output directory")
     args = parser.parse_args()
@@ -495,6 +602,7 @@ def main():
 
     # 加载模型
     print("加载模型...")
+    args.do_inference = args.do_inference.lower() == 'true'
     model = load_model(
         args.ckpt, 
         config_dict=config_dict,
@@ -513,94 +621,123 @@ def main():
     end_idx = min(args.start_idx + args.num_samples, len(dataset))
     print(f"处理样本 {args.start_idx} 到 {end_idx-1}...")
     random.seed(928)
+    
+    num_iter = os.path.basename(args.ckpt).split('-')[1]
+    
 
 
 
-    for idd in range(args.num_samples * 2):
+
+    for idx in range(args.start_idx, end_idx):
         # idx  = nums[idd]
-        idx = idd % args.num_samples
+        # idx = idd % args.num_samples
         print(f"\n处理样本 {idx}/{end_idx-1}...")
 
         # 获取样本数据
 
-        train_data = dataset[idx]
-        train_data = [_t[train_data[-1]] for _t in train_data[:-1]]
-        train_data = [torch.from_numpy(_t).to(args.device) for _t in train_data]
-        points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask = train_data
-        all_tokens_padded = tokenize_bspline_poles(vae, dataset, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask)
+        for j in range(1):
+            # 4 times of augmentation
 
-        pc = torch.cat([points, normals], dim=-1)
+            train_data = dataset[idx]
+            if train_data[-1] != True:
+                print(f'invalid sample found for idx: {idx} with batch {j}')
+                continue
+            train_data = [_t[train_data[-1]] for _t in train_data[:-1]]
+            train_data = [torch.from_numpy(_t).to(args.device) for _t in train_data]
+            points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask = train_data
+            all_tokens_padded = tokenize_bspline_poles(vae, dataset, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask)
 
-        if pc.dim() == 2:
-            pc = pc.unsqueeze(0)
+            pc = torch.cat([points, normals], dim=-1)
 
-
-        # 保存单份点云（可选）
-        if pc is not None:
-            ply_filename = f'{output_dir}/{idd}_pc_sample_{idx}.ply'
-            pointcloud = trimesh.points.PointCloud(pc[0].detach().cpu().numpy()[..., :3])
-            pointcloud.export(ply_filename)
-            print(f"  点云保存到: {ply_filename}")
-        
-        pred_path = output_dir / f'{idd}_sample_{idx}_pred.png'
-        gt_path = output_dir / f'{idd}_sample_{idx}_gt.png'
-        pc_path = output_dir / f'{idd}_sample_{idx}_pc.png'
-
-        target_dtype = next(model.conditioner.parameters()).dtype if hasattr(model, "conditioner") and model.conditioner is not None else next(model.parameters()).dtype
-        pc = pc.to(args.device, dtype=target_dtype)
-
-        # ===== 批量推理：把起始 token 和点云在 batch 维复制 4 份，同时解码 =====
-        B = 4
-        tokens_batch = generate_with_kvcache(
-            model,
-            start_token_id=dataset.start_id,
-            pc=pc,  # 函数内部会扩成 [B, N, C]
-            max_new_tokens=args.max_new_tokens,
-            max_seq_length=args.max_seq_len,
-            temperature=args.temperature,
-            batch_size=B,
-            eos_token_id=dataset.end_id
-        )
-
-        # 生成并保存每个 batch 的 mesh
-        for b in range(B):
-            tokens = tokens_batch[b]
-            tokens = torch.tensor(tokens).to(args.device)
-            
-
-            tokens_unwarp = dataset.unwarp_codes(tokens)
-
-            # bspline_tokens_recovered = []
-            bspline_poles_for_detok = detokenize_bspline_poles(vae, tokens_unwarp)
-            # detok_surfaces = dataset.detokenize(tokens, bspline_poles_for_detok)
+            if pc.dim() == 2:
+                pc = pc.unsqueeze(0)
 
 
-            tokens_gt = all_tokens_padded[0]
-            tokens_gt = tokens_gt[~(tokens_gt == dataset.pad_id)]
-            tokens_gt_unwarp = dataset.unwarp_codes(tokens_gt)
-            bspline_poles_for_detok_gt = detokenize_bspline_poles(vae, tokens_gt_unwarp)
+            # 保存单份点云（可选）
+            if pc is not None:
+                ply_filename = f'{output_dir}/{idx}_batch_{j}.ply'
+                pointcloud = trimesh.points.PointCloud(pc[0].detach().cpu().numpy()[..., :3])
+                pointcloud.export(ply_filename)
+                print(f"  点云保存到: {ply_filename}")
 
-            tokens = tokens.cpu()
-            tokens_gt = tokens_gt.cpu()
-            bspline_poles_for_detok = bspline_poles_for_detok.cpu().numpy()
-            bspline_poles_for_detok_gt = bspline_poles_for_detok_gt.cpu().numpy()
-            surfaces_pred = dataset.detokenize(tokens.numpy(), bspline_poles_for_detok)
-            surfaces_gt = dataset.detokenize(tokens_gt.numpy(), bspline_poles_for_detok_gt)
+            target_dtype = next(model.conditioner.parameters()).dtype if hasattr(model, "conditioner") and model.conditioner is not None else next(model.parameters()).dtype
+            pc = pc.to(args.device, dtype=target_dtype)
+
+            # ===== 批量推理：把起始 token 和点云在 batch 维复制 4 份，同时解码 =====
+            B = 2
+            print('do_inference: ', args.do_inference)
+            if args.do_inference:
+                tokens_batch = generate_with_kvcache(
+                    model,
+                    start_token_id=dataset.start_id,
+                    pc=pc,  # 函数内部会扩成 [B, N, C]
+                    max_new_tokens=args.max_new_tokens,
+                    max_seq_length=args.max_seq_len,
+                    temperature=args.temperature,
+                    batch_size=B,
+                    eos_token_id=dataset.end_id
+                )
+            else:
+                tokens_batch = None
+
+            # 生成并保存每个 batch 的 mesh
+            for b in range(1):
+                if tokens_batch is None:
+                    tokens =  all_tokens_padded[0]
+                    tokens = tokens[~(tokens == dataset.pad_id)]
+                else:
+                    tokens = tokens_batch[b]
+                tokens = torch.tensor(tokens).to(args.device)
+                
+
+                tokens_unwarp = dataset.unwarp_codes(tokens)
+
+                # bspline_tokens_recovered = []
+                bspline_poles_for_detok = detokenize_bspline_poles(vae, tokens_unwarp)
+                # detok_surfaces = dataset.detokenize(tokens, bspline_poles_for_detok)
 
 
-            # Extract base path without extension for three views
-            pred_base = str(pred_path).replace('.png', '')
-            gt_base = str(gt_path).replace('.png', '')
-            pc_base = str(pc_path).replace('.png', '')
-            
-            # Render three views for each type
-            pred_paths = render_three_views(surfaces_pred, None, pred_base)
-            gt_paths = render_three_views(surfaces_gt, None, gt_base)
-            pc_paths = render_three_views(None, pc[0, ..., :3].detach().cpu().numpy(), pc_base)
-            
-            # Create 3x3 grid combining all views
-            grid_output_path = output_dir / f'{idd}_sample_{idx}_grid.jpg'
-            create_three_views_grid(pc_paths, gt_paths, pred_paths, str(grid_output_path))
+                tokens_gt = all_tokens_padded[0]
+                tokens_gt = tokens_gt[~(tokens_gt == dataset.pad_id)]
+                tokens_gt_unwarp = dataset.unwarp_codes(tokens_gt)
+                bspline_poles_for_detok_gt = detokenize_bspline_poles(vae, tokens_gt_unwarp)
+
+                tokens = tokens.cpu()
+                tokens_gt = tokens_gt.cpu()
+                bspline_poles_for_detok = bspline_poles_for_detok.cpu().numpy()
+                bspline_poles_for_detok_gt = bspline_poles_for_detok_gt.cpu().numpy()
+                surfaces_pred = dataset.detokenize(tokens.numpy(), bspline_poles_for_detok)
+                surfaces_gt = dataset.detokenize(tokens_gt.numpy(), bspline_poles_for_detok_gt)
+
+                # 保存 surfaces 到 json 文件
+                pred_json_path = output_dir / f'{idx}_batch_{j}_pred_iter_{num_iter}.json'
+                gt_json_path = output_dir / f'{idx}_batch_{j}_gt_iter_{num_iter}.json'
+                with open(pred_json_path, 'w') as f:
+                    json.dump(surfaces_pred, f)
+                with open(gt_json_path, 'w') as f:
+                    json.dump(surfaces_gt, f)
+
+                # 保存 mesh 到 .obj 文件
+                pred_mesh_path = output_dir / f'{idx}_batch_{j}_pred_iter_{num_iter}.obj'
+                gt_mesh_path = output_dir / f'{idx}_batch_{j}_gt_iter_{num_iter}.obj'
+                
+                save_surfaces_as_mesh(surfaces_pred, str(pred_mesh_path))
+                if b == 0:
+                    save_surfaces_as_mesh(surfaces_gt, str(gt_mesh_path))
+
+                # 渲染三视图
+                pred_base = str(output_dir / f'{idx}_pred_iter_{num_iter}').replace('.png', '')
+                gt_base = str(output_dir / f'{idx}_gt_iter_{num_iter}').replace('.png', '')
+                pc_base = str(output_dir / f'{idx}_pc_iter_{num_iter}').replace('.png', '')
+                
+                # Render three views for each type
+                pred_paths = render_three_views(surfaces_pred, None, pred_base)
+                gt_paths = render_three_views(surfaces_gt, None, gt_base)
+                pc_paths = render_three_views(None, pc[0, ..., :3].detach().cpu().float().numpy(), pc_base)
+                
+                # Create 3x3 grid combining all views
+                grid_output_path = output_dir / f'{idx}_batch_{j}_grid_iter_{num_iter}.jpg'
+                create_three_views_grid(pc_paths, gt_paths, pred_paths, str(grid_output_path))
 
 
     print(f"\n批量处理完成! 结果保存在 {output_dir}")
