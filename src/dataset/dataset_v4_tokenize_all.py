@@ -594,8 +594,8 @@ class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
             if self.inference:
                 repeat = 0
 
-            print(repeat)
-            print(self.inference)
+            # print(repeat)
+            # print(self.inference)
             self._npz_path.extend([self.npz_path[i]] * repeat)
             self._tokens.extend([self.tokens[i]] * repeat)
             self._poles.extend([self.poles[i]] * repeat)
@@ -603,7 +603,7 @@ class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
         self.npz_path = self._npz_path
         self.tokens = self._tokens
         self.poles = self._poles
-        print(f"Length of augmented dataset: {len(self._npz_path)}")
+        print(f"Length of augmented dataset: {len(self.npz_path)}")
         self.json_names = [p.replace('.npz', '.json') for p in self.npz_path]
         
 
