@@ -571,33 +571,6 @@ class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
 
         print(f"Length of original dataset: {len(self.npz_path)}")
 
-
-        # for i in tqdm(range(len(self.npz_path))):
-
-        # Do the min_scale filtering during runtime
-
-        # for i in tqdm(range(10000)):
-        #     samples = self.samples_from_tokens(self.tokens[i], self.poles[i])
-        #     min_surface_scale = (samples.max(axis=(1, 2)) - samples.min(axis=(1, 2))).max(axis=-1)
-        #     min_surface_scale = min_surface_scale.min()
-        #     if min_surface_scale < self.min_surface_threshold:
-        #         continue
-        #     else:
-        #         self._npz_path.append(self.npz_path[i])
-        #         self._tokens.append(self.tokens[i])
-        #         self._poles.append(self.poles[i])
-
-        
-
-        # print(f"Length of dataset after min_scale filtering: {len(self._npz_path)}")
-
-        # self.npz_path = self._npz_path
-        # self.tokens = self._tokens
-        # self.poles = self._poles
-        # self._npz_path = []
-        # self._tokens = []
-        # self._poles = []
-
         if self.emphasize_long:
             print(f"Emphasizing long tokens, 1.5 repeat for > 400 tokens, after 100 epochs")
 
@@ -605,7 +578,6 @@ class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
             token_length = len(self.tokens[i])
             if token_length < 100:
                 repeat = 0
-
             elif token_length >= 100 and token_length < 200:
                 repeat = 1
             elif token_length >= 200 and token_length < 400:
@@ -681,8 +653,8 @@ class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
                 points = points_new
                 solid_valid = solid_valid_new
             else:
-                points = np.zeros((16384, 3), dtype=np.float32)
-                normals = np.zeros((16384, 3), dtype=np.float32)
+                points = np.zeros((self.pc_shape, 3), dtype=np.float32)
+                normals = np.zeros((self.pc_shape, 3), dtype=np.float32)
                 solid_valid = False
                 return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, solid_valid
 
@@ -692,7 +664,15 @@ class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
 
         # Do the reordering base on the rotated version
 
-        tokens, poles = self.reordering(self.unwarp_codes(tokens), poles, graph)
+        try:
+            tokens, poles = self.reordering(self.unwarp_codes(tokens), poles, graph)
+        except Exception as e:
+            print(f"Error in reordering: {e}")
+            if not os.path.exists('./assets/GPT_train'):
+                os.makedirs('./assets/GPT_train')
+            with open('./assets/GPT_train/error_reordering.txt', 'w') as f:
+                f.write(f"{self.npz_path[idx % len(self.npz_path)]}\n")
+            return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, False
         tokens = self.warp_codes(tokens)
 
 
