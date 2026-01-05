@@ -13,7 +13,7 @@ from typing import List, Optional, Tuple, Union
 import math
 import lightning as L
 import torch
-from lightning.fabric.strategies import FSDPStrategy
+from lightning.fabric.strategies import FSDPStrategy, DDPStrategy
 from torch.utils.data import DataLoader
 from functools import partial
 # support running without installing as a package
@@ -493,16 +493,17 @@ def setup(
     # 4) 创建 FSDPStrategy（初始化时就传入 ignored_modules）
     from torch.distributed.fsdp import BackwardPrefetch
     
-    strategy = FSDPStrategy(
-        auto_wrap_policy={Block},
-        state_dict_type=fsdp_state_dict_type,  # 可配置：full（慢但兼容）或 sharded（快）
-        ignored_modules=ignored if ignored else None,  # 如果为空则传 None
-        use_orig_params=True,
-        # cpu_offload=True,  # 可选：如果显存紧张，考虑开启
-        limit_all_gathers=True,  # 🔥 优化：限制 all-gather 操作，减少显存峰值
-        activation_checkpointing_policy={Block},  # 🔥 新增：activation checkpointing，减少50%激活值显存
-        backward_prefetch=BackwardPrefetch.BACKWARD_PRE,  # 🔥 优化：预取梯度，减少显存峰值
-    )
+    # strategy = FSDPStrategy(
+    #     auto_wrap_policy={Block},
+    #     state_dict_type=fsdp_state_dict_type,  # 可配置：full（慢但兼容）或 sharded（快）
+    #     ignored_modules=ignored if ignored else None,  # 如果为空则传 None
+    #     use_orig_params=True,
+    #     # cpu_offload=True,  # 可选：如果显存紧张，考虑开启
+    #     # limit_all_gathers=True,  # 🔥 优化：限制 all-gather 操作，减少显存峰值
+    #     # activation_checkpointing_policy={Block},  # 🔥 新增：activation checkpointing，减少50%激活值显存
+    #     # backward_prefetch=BackwardPrefetch.BACKWARD_PRE,  # 🔥 优化：预取梯度，减少显存峰值
+    # )
+    strategy = DDPStrategy(find_unused_parameters=False)
 
     # 5) 创建 Fabric 并 launch
     fabric = L.Fabric(
@@ -543,7 +544,13 @@ def main(fabric, model, vae, config_dict, train_data_dir, val_data_dir, resume, 
 
     fabric.print(f"Loading model with {config.__dict__}")
     fabric.print(f"Total parameters {num_parameters(model):,}")
+    if hasattr(model, "conditioner") and model.conditioner is not None:
+        fabric.print(f"Conditioner parameters {num_parameters(model.conditioner):,}")
+    if hasattr(model, "michel") and model.michel is not None:
+        fabric.print(f"Michel parameters {num_parameters(model.michel):,}")
     fabric.print(model)
+    for idx, (name, param) in enumerate(model.named_parameters()):
+        print(idx, name, param.shape)
 
     # 统一由 Fabric/FSDP 搬到各自 rank 的设备
     model = fabric.setup(model)
@@ -1127,7 +1134,7 @@ def create_dataloaders(
     train_dataloader = DataLoader(
         train_dataset,
         batch_size=batch_size,
-        num_workers=4,  # 增加 worker 数量（原来是4）
+        num_workers=8,  # 增加 worker 数量（原来是4）
         pin_memory=True,
         # collate_fn=collate_as_list,
         sampler=sampler,

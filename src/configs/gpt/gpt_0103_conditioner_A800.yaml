@@ -116,6 +116,7 @@ data_train:
     point_augment_intensity: 0.005
     pc_shape: 8192
     emphasize_long: false
+    min_surface_threshold: 0.01
 
 data_val:
   name: src.dataset.dataset_v4_tokenize_all.dataset_compound_tokenize_all_cache
@@ -134,3 +135,4 @@ data_val:
     point_augment: true
     point_augment_intensity: 0.005
     pc_shape: 8192
+    min_surface_threshold: 0.01

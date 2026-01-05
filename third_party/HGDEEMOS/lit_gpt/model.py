@@ -191,15 +191,15 @@ class GPT(nn.Module):
         else:
             if build_conditioner:
                 # 根据 config.yaml 创建 ShapeVAE（只使用明确指定的参数）
-                shapevae_width = 1024
+                shapevae_width = 512
                 self.conditioner = ShapeVAE(
-                    num_latents=512,
-                    embed_dim=64,
+                    num_latents=256,
+                    embed_dim=32,
                     num_freqs=8,
                     include_pi=False,
-                    heads=16,
+                    heads=8,
                     width=shapevae_width, # Changed from 1024 to 512
-                    num_encoder_layers=6,
+                    num_encoder_layers=8,
                     num_decoder_layers=8,
                     qkv_bias=False,
                     qk_norm=True,
@@ -208,9 +208,9 @@ class GPT(nn.Module):
                     geo_decoder_downsample_ratio=1,
                     geo_decoder_ln_post=True,
                     point_feats=3, # Changed from 4 to 3
-                    pc_size=16384, # Changed from 81920 to 16384
+                    pc_size=8192, # Changed from 81920 to 16384
                     pc_sharpedge_size=0,
-                    downsample_ratio=16, # Changed from 80 to 20
+                    downsample_ratio=8, # Changed from 80 to 20
                 )
                 
                 if freeze_conditioner:
@@ -584,12 +584,16 @@ class CausalSelfAttention(nn.Module):
         #     condense_ratio=self.config.condense_ratio,)
         
         cos, sin = rope
+        # print(cos.dtype)
+        # print(q.dtype)
 
         # apply rope in fp32 significanly stabalize training
         # fused rope expect (batch_size, seqlen, nheads, headdim)
-        q = apply_rotary_emb_func(q, cos, sin, False, True)
-        k = apply_rotary_emb_func(k, cos, sin, False, True)
+        q_fp32 = apply_rotary_emb_func(q.to(cos.dtype), cos, sin, False, True)
+        k_fp32 = apply_rotary_emb_func(k.to(cos.dtype), cos, sin, False, True)
         
+        q = q_fp32.to(q.dtype)
+        k = k_fp32.to(k.dtype)
         # n_elem = int(self.config.rotary_percentage * self.config.head_size)
     
         # q_roped = apply_rope(q[..., :n_elem], cos.repeat(1,2), sin.repeat(1,2))
