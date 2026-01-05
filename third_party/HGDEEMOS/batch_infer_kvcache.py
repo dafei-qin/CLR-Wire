@@ -635,7 +635,7 @@ def main():
 
         # 获取样本数据
 
-        for j in range(16):
+        for j in range(1):
             # 4 times of augmentation
 
             train_data = dataset[idx]

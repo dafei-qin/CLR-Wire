@@ -129,7 +129,7 @@ data_val:
     bspline_fit_threshold: 1e-2
     codebook_size: 1024
     replica: 1
-    rotation_augment: true
+    rotation_augment: false
     point_augment: true
     point_augment_intensity: 0.005
     pc_shape: 16384
