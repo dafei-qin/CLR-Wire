@@ -572,27 +572,31 @@ class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
         print(f"Length of original dataset: {len(self.npz_path)}")
 
 
-        for i in tqdm(range(len(self.npz_path))):
-            samples = self.samples_from_tokens(self.tokens[i], self.poles[i])
-            min_surface_scale = (samples.max(axis=(1, 2)) - samples.min(axis=(1, 2))).min(axis=-1)
-            min_surface_scale = min_surface_scale.min()
-            if min_surface_scale < self.min_surface_threshold:
-                continue
-            else:
-                self._npz_path.append(self.npz_path[i])
-                self._tokens.append(self.tokens[i])
-                self._poles.append(self.poles[i])
+        # for i in tqdm(range(len(self.npz_path))):
+
+        # Do the min_scale filtering during runtime
+
+        # for i in tqdm(range(10000)):
+        #     samples = self.samples_from_tokens(self.tokens[i], self.poles[i])
+        #     min_surface_scale = (samples.max(axis=(1, 2)) - samples.min(axis=(1, 2))).max(axis=-1)
+        #     min_surface_scale = min_surface_scale.min()
+        #     if min_surface_scale < self.min_surface_threshold:
+        #         continue
+        #     else:
+        #         self._npz_path.append(self.npz_path[i])
+        #         self._tokens.append(self.tokens[i])
+        #         self._poles.append(self.poles[i])
 
         
 
-        print(f"Length of dataset after min_scale filtering: {len(self.npz_path)}")
+        # print(f"Length of dataset after min_scale filtering: {len(self._npz_path)}")
 
-        self.npz_path = self._npz_path
-        self.tokens = self._tokens
-        self.poles = self._poles
-        self._npz_path = []
-        self._tokens = []
-        self._poles = []
+        # self.npz_path = self._npz_path
+        # self.tokens = self._tokens
+        # self.poles = self._poles
+        # self._npz_path = []
+        # self._tokens = []
+        # self._poles = []
 
         if self.emphasize_long:
             print(f"Emphasizing long tokens, 1.5 repeat for > 400 tokens, after 100 epochs")
@@ -647,11 +651,20 @@ class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
         
         
         tokens = self.tokens[idx % len(self.tokens)]
-
+        poles = self.poles[idx % len(self.poles)]
 
         all_tokens_padded = np.zeros((self.max_tokens), dtype=int) + self.pad_id
         all_bspline_poles_padded = np.zeros((self.max_num_surfaces, 4, 4, 4), dtype=np.float32)
         all_bspline_valid_mask = np.zeros((self.max_num_surfaces), dtype=bool)
+        
+
+        samples = self.samples_from_tokens(tokens, poles)
+        min_surface_scale = (samples.max(axis=(1, 2)) - samples.min(axis=(1, 2))).max(axis=-1)
+        min_surface_scale = min_surface_scale.min()
+        if min_surface_scale < self.min_surface_threshold:
+            return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, False
+
+        
 
         if self.rotation_augment:
             trys = 5
@@ -676,7 +689,6 @@ class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
             tokens = self.warp_codes(tokens)
 
         
-        poles = self.poles[idx % len(self.poles)]
 
         # Do the reordering base on the rotated version
 

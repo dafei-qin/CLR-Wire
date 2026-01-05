@@ -121,7 +121,7 @@ data_val:
   name: src.dataset.dataset_v4_tokenize_all.dataset_compound_tokenize_all_cache
   params:
     # json_dir: /deemos-research-area-d/meshgen/cad_data/abc_step_pc/5
-    cache_file: /deemos-research-area-d/meshgen/cad/data/abc_step_pc/cache_0.pkl
+    cache_file: /deemos-research-area-d/meshgen/cad/data/abc_step_pc/cache_6.pkl
     replace_file_header: /deemos-research-area-d/meshgen/cad/data/abc_step_pc
     rts_codebook_dir: assets/codebook_scale_1.2
     max_tokens: 1000

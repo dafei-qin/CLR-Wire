@@ -577,6 +577,7 @@ def main():
     parser.add_argument("--do_inference", type=str, default='True', help="Whether to do inference")
     parser.add_argument("--output_dir", type=str, default="meshes/TestData_1201_NoScaleUp_50k_no_dynamic_window",
                        help="Output directory")
+    parser.add_argument('--aug_num', type=int, default=1, help="Number of augmentations")
     args = parser.parse_args()
 
     torch.set_float32_matmul_precision("high")
@@ -635,7 +636,7 @@ def main():
 
         # 获取样本数据
 
-        for j in range(1):
+        for j in range(args.aug_num):
             # 4 times of augmentation
 
             train_data = dataset[idx]
