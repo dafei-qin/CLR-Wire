@@ -549,7 +549,7 @@ class dataset_compound_tokenize_all(Dataset):
 
 class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
     # TODO: add rotation augmentation
-    def __init__(self, cache_file: str, rts_codebook_dir: str, max_tokens: int = 1000, canonical: bool = True, detect_closed: bool = False, bspline_fit_threshold: float = 1e-2, codebook_size=1024, replica=1, rotation_augment: bool = False, point_augment: bool = False, point_augment_intensity: float = 0.005, pc_shape: int = 16384, replace_file_header='', emphasize_long=False, use_dfs=False, min_surface_threshold: float = 0.01):
+    def __init__(self, cache_file: str, rts_codebook_dir: str, max_tokens: int = 1000, canonical: bool = True, detect_closed: bool = False, bspline_fit_threshold: float = 1e-2, codebook_size=1024, replica=1, rotation_augment: bool = False, point_augment: bool = False, point_augment_intensity: float = 0.005, pc_shape: int = 16384, replace_file_header='', emphasize_long=False, use_dfs=False, min_surface_threshold: float = 0.01, inference=False):
         super().__init__('', rts_codebook_dir, max_tokens, canonical, detect_closed, bspline_fit_threshold, codebook_size, replica, rotation_augment, point_augment, point_augment_intensity, pc_shape, use_dfs)
         self.cache_file = cache_file
         self.data = pickle.load(open(self.cache_file, 'rb'))
@@ -566,6 +566,7 @@ class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
         self._poles = []
         self.emphasize_long = emphasize_long
         self.min_surface_threshold = min_surface_threshold
+        self.inference = inference
         print(f"Minimum surface scale threshold: {self.min_surface_threshold}")
 
 
@@ -590,9 +591,18 @@ class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
             if self.emphasize_long and token_length >= 400:
                 repeat = int(repeat * 1.5)
 
+            if self.inference:
+                repeat = 0
+
+            print(repeat)
+            print(self.inference)
             self._npz_path.extend([self.npz_path[i]] * repeat)
             self._tokens.extend([self.tokens[i]] * repeat)
             self._poles.extend([self.poles[i]] * repeat)
+
+        self.npz_path = self._npz_path
+        self.tokens = self._tokens
+        self.poles = self._poles
         print(f"Length of augmented dataset: {len(self._npz_path)}")
         self.json_names = [p.replace('.npz', '.json') for p in self.npz_path]
         
