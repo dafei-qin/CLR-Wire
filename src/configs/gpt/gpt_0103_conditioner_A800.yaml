@@ -1,10 +1,10 @@
 trainer:
     # Model and training config names
-    model_name: "GPT_INIT_142M_CONDITIONER"  # change to "Samba_1.3B" for 1.3B model
-    train_config: "train_0103_cache_excl-029"  # change to "tsz512x4k_100B" for 1.3B model
+    model_name: "GPT_INIT_142M"  # change to "Samba_1.3B" for 1.3B model
+    train_config: "train_0105_small_vae_excl_2"  # change to "tsz512x4k_100B" for 1.3B model
     train_name: "train0"
     # Output directory
-    out_dir: "/deemos-research-area-d/meshgen/cad/checkpoints/GPT_INIT_142M_CONDITIONER/train0/"
+    out_dir: "/deemos-research-area-d/meshgen/cad/checkpoints/GPT_INIT_142M/train_0105_small_vae_excl_2/"
     
   
     use_sample_dataset: false  # 是否使用自定义的 Sample_Dataset（不做 padding，变长样本以 list 组织）
@@ -114,14 +114,15 @@ data_train:
     rotation_augment: true
     point_augment: true
     point_augment_intensity: 0.005
-    pc_shape: 16384
+    pc_shape: 8192
     emphasize_long: false
+    min_surface_threshold: 0.01
 
 data_val:
   name: src.dataset.dataset_v4_tokenize_all.dataset_compound_tokenize_all_cache
   params:
     # json_dir: /deemos-research-area-d/meshgen/cad_data/abc_step_pc/5
-    cache_file: /deemos-research-area-d/meshgen/cad/data/abc_step_pc/cache_0.pkl
+    cache_file: /deemos-research-area-d/meshgen/cad/data/abc_step_pc/cache_6.pkl
     replace_file_header: /deemos-research-area-d/meshgen/cad/data/abc_step_pc
     rts_codebook_dir: assets/codebook_scale_1.2
     max_tokens: 1000
@@ -133,4 +134,5 @@ data_val:
     rotation_augment: true
     point_augment: true
     point_augment_intensity: 0.005
-    pc_shape: 16384
+    pc_shape: 8192
+    min_surface_threshold: 0.01
