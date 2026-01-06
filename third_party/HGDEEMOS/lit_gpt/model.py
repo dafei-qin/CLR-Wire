@@ -188,6 +188,7 @@ class GPT(nn.Module):
         self.use_michelangelo = use_michelangelo
         if use_michelangelo:
             self.michel = init_model(michelangelo_config_path, michelangelo_ckpt_path, device='cpu')
+            self.michel = self.michel.model.shape_model.encoder
             self.michel.eval()
         else:
             if build_conditioner:
@@ -377,7 +378,9 @@ class GPT(nn.Module):
             
             # ========== Condition Encoding: 点云 → Latent Codes → Features ==========
             if self.use_michelangelo:
-                shape_embed, shape_latents = self.michel.model.encode_shape_embed(pc, return_latents=True)
+                _x, _ = self.michel(pc[..., :3], feats=pc[..., 3:6])
+                # shape_embed = x[:, 0]
+                shape_latents = _x[:, 1:]
                 cond_embeds = shape_latents
             else:
                 latent_codes = self.conditioner.encode(pc)

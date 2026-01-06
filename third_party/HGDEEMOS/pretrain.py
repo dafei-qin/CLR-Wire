@@ -311,6 +311,7 @@ def setup(
     global eval_step_interval, num_extrapol, weight_decay, beta1, beta2
     global grad_clip, decay_lr, min_lr, num_epochs, batch_size
     global gradient_accumulation_steps, log_iter_interval
+    global find_unused_parameters
     
     if config_dict is not None and "trainer" in config_dict:
         trainer_cfg = config_dict.trainer
@@ -370,7 +371,10 @@ def setup(
             min_lr = float(trainer_cfg.min_lr)
         if "num_epochs" in trainer_cfg:
             num_epochs = trainer_cfg.num_epochs
-        
+        if "find_unused_parameters" in trainer_cfg:
+            find_unused_parameters = trainer_cfg.find_unused_parameters
+        else:
+            find_unused_parameters = False
         print(f"   ✓ Loaded {len([k for k in trainer_cfg.keys()])} trainer parameters")
     else:
         print("⚠️  No 'trainer' section in config, using default values")
@@ -439,6 +443,7 @@ def setup(
         "batch_size": batch_size,
         "gradient_accumulation_steps": gradient_accumulation_steps,
         "log_iter_interval": log_iter_interval,
+        "find_unused_parameters": find_unused_parameters,
     }
     
     wandb_logger = WandbLogger(project=train_config, name=name)
@@ -503,7 +508,7 @@ def setup(
     #     # activation_checkpointing_policy={Block},  # 🔥 新增：activation checkpointing，减少50%激活值显存
     #     # backward_prefetch=BackwardPrefetch.BACKWARD_PRE,  # 🔥 优化：预取梯度，减少显存峰值
     # )
-    strategy = DDPStrategy(find_unused_parameters=False)
+    strategy = DDPStrategy(find_unused_parameters=find_unused_parameters)
 
     # 5) 创建 Fabric 并 launch
     fabric = L.Fabric(
