@@ -13,7 +13,7 @@ from typing import List, Optional, Tuple, Union
 import math
 import lightning as L
 import torch
-from lightning.fabric.strategies import FSDPStrategy
+from lightning.fabric.strategies import FSDPStrategy, DDPStrategy
 from torch.utils.data import DataLoader
 from functools import partial
 # support running without installing as a package
@@ -256,20 +256,20 @@ def save_checkpoint_with_conditioner(fabric, checkpoint_path: Path, state: dict)
     raw_model = model.module if hasattr(model, 'module') else model
     
     # 在保存前，手动将 conditioner 的 state_dict 加入到 state 中
-    if hasattr(raw_model, 'conditioner') and raw_model.conditioner is not None:
-        # 只在 rank 0 准备 conditioner state
-        if fabric.global_rank == 0:
-            state['conditioner_state_dict'] = raw_model.conditioner.state_dict()
-            state['freeze_conditioner'] = freeze_conditioner
+    # if hasattr(raw_model, 'conditioner') and raw_model.conditioner is not None:
+    #     # 只在 rank 0 准备 conditioner state
+    #     if fabric.global_rank == 0:
+    #         state['conditioner_state_dict'] = raw_model.conditioner.state_dict()
+    #         state['freeze_conditioner'] = freeze_conditioner
     
     # 保存完整的 state（包含 conditioner）
     fabric.save(checkpoint_path, {key: value for key, value in state.items() if key != 'vae'})
     
     # 清理临时添加的 key
-    if 'conditioner_state_dict' in state:
-        del state['conditioner_state_dict']
-    if 'freeze_conditioner' in state:
-        del state['freeze_conditioner']
+    # if 'conditioner_state_dict' in state:
+    #     del state['conditioner_state_dict']
+    # if 'freeze_conditioner' in state:
+    #     del state['freeze_conditioner']
     
     if fabric.global_rank == 0:
         fabric.print(f"💾 Checkpoint saved to {str(checkpoint_path)!r}")
@@ -282,7 +282,9 @@ def load_checkpoint_with_conditioner(fabric, checkpoint_path: Path, state: dict,
     加载 checkpoint，包含主模型和 conditioner。
     """
     # 加载 checkpoint
-    fabric.load(checkpoint_path, {key:value for key, value in state.items() if key != 'vae'})
+    state = {key:value for key, value in state.items() if key != 'vae'}
+    fabric.load(checkpoint_path, state)
+    return state
     
 
 
@@ -309,6 +311,7 @@ def setup(
     global eval_step_interval, num_extrapol, weight_decay, beta1, beta2
     global grad_clip, decay_lr, min_lr, num_epochs, batch_size
     global gradient_accumulation_steps, log_iter_interval
+    global find_unused_parameters
     
     if config_dict is not None and "trainer" in config_dict:
         trainer_cfg = config_dict.trainer
@@ -368,7 +371,10 @@ def setup(
             min_lr = float(trainer_cfg.min_lr)
         if "num_epochs" in trainer_cfg:
             num_epochs = trainer_cfg.num_epochs
-        
+        if "find_unused_parameters" in trainer_cfg:
+            find_unused_parameters = trainer_cfg.find_unused_parameters
+        else:
+            find_unused_parameters = False
         print(f"   ✓ Loaded {len([k for k in trainer_cfg.keys()])} trainer parameters")
     else:
         print("⚠️  No 'trainer' section in config, using default values")
@@ -437,6 +443,7 @@ def setup(
         "batch_size": batch_size,
         "gradient_accumulation_steps": gradient_accumulation_steps,
         "log_iter_interval": log_iter_interval,
+        "find_unused_parameters": find_unused_parameters,
     }
     
     wandb_logger = WandbLogger(project=train_config, name=name)
@@ -491,16 +498,17 @@ def setup(
     # 4) 创建 FSDPStrategy（初始化时就传入 ignored_modules）
     from torch.distributed.fsdp import BackwardPrefetch
     
-    strategy = FSDPStrategy(
-        auto_wrap_policy={Block},
-        state_dict_type=fsdp_state_dict_type,  # 可配置：full（慢但兼容）或 sharded（快）
-        ignored_modules=ignored if ignored else None,  # 如果为空则传 None
-        use_orig_params=True,
-        # cpu_offload=True,  # 可选：如果显存紧张，考虑开启
-        limit_all_gathers=True,  # 🔥 优化：限制 all-gather 操作，减少显存峰值
-        activation_checkpointing_policy={Block},  # 🔥 新增：activation checkpointing，减少50%激活值显存
-        backward_prefetch=BackwardPrefetch.BACKWARD_PRE,  # 🔥 优化：预取梯度，减少显存峰值
-    )
+    # strategy = FSDPStrategy(
+    #     auto_wrap_policy={Block},
+    #     state_dict_type=fsdp_state_dict_type,  # 可配置：full（慢但兼容）或 sharded（快）
+    #     ignored_modules=ignored if ignored else None,  # 如果为空则传 None
+    #     use_orig_params=True,
+    #     # cpu_offload=True,  # 可选：如果显存紧张，考虑开启
+    #     # limit_all_gathers=True,  # 🔥 优化：限制 all-gather 操作，减少显存峰值
+    #     # activation_checkpointing_policy={Block},  # 🔥 新增：activation checkpointing，减少50%激活值显存
+    #     # backward_prefetch=BackwardPrefetch.BACKWARD_PRE,  # 🔥 优化：预取梯度，减少显存峰值
+    # )
+    strategy = DDPStrategy(find_unused_parameters=find_unused_parameters)
 
     # 5) 创建 Fabric 并 launch
     fabric = L.Fabric(
@@ -541,7 +549,13 @@ def main(fabric, model, vae, config_dict, train_data_dir, val_data_dir, resume, 
 
     fabric.print(f"Loading model with {config.__dict__}")
     fabric.print(f"Total parameters {num_parameters(model):,}")
+    if hasattr(model, "conditioner") and model.conditioner is not None:
+        fabric.print(f"Conditioner parameters {num_parameters(model.conditioner):,}")
+    if hasattr(model, "michel") and model.michel is not None:
+        fabric.print(f"Michel parameters {num_parameters(model.michel):,}")
     fabric.print(model)
+    for idx, (name, param) in enumerate(model.named_parameters()):
+        print(idx, name, param.shape)
 
     # 统一由 Fabric/FSDP 搬到各自 rank 的设备
     model = fabric.setup(model)
@@ -568,40 +582,40 @@ def main(fabric, model, vae, config_dict, train_data_dir, val_data_dir, resume, 
     vae.mark_forward_method('encode')
 
     # ========== 构建优化器（区分 conditioner 和主干的学习率） ==========
-    if not freeze_conditioner and hasattr(model, "conditioner") and model.conditioner is not None:
-        # 获取原始模型（处理 FSDP 包装）
-        raw_model = model.module if hasattr(model, 'module') else model
+    # if not freeze_conditioner and hasattr(model, "conditioner") and model.conditioner is not None:
+    #     # 获取原始模型（处理 FSDP 包装）
+    #     raw_model = model.module if hasattr(model, 'module') else model
         
-        # 分离 conditioner 参数和其他参数
-        conditioner_params = []
-        other_params = []
-        conditioner_param_ids = set(id(p) for p in raw_model.conditioner.parameters())
+    #     # 分离 conditioner 参数和其他参数
+    #     conditioner_params = []
+    #     other_params = []
+    #     conditioner_param_ids = set(id(p) for p in raw_model.conditioner.parameters())
         
-        for name, param in raw_model.named_parameters():
-            if param.requires_grad:
-                if id(param) in conditioner_param_ids:
-                    conditioner_params.append(param)
-                else:
-                    other_params.append(param)
+    #     for name, param in raw_model.named_parameters():
+    #         if param.requires_grad:
+    #             if id(param) in conditioner_param_ids:
+    #                 conditioner_params.append(param)
+    #             else:
+    #                 other_params.append(param)
         
-        # 使用不同学习率的参数组
-        param_groups = [
-            {"params": other_params, "lr": learning_rate},
-            {"params": conditioner_params, "lr": learning_rate * conditioner_lr_scale, "name": "conditioner"},
-        ]
+    #     # 使用不同学习率的参数组
+    #     param_groups = [
+    #         {"params": other_params, "lr": learning_rate},
+    #         {"params": conditioner_params, "lr": learning_rate * conditioner_lr_scale, "name": "conditioner"},
+    #     ]
         
-        fabric.print(f"🔧 Optimizer setup with separate learning rates:")
-        fabric.print(f"   - Main model params: {len(other_params)}, lr={learning_rate}")
-        fabric.print(f"   - Conditioner params: {len(conditioner_params)}, lr={learning_rate * conditioner_lr_scale}")
+    #     fabric.print(f"🔧 Optimizer setup with separate learning rates:")
+    #     fabric.print(f"   - Main model params: {len(other_params)}, lr={learning_rate}")
+    #     fabric.print(f"   - Conditioner params: {len(conditioner_params)}, lr={learning_rate * conditioner_lr_scale}")
         
-        optimizer = torch.optim.AdamW(
-            param_groups, weight_decay=weight_decay, betas=(beta1, beta2), fused=True
-        )
-    else:
+    #     optimizer = torch.optim.AdamW(
+    #         param_groups, weight_decay=weight_decay, betas=(beta1, beta2), fused=True
+    #     )
+    # else:
         # 原有逻辑：所有参数使用相同学习率
-        optimizer = torch.optim.AdamW(
-            model.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=(beta1, beta2), fused=True
-        )
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=(beta1, beta2), fused=True
+    )
     
     optimizer = fabric.setup_optimizers(optimizer)
 
@@ -646,7 +660,9 @@ def main(fabric, model, vae, config_dict, train_data_dir, val_data_dir, resume, 
         if skip_optimizer:
             # 只加载模型权重，不加载 optimizer
             state_model_only = {"model": model, "iter_num": 0, "step_count": 0, "epoch": 0}
-            load_checkpoint_with_conditioner(fabric, resume_path, state_model_only, model)
+            state_load = load_checkpoint_with_conditioner(fabric, resume_path, state_model_only, model)
+            state_load['vae'] = state['vae']
+            state = state_load
             
             # 恢复训练状态
             state["iter_num"] = state_model_only.get("iter_num", 0)
@@ -656,9 +672,13 @@ def main(fabric, model, vae, config_dict, train_data_dir, val_data_dir, resume, 
             fabric.print(f"✅ Model weights loaded, optimizer re-initialized")
             fabric.print(f"   Resumed from iter={state['iter_num']}, step={state['step_count']}, epoch={state['epoch']}")
         else:
-            # 正常加载（包含 optimizer）
-            load_checkpoint_with_conditioner(fabric, resume_path, state, model)
+            # 正常加载（包含 optimizer
+
+            state_load = load_checkpoint_with_conditioner(fabric, resume_path, state, model)
+            state_load['vae'] = state['vae']
+            state = state_load
             fabric.print(f"✅ Full checkpoint loaded (model + optimizer + conditioner)")
+        print(f"state['iter_num'] = {state['iter_num']}, state['step_count'] = {state['step_count']}, state['epoch'] = {state['epoch']}")
         
         t1 = time.perf_counter()
         fabric.print(f"⏱️  Total resume time: {t1 - t0:.2f}s")
@@ -852,11 +872,12 @@ def train(fabric, state, train_dataloader, val_dataloader, monitor, resume):
 
             # determine and set the learning rate for this iteration
             lr = get_lr(state["iter_num"], warmup_iters, max_iters) if decay_lr else learning_rate
+
             for param_group in optimizer.param_groups:
-                # 如果是 conditioner 参数组，使用缩放的学习率
-                if param_group.get("name") == "conditioner":
-                    param_group["lr"] = lr * conditioner_lr_scale
-                else:
+                # # 如果是 conditioner 参数组，使用缩放的学习率
+                # if param_group.get("name") == "conditioner":
+                #     param_group["lr"] = lr * conditioner_lr_scale
+                # else:
                     param_group["lr"] = lr
 
             iter_t0 = time.perf_counter()
@@ -869,9 +890,6 @@ def train(fabric, state, train_dataloader, val_dataloader, monitor, resume):
             lengths = torch.tensor(lengths, device=fabric.device, dtype=torch.long)
             maxL = max(lengths)
             minL = min(lengths)
-
-
-
 
             merged_token_tensor = all_tokens_padded
 
@@ -934,37 +952,76 @@ def train(fabric, state, train_dataloader, val_dataloader, monitor, resume):
                 
                 # 监控 condition 相关层的梯度（每 100 步）
                 # 🔥 修复：减少 rank 0 的显存开销 - 只监控关键参数，不遍历所有参数
+                # if state["step_count"] % 100 == 0 and fabric.global_rank == 0:
+                #     condition_grad_stats = {}
+                #     cross_attn_grads = []
+                #     linear_grads = []
+                    
+                #     # 🔥 优化：不要遍历所有参数，只监控指定的关键模块
+                #     raw_model = model.module if hasattr(model, 'module') else model
+                    
+                #     # 只监控 conditioner 相关的参数（如果存在）
+                #     if hasattr(raw_model, 'conditioner') and raw_model.conditioner is not None:
+                #         for name, param in raw_model.conditioner.named_parameters():
+                #             if param.grad is not None:
+                #                 # 避免调用 .norm() 创建临时tensor，直接计算
+                #                 with torch.no_grad():
+                #                     grad_norm = param.grad.detach().norm().item()
+                #                 if 'weight' in name:
+                #                     # 只记录少数代表性的层
+                #                     if 'encoder' in name or 'transformer' in name:
+                #                         condition_grad_stats[f"grad/conditioner_{name.split('.')[0]}"] = grad_norm
+                    
+                #     # 监控 linear projection 层（如果存在）
+                #     if hasattr(raw_model, 'linear'):
+                #         if raw_model.linear.weight.grad is not None:
+                #             with torch.no_grad():
+                #                 grad_norm = raw_model.linear.weight.grad.detach().norm().item()
+                #             condition_grad_stats["grad/linear_weight"] = grad_norm
+                    
+                #     if condition_grad_stats:
+                #         fabric.print(f"\n[Condition Gradient Monitor @ step {state['step_count']}]")
+                #         for key, value in condition_grad_stats.items():
+                #             fabric.print(f"  {key}: {value:.6f}")
+                        
+                #         # 记录到 wandb
+                #         fabric.log_dict(condition_grad_stats, state["step_count"])
+
                 if state["step_count"] % 100 == 0 and fabric.global_rank == 0:
                     condition_grad_stats = {}
                     cross_attn_grads = []
                     linear_grads = []
                     
-                    # 🔥 优化：不要遍历所有参数，只监控指定的关键模块
-                    raw_model = model.module if hasattr(model, 'module') else model
-                    
-                    # 只监控 conditioner 相关的参数（如果存在）
-                    if hasattr(raw_model, 'conditioner') and raw_model.conditioner is not None:
-                        for name, param in raw_model.conditioner.named_parameters():
-                            if param.grad is not None:
-                                # 避免调用 .norm() 创建临时tensor，直接计算
-                                with torch.no_grad():
-                                    grad_norm = param.grad.detach().norm().item()
+                    for name, param in model.named_parameters():
+                        if param.grad is not None:
+                            grad_norm = param.grad.norm().item()
+                            # 监控 cross-attention 层
+                            if 'cross_attn' in name:
+                                # 只记录权重层的梯度，跳过具体参数名以保持简洁
                                 if 'weight' in name:
-                                    # 只记录少数代表性的层
-                                    if 'encoder' in name or 'transformer' in name:
-                                        condition_grad_stats[f"grad/conditioner_{name.split('.')[0]}"] = grad_norm
-                    
-                    # 监控 linear projection 层（如果存在）
-                    if hasattr(raw_model, 'linear'):
-                        if raw_model.linear.weight.grad is not None:
-                            with torch.no_grad():
-                                grad_norm = raw_model.linear.weight.grad.detach().norm().item()
-                            condition_grad_stats["grad/linear_weight"] = grad_norm
+                                    cross_attn_grads.append(grad_norm)
+                                    layer_type = name.split('.')[-2]  # q_proj, kv_proj, out_proj
+                                    condition_grad_stats[f"grad/cross_attn_{layer_type}"] = grad_norm
+                            # 监控 condition projection 层
+                            elif name.endswith('linear.weight') or name.endswith('linear.bias'):
+                                linear_grads.append(grad_norm)
+                                condition_grad_stats[f"grad/{name.split('.')[-1]}"] = grad_norm
                     
                     if condition_grad_stats:
+                        # 计算统计量
+                        if cross_attn_grads:
+                            condition_grad_stats["grad/cross_attn_mean"] = sum(cross_attn_grads) / len(cross_attn_grads)
+                            condition_grad_stats["grad/cross_attn_max"] = max(cross_attn_grads)
+                        if linear_grads:
+                            condition_grad_stats["grad/linear_mean"] = sum(linear_grads) / len(linear_grads)
+                        
                         fabric.print(f"\n[Condition Gradient Monitor @ step {state['step_count']}]")
-                        for key, value in condition_grad_stats.items():
-                            fabric.print(f"  {key}: {value:.6f}")
+                        if cross_attn_grads:
+                            fabric.print(f"  CrossAttention: mean={condition_grad_stats['grad/cross_attn_mean']:.6f}, "
+                                       f"max={condition_grad_stats['grad/cross_attn_max']:.6f}, "
+                                       f"count={len(cross_attn_grads)}")
+                        if linear_grads:
+                            fabric.print(f"  Linear projection: mean={condition_grad_stats['grad/linear_mean']:.6f}")
                         
                         # 记录到 wandb
                         fabric.log_dict(condition_grad_stats, state["step_count"])
@@ -1006,16 +1063,6 @@ def train(fabric, state, train_dataloader, val_dataloader, monitor, resume):
                 cd_loss = 0.0,
             )
 
-            # if val_dataloader is not None and not is_accumulating and state["step_count"] % eval_step_interval == 0:
-            #     t0 = time.perf_counter()
-            #     val_loss = validate(fabric, model, val_dataloader)
-            #     t1 = time.perf_counter() - t0
-            #     monitor.eval_end(t1)
-            #     for i in range(num_extrapol):
-            #         fabric.print(f"step {state['iter_num']}: val loss {val_loss[i]:.4f}, val time: {t1 * 1000:.2f}ms")
-            #         fabric.log_dict({"metric/val_loss@"+str(i+1)+"x": val_loss[i].item(), "total_tokens": model.config.block_size * (state["iter_num"] + 1) * micro_batch_size * fabric.world_size}, state["step_count"])
-            #         fabric.log_dict({"metric/val_ppl@"+str(i+1)+"x": math.exp(val_loss[i].item()), "total_tokens": model.config.block_size * (state["iter_num"] + 1) * micro_batch_size * fabric.world_size}, state["step_count"])
-            #     fabric.barrier()
 
             if not is_accumulating and state["step_count"] % save_step_interval == 0:
                 checkpoint_path = out_dir / f"iter-{state['iter_num']:06d}-ckpt.pth"
@@ -1035,49 +1082,6 @@ def train(fabric, state, train_dataloader, val_dataloader, monitor, resume):
     fabric.print(f"\n🏁 Training finished! Saving final checkpoint to {str(final_checkpoint_path)!r}")
     save_checkpoint_with_conditioner(fabric, final_checkpoint_path, state)
     fabric.barrier()
-
-# @torch.no_grad()
-# def validate(fabric: L.Fabric, model: torch.nn.Module, val_dataloader: DataLoader) -> torch.Tensor:
-#     fabric.print("Validating ...")
-#     model.eval()
-    
-#     # 获取原始模型并保存 conditioner 的训练状态
-#     raw_model = model.module if hasattr(model, 'module') else model
-#     conditioner_was_training = False
-#     if hasattr(raw_model, 'conditioner') and raw_model.conditioner is not None:
-#         conditioner_was_training = raw_model.conditioner.training
-#         raw_model.conditioner.eval()
-
-#     losses = torch.zeros(eval_iters, num_extrapol, device=fabric.device)
-#     for k, val_data in enumerate(val_dataloader):
-#         if k >= eval_iters:
-#             break
-
-#         # 如果是 Sample_Dataset (dict with pc)，需要提取 pc
-#         # 如果是 PackedDataset (tensor only)，pc=None（无条件验证）
-#         pc = None
-#         if isinstance(val_data, dict):
-#             pc_list = val_data.get('pc', None) or val_data.get('pc_normal', None)
-#             if pc_list is not None and len(pc_list) > 0:
-#                 pc = torch.stack(pc_list, dim=0).to(fabric.device)
-#             val_data = val_data.get('token_list_0', val_data)  # 提取 token 数据
-
-#         for i, length in enumerate([4096, 8192, 12288, 16384]):   #[2048, 4096, 8192, 16384]
-#             input_ids = val_data[:, 0 : length].contiguous()
-#             targets = val_data[:, 1 : length + 1].contiguous()
-#             # 传入 pc 参数（可以是 None，模型会正确处理）
-#             logits = model(input_ids, pc=pc).logits
-#             loss = chunked_cross_entropy(logits, targets, chunk_size=0)
-#             losses[k,i] = loss.item()
-
-#     out = losses.mean(0)
-#     model.train()
-    
-#     # 恢复 conditioner 的训练状态（如果之前是训练模式）
-#     if conditioner_was_training and hasattr(raw_model, 'conditioner') and raw_model.conditioner is not None:
-#         raw_model.conditioner.train()
-    
-#     return out
 
 
 def create_dataloaders(
@@ -1135,7 +1139,7 @@ def create_dataloaders(
     train_dataloader = DataLoader(
         train_dataset,
         batch_size=batch_size,
-        num_workers=4,  # 增加 worker 数量（原来是4）
+        num_workers=8,  # 增加 worker 数量（原来是4）
         pin_memory=True,
         # collate_fn=collate_as_list,
         sampler=sampler,

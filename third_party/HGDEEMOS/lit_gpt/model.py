@@ -181,26 +181,28 @@ class GPT(nn.Module):
         self.rope_cache: Optional[RoPECache] = None
         self.mask_cache: Optional[torch.Tensor] = None
         self.kv_caches: List[KVCache] = []
+        self.cached_pc_features: Optional[torch.Tensor] = None  # PC cache for inference
         # self.conditioner = PointConditioner(model_name='miche-256-feature', freeze=True)
         # self.conditioner.eval()
         self.conditioner = None
         self.use_michelangelo = use_michelangelo
         if use_michelangelo:
             self.michel = init_model(michelangelo_config_path, michelangelo_ckpt_path, device='cpu')
+            self.michel = self.michel.model.shape_model.encoder
             self.michel.eval()
         else:
             if build_conditioner:
                 # 根据 config.yaml 创建 ShapeVAE（只使用明确指定的参数）
                 shapevae_width = 512
                 self.conditioner = ShapeVAE(
-                    num_latents=1024,
-                    embed_dim=64,
+                    num_latents=256,
+                    embed_dim=32,
                     num_freqs=8,
                     include_pi=False,
-                    heads=16,
+                    heads=8,
                     width=shapevae_width, # Changed from 1024 to 512
                     num_encoder_layers=8,
-                    num_decoder_layers=12,
+                    num_decoder_layers=8,
                     qkv_bias=False,
                     qk_norm=True,
                     scale_factor=1.0039506158752403,
@@ -208,9 +210,9 @@ class GPT(nn.Module):
                     geo_decoder_downsample_ratio=1,
                     geo_decoder_ln_post=True,
                     point_feats=3, # Changed from 4 to 3
-                    pc_size=16384, # Changed from 81920 to 16384
+                    pc_size=8192, # Changed from 81920 to 16384
                     pc_sharpedge_size=0,
-                    downsample_ratio=16, # Changed from 80 to 20
+                    downsample_ratio=8, # Changed from 80 to 20
                 )
                 
                 if freeze_conditioner:
@@ -281,6 +283,14 @@ class GPT(nn.Module):
 
     def reset_cache(self) -> None:
         self.kv_caches.clear()
+        self.cached_pc_features = None  # Clear PC cache
+        
+        # Clear CrossAttention caches in all blocks
+        for block in self.transformer.h:
+            if hasattr(block, 'cross_attn'):
+                block.cross_attn.cached_context_k = None
+                block.cross_attn.cached_context_v = None
+        
         if self.mask_cache is not None and self.mask_cache.device.type == "xla":
             # https://github.com/Lightning-AI/lit-gpt/pull/83#issuecomment-1558150179
             self.rope_cache = None
@@ -303,8 +313,7 @@ class GPT(nn.Module):
          input_pos: Optional[torch.Tensor] = None,start: Optional[int] = 0,window_size: Optional[int] = 9000
     ) -> torch.Tensor:
         B, T = idx.size()
-        # use_kv_cache = input_pos is not None
-        use_kv_cache = None
+        use_kv_cache = input_pos is not None  # Enable KV cache for inference
 
         block_size = self.config.block_size
         if max_seq_length is None:
@@ -352,38 +361,30 @@ class GPT(nn.Module):
         # forward the model itself
         x = self.transformer.wte(idx)  # token embeddings of shape (b, t, n_embd)
         
-        # 严格检查 pc 的有效性，如果有问题立即抛出异常
-        if pc is not None:
+        # ========== PC Caching Logic ==========
+        # Training: always compute, never cache
+        # Inference: cache on first forward, reuse on subsequent forwards
+        if not self.training and pc is None and self.cached_pc_features is not None:
+            # Inference mode: reuse cached features
+            cond_embeds = self.cached_pc_features
+        elif pc is not None:
+            # Compute PC features (training or first inference pass)
             if not isinstance(pc, torch.Tensor):
                 raise ValueError(f"pc must be a torch.Tensor, but got {type(pc)}")
             if pc.numel() == 0:
                 raise ValueError(f"pc tensor is empty (numel() == 0)")
             if pc.dim() < 2:
                 raise ValueError(f"pc tensor must have at least 2 dimensions, but got shape {pc.shape}")
-            # if self.conditioner is None:
-            #     raise ValueError("pc is provided but conditioner is None. Please set build_conditioner=True when initializing the model.")
             
             # ========== Condition Encoding: 点云 → Latent Codes → Features ==========
-            # ShapeVAE两阶段编码：
-            # 1. encode(): 点云 → 压缩的 latent codes (通过VAE瓶颈层)
-            # 2. decode(): latent codes → 语义特征 (通过 post_kl + Transformer)
-            
-            # Stage 1: 编码为 latent codes
-
             if self.use_michelangelo:
-                shape_embed, shape_latents = self.michel.model.encode_shape_embed(pc, return_latents=True)
-                # shape_zq, posterior = self.conditioner.model.shape_model.encode_kl_embed(shape_latents, sample_posterior=True)
+                _x, _ = self.michel(pc[..., :3], feats=pc[..., 3:6])
+                # shape_embed = x[:, 0]
+                shape_latents = _x[:, 1:]
                 cond_embeds = shape_latents
             else:
                 latent_codes = self.conditioner.encode(pc)
-                # latent_codes: (bs, num_latents, embed_dim)
-                # Hunyuan3D-2.1: (bs, 4096, 64)
-                
-                # Stage 2: 解码为语义特征
                 cond_embeds = self.conditioner.decode(latent_codes)
-                # print(f"cond_embeds: {cond_embeds.shape}, latent_codes: {latent_codes.shape}")
-                # cond_embeds: (bs, num_latents, width)
-                # Hunyuan3D-2.1: (bs, 4096, 1024) ← 注意：width=1024 不是 64！
             
             # ========== Token 降采样 ==========
             if self.condition_downsample_factor > 1:
@@ -391,33 +392,27 @@ class GPT(nn.Module):
                 factor = self.condition_downsample_factor
                 bs, num_tokens, dim = cond_embeds.shape
                 
-                # 确保可以整除
                 assert num_tokens % factor == 0, \
                     f"num_tokens {num_tokens} must be divisible by factor {factor}"
                 
                 if self.condition_downsample_method == 'learnable':
-                    # 可学习降采样：factor个tokens拼接后用MLP聚合
-                    # Example: factor=4, (bs, 4096, 64) → (bs, 1024, 256) → (bs, 1024, 64)
                     cond_embeds = rearrange(cond_embeds, 'b (n f) d -> b n (f d)', f=factor)
-                    # ⚠️ 精度处理：确保 downsample MLP 与 cond_embeds 的 dtype 一致
                     target_dtype = next(self.condition_downsample.parameters()).dtype
                     cond_embeds = cond_embeds.to(target_dtype)
                     cond_embeds = self.condition_downsample(cond_embeds)
                 else:
-                    # 平均池化：无参数，保持原始dtype
                     cond_embeds = rearrange(cond_embeds, 'b (n f) d -> b n f d', f=factor)
                     cond_embeds = cond_embeds.mean(dim=2)
             
             # ========== Project to Model Dimension ==========
-            # ⚠️ 精度处理：在 bf16-mixed 模式下，保持 float32 以避免梯度 dtype 不匹配
-            # - self.norm 的权重是 float32
-            # - CrossAttention 的参数是 float32
-            # - 如果 cond_embeds 是 bfloat16，梯度计算时会出现 dtype 不匹配
-            cond_embeds = self.linear(cond_embeds)  # (bs, 4096, n_embd)
+            cond_embeds = self.linear(cond_embeds)
             cond_embeds = self.norm(cond_embeds)
-            # 在 bf16-mixed 模式下，保持 float32 以匹配模型参数的 dtype
-            # 这样梯度计算时不会出现 dtype 不匹配错误
+            
+            # Cache features in inference mode
+            if not self.training:
+                self.cached_pc_features = cond_embeds
         else:
+            # No PC provided and no cache
             cond_embeds = None
             
         # Standard GPT: iterate through blocks
@@ -426,6 +421,7 @@ class GPT(nn.Module):
                 x, *_ = block(x, rope, max_seq_length, pc=cond_embeds, mask=mask)
         else:
             self.kv_caches = self.kv_caches or self.build_kv_caches(x, max_seq_length, cos.size(-1) * 2)
+            # print('Use kv cache')
             for i, block in enumerate(self.transformer.h):
                 x, self.kv_caches[i] = block(x, rope, max_seq_length, pc=cond_embeds, mask=mask, input_pos=input_pos, kv_cache=self.kv_caches[i])
 
@@ -584,12 +580,16 @@ class CausalSelfAttention(nn.Module):
         #     condense_ratio=self.config.condense_ratio,)
         
         cos, sin = rope
+        # print(cos.dtype)
+        # print(q.dtype)
 
         # apply rope in fp32 significanly stabalize training
         # fused rope expect (batch_size, seqlen, nheads, headdim)
-        q = apply_rotary_emb_func(q, cos, sin, False, True)
-        k = apply_rotary_emb_func(k, cos, sin, False, True)
+        q_fp32 = apply_rotary_emb_func(q.to(cos.dtype), cos, sin, False, True)
+        k_fp32 = apply_rotary_emb_func(k.to(cos.dtype), cos, sin, False, True)
         
+        q = q_fp32.to(q.dtype)
+        k = k_fp32.to(k.dtype)
         # n_elem = int(self.config.rotary_percentage * self.config.head_size)
     
         # q_roped = apply_rope(q[..., :n_elem], cos.repeat(1,2), sin.repeat(1,2))
@@ -656,18 +656,40 @@ class CrossAttention(nn.Module):
         self.kv_proj = nn.Linear(context_dim, 2 * dim, bias=False)
         self.out_proj = nn.Linear(dim, dim, bias=False)
         self.dropout = nn.Dropout(dropout)
+        
+        # Cache for context (pc) K and V
+        self.cached_context_k: Optional[torch.Tensor] = None
+        self.cached_context_v: Optional[torch.Tensor] = None
 
     def forward(self, x, context):
         # x: [batch, seq_len, dim], context: [batch, context_len, context_dim]
         B, N, C = x.shape
-        _, M, _ = context.shape
         H = self.n_heads
 
-        # Linear projections
+        # Linear projections for query
         q = self.q_proj(x).view(B, N, H, C // H).transpose(1, 2)  # [B, H, seq_len, dim//H]
-        k, v = self.kv_proj(context).chunk(2, dim=-1)
-        k = k.view(B, M, H, C // H).transpose(1, 2)  # [B, H, context_len, dim//H]
-        v = v.view(B, M, H, C // H).transpose(1, 2)  # [B, H, context_len, dim//H]
+        
+        # Cache context K and V in inference mode
+        if not self.training and context is not None:
+            # Check if cache is valid
+            if self.cached_context_k is None or self.cached_context_v is None:
+                # First time: compute and cache
+                _, M, _ = context.shape
+                k, v = self.kv_proj(context).chunk(2, dim=-1)
+                k = k.view(B, M, H, C // H).transpose(1, 2)  # [B, H, context_len, dim//H]
+                v = v.view(B, M, H, C // H).transpose(1, 2)  # [B, H, context_len, dim//H]
+                self.cached_context_k = k
+                self.cached_context_v = v
+            else:
+                # Reuse cached K and V
+                k = self.cached_context_k
+                v = self.cached_context_v
+        else:
+            # Training mode or no context: always compute
+            _, M, _ = context.shape
+            k, v = self.kv_proj(context).chunk(2, dim=-1)
+            k = k.view(B, M, H, C // H).transpose(1, 2)
+            v = v.view(B, M, H, C // H).transpose(1, 2)
 
         # Scaled dot-product attention
         attn_weights = (q @ k.transpose(-2, -1)) * self.scale  # [B, H, seq_len, context_len]

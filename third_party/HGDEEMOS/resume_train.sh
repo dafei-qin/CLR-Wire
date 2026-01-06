@@ -218,32 +218,24 @@ wandb login
 #     --warmup_steps 1000 \
 #     --model_path /workspace/pytorch_model.bin \
 #     --seed 42
-export MASTER_PORT=29500
+export MASTER_PORT=29504
 
 # export OUTPUT_DIR=checkpoints/1226_gpt_init_debug$(date +%Y-%m-%d_%H)
 
-# torchrun \
-#     --nnodes=1 \
-#     --node_rank=0 \
-#     --nproc_per_node=1 \
-#     --master_addr=127.0.0.1 \
-#     --master_port=29501 \
-#     train_window_torchrun.py \
-#     --model_id 551 \
-#     --data_path /vinowan-cfs/ruixu/data/MyTrainData1 \
-#     --output_dir $OUTPUT_DIR \
-#     --batch_size 9 \
-#     --learning_rate 1e-4 \
-#     --num_epochs 20000 \
-#     --window_size 9000 \
-#     --context_length 90000 \
-#     --warmup_steps 1000 \
-#     --model_path /workspace/checkpoint_batch_9_epoch_7_date_2025-07-09_06-40-08.bin \
+torchrun \
+    --nnodes=2 \
+    --node_rank=0 \
+    --nproc_per_node=8 \
+    --master_addr=127.0.0.1 \
+    --master_port=29504 \
+    third_party/HGDEEMOS/pretrain.py \
+    --config_path src/configs/gpt/gpt_0105_michel_a800.yaml --resume True
+
 
 
 # --nproc_per_node $MLP_WORKER_GPU --master_addr $MLP_WORKER_0_HOST --node_rank $MLP_ROLE_INDEX --master_port $MLP_WORKER_0_PORT --nnodes $MLP_WORKER_NUM
 
-python third_party/HGDEEMOS/pretrain.py --config_path src/configs/gpt/gpt_0105_michel_a800.yaml --resume False
+# python third_party/HGDEEMOS/pretrain.py --config_path src/configs/gpt/gpt_0102_michel_A800.yaml --resume True
 # torchrun \
 #     --nnodes=$MLP_WORKER_NUM \
 #     --node_rank=$MLP_ROLE_INDEX \
