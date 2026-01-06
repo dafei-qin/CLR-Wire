@@ -126,7 +126,8 @@ class dataset_compound_tokenize_all(Dataset):
         self.point_augment = point_augment
         self.pc_shape = pc_shape
         self.point_augment_intensity = point_augment_intensity
-        self.rotation_angles = list(range(0, 360, 15))
+        # self.rotation_angles = list(range(0, 360, 15))
+        self.rotation_angles = [0, 90, 180, 270, ]
         self.rotation_axes = [
             [1, 0, 0],
             [0, 1, 0],
@@ -549,7 +550,7 @@ class dataset_compound_tokenize_all(Dataset):
 
 class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
     # TODO: add rotation augmentation
-    def __init__(self, cache_file: str, rts_codebook_dir: str, max_tokens: int = 1000, canonical: bool = True, detect_closed: bool = False, bspline_fit_threshold: float = 1e-2, codebook_size=1024, replica=1, rotation_augment: bool = False, point_augment: bool = False, point_augment_intensity: float = 0.005, pc_shape: int = 16384, replace_file_header='', emphasize_long=False, use_dfs=False, min_surface_threshold: float = 0.01, inference=False):
+    def __init__(self, cache_file: str, rts_codebook_dir: str, max_tokens: int = 1000, canonical: bool = True, detect_closed: bool = False, bspline_fit_threshold: float = 1e-2, codebook_size=1024, replica=1, rotation_augment: bool = False, point_augment: bool = False, point_augment_intensity: float = 0.005, pc_shape: int = 16384, replace_file_header='', emphasize_long=False, use_dfs=False, min_surface_threshold: float = 0.01, inference=False, length_aug: bool = False):
         super().__init__('', rts_codebook_dir, max_tokens, canonical, detect_closed, bspline_fit_threshold, codebook_size, replica, rotation_augment, point_augment, point_augment_intensity, pc_shape, use_dfs)
         self.cache_file = cache_file
         self.data = pickle.load(open(self.cache_file, 'rb'))
@@ -567,6 +568,7 @@ class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
         self.emphasize_long = emphasize_long
         self.min_surface_threshold = min_surface_threshold
         self.inference = inference
+        self.length_aug = length_aug
         print(f"Minimum surface scale threshold: {self.min_surface_threshold}")
 
 
@@ -594,6 +596,8 @@ class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
             if self.inference:
                 repeat = 0
 
+            if not self.length_aug:
+                repeat = 1
             # print(repeat)
             # print(self.inference)
             self._npz_path.extend([self.npz_path[i]] * repeat)
