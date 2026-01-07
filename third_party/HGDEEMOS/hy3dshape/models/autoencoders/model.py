@@ -296,19 +296,19 @@ class ShapeVAE(VectsetVAE):
             drop_path_rate=drop_path_rate
         )
 
-        self.geo_decoder = CrossAttentionDecoder(
-            fourier_embedder=self.fourier_embedder,
-            out_channels=1,
-            num_latents=num_latents,
-            mlp_expand_ratio=geo_decoder_mlp_expand_ratio,
-            downsample_ratio=geo_decoder_downsample_ratio,
-            enable_ln_post=self.geo_decoder_ln_post,
-            width=width // geo_decoder_downsample_ratio,
-            heads=heads // geo_decoder_downsample_ratio,
-            qkv_bias=qkv_bias,
-            qk_norm=qk_norm,
-            label_type=label_type,
-        )
+        # self.geo_decoder = CrossAttentionDecoder(
+        #     fourier_embedder=self.fourier_embedder,
+        #     out_channels=1,
+        #     num_latents=num_latents,
+        #     mlp_expand_ratio=geo_decoder_mlp_expand_ratio,
+        #     downsample_ratio=geo_decoder_downsample_ratio,
+        #     enable_ln_post=self.geo_decoder_ln_post,
+        #     width=width // geo_decoder_downsample_ratio,
+        #     heads=heads // geo_decoder_downsample_ratio,
+        #     qkv_bias=qkv_bias,
+        #     qk_norm=qk_norm,
+        #     label_type=label_type,
+        # )
 
         self.scale_factor = scale_factor
         self.latent_shape = (num_latents, embed_dim)

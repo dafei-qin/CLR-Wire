@@ -374,6 +374,7 @@ def step_to_pointcloud(step_filename, ply_filename, num_samples=1000, debug=True
 
         for face_idx in graph.nodes():
             face = graph.nodes[face_idx]["face"]
+            face_json = jsons_data[face]
 
             # 逐步累积采样结果，而不是每次重采样都丢弃之前的点，
             # 这样可以减少需要放大的采样次数
@@ -410,6 +411,12 @@ def step_to_pointcloud(step_filename, ply_filename, num_samples=1000, debug=True
                 points = np.zeros((0, 3), dtype=np.float32)
                 normals = np.zeros((0, 3), dtype=np.float32)
                 masks = np.zeros((0,), dtype=bool)
+
+
+            # Do the normal orientation adjustment.
+            if face_json['orientation'] == 'Reversed':
+                normals = -normals
+                
 
             all_points.append(points.astype(np.float32))
             all_normals.append(normals.astype(np.float32))
