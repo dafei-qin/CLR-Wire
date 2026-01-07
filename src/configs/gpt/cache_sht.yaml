@@ -18,7 +18,7 @@ data_train:
   # name: src.dataset.dataset_v4_tokenize_all.dataset_compound_tokenize_all_cache
   name: src.dataset.dataset_v4_tokenize_all.dataset_compound_tokenize_all
   params:
-    json_dir: /data/ssd/CAD/data/abc_step_pc/4
+    json_dir: /data/ssd/CAD/data/abc_step_pc/2_0
     # cache_file: /deemos-research-area-d/meshgen/cad_data/caches/test.pkl
     rts_codebook_dir: assets/codebook_scale_1.2
     max_tokens: 1000
