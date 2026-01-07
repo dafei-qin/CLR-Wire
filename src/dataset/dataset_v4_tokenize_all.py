@@ -13,16 +13,19 @@ import networkx as nx
 from tqdm import tqdm
 import sys
 from pathlib import Path
+import random
+from scipy.spatial.transform import Rotation as R
+import matplotlib.pyplot as plt
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 
 from src.dataset.dataset_v3_tokenize import dataset_compound_tokenize
 from src.dataset.dataset_v2 import SURFACE_TYPE_MAP_INV
-from src.utils.rts_tools import RotationCodebook, TranslationCodebook, ScaleCodebook
+from src.utils.rts_tools import RotationCodebook, TranslationCodebook, ScaleCodebook, rotate_under_axis
 from src.tools.surface_to_canonical_space import  from_canonical, to_canonical
 from src.utils.surface_tools import params_to_samples
 
-from utils.surface import get_approx_face
+from myutils.surface import get_approx_face
 
 
 surface_template = {
@@ -79,14 +82,27 @@ surface_template = {
     }
 }
 
+    
 class dataset_compound_tokenize_all(Dataset):
 
-    def __init__(self, json_dir: str, rts_codebook_dir: str, max_num_surfaces: int = 500, canonical: bool = True, detect_closed: bool = False, bspline_fit_threshold: float = 1e-2, codebook_size=1024):
+    # size + 1: start
+    # size + 2: end
+    # size + 3: pad
+    def __init__(self, json_dir: str, rts_codebook_dir: str, max_tokens: int = 1000, canonical: bool = True, detect_closed: bool = False, bspline_fit_threshold: float = 1e-2, codebook_size=1024, replica=1, rotation_augment: bool = False, point_augment: bool = False, point_augment_intensity: float = 0.005, pc_shape: int = 16384, use_dfs=False):
+        
+        self.tokens_per_surface = 14
 
-        self.dataset_compound = dataset_compound_tokenize(json_dir, max_num_surfaces, canonical, detect_closed, bspline_fit_threshold, return_orig_surfaces=True)
+        self.max_num_surfaces = max_tokens // self.tokens_per_surface
+        self.dataset_compound = dataset_compound_tokenize(json_dir, 500, canonical, detect_closed, bspline_fit_threshold, return_orig_surfaces=True)
 
         self.codebook_size = codebook_size
-        self.max_num_surfaces = max_num_surfaces
+        self.start_id = self.codebook_size
+        self.end_id = self.codebook_size + 1
+        self.placeholder_id = self.codebook_size + 2 # Known codes with 0 info, could be a mask.
+        self.pad_id = self.codebook_size + 3
+
+
+        self.max_tokens = max_tokens
         self.canonical = canonical
         self.detect_closed = detect_closed
         self.bspline_fit_threshold = bspline_fit_threshold
@@ -105,25 +121,63 @@ class dataset_compound_tokenize_all(Dataset):
         self.scale_codebook = ScaleCodebook(codebook_size=0)
         self.scale_codebook.load(scale_cb_path)
 
+        self.replica = replica
+        self.rotation_augment = rotation_augment
+        self.point_augment = point_augment
+        self.pc_shape = pc_shape
+        self.point_augment_intensity = point_augment_intensity
+        # self.rotation_angles = list(range(0, 360, 15))
+        self.rotation_angles = [0, 90, 180, 270, ]
+        self.rotation_axes = [
+            [1, 0, 0],
+            [0, 1, 0],
+            [0, 0, 1]
+        ]
+        self.use_dfs = use_dfs
     # def rts_augment(self, shifts, rotations, scales):
 
 
     def __len__(self):
-        return len(self.dataset_compound)
+        return int(len(self.dataset_compound )* self.replica)
 
 
+    
     def detokenize(self, tokens, bspline_poles):
         # Input tokens with bspline placements and bspline list for filling the bspline surface info
         # Output surfaces
 
         codes = self.unwarp_codes(tokens)
         codes = codes.reshape(-1, 14)
+        
+        # Handle empty codes (no valid surfaces after truncation)
+        if len(codes) == 0:
+            return []
+        
         surface_type = codes[:, 0]
+
+        # Handle invalid surface type
+        surface_type[surface_type > 5] = 0
         surface_code = codes[:, 1:7]
+        surface_code[surface_code >= self.codebook_size] = 0
+
         rts_code = codes[:, 7:14]
+
+        # Flag invalid rts codes
+        rts_code_invalid = (rts_code >= self.codebook_size)
+        rts_code[rts_code_invalid] = 0
+
         shifts = self.translation_codebook.decode(rts_code[:, :3])
         rotations = self.rotation_codebook.decode(rts_code[:, 3:6])
         scales = self.scale_codebook.decode(rts_code[:, 6:7])
+
+        # Handle invalid rts
+        shifts[rts_code_invalid[:, :3]] = 0
+        if rts_code_invalid[:, 3:6].any():
+            rotations_euler = R.from_matrix(rotations).as_euler('xyz')
+            rotations_euler[rts_code_invalid[:, 3:6]] = 0
+            rotations = R.from_euler('xyz', rotations_euler).as_matrix()
+
+        scales[rts_code_invalid[:, 6:7]] = 1
 
         surfaces = []
         bspline_idx = 0
@@ -155,53 +209,209 @@ class dataset_compound_tokenize_all(Dataset):
 
 
     def unwarp_codes(self, codes):
-        return codes[1:-1].reshape(-1, 14)
+        codes = codes[1:-1] # Drop the start and the end token
+        codes = codes[:int(len(codes)//14 * 14)] # Make sure the length is divisible by 14, drop tails
+        # unwarpped_codes = []
+        # idx = 0
+        # while idx < len(codes):
+
+        return codes.reshape(-1, 14)
 
 
     def warp_codes(self, codes):
         # Currently we only add the start_code = self.codebook_size, end_code = self.codebook_size+1
         codes = codes.reshape(-1)
-        codes = np.concatenate([np.array([self.codebook_size], dtype=int), codes, np.array([self.codebook_size+1], dtype=int)])
-        codes[codes == -1] = self.codebook_size + 2 # Known codes with 0 info, could be a mask.
+        codes = np.concatenate([np.array([self.start_id], dtype=int), codes, np.array([self.end_id], dtype=int)])
+        codes[codes == -1] = self.placeholder_id # Known codes with 0 info, could be a mask.
         
         return codes
         
 
+    def apply_rotation_augment(self, tokens, points):
+
+        # Only influence the rts, letting the surface parameters untouched
+        # Unpadded tokens as input
+        angle = random.choice(self.rotation_angles)
+        axis = random.choice(self.rotation_axes)
+        # print('choice angle: ', angle, 'axis: ', axis)
+        
+        assert tokens.shape[-1] == 14
+
+        rtss = tokens[:, 7:14] # rts = 3 + 3 + 1
+        shifts = self.translation_codebook.decode(rtss[:, :3])
+        rotations = self.rotation_codebook.decode(rtss[:, 3:6])
+        # scales = self.scale_codebook.decode(rtss[:, 6:7])
+
+        rotation_to_apply = rotate_under_axis(angle, axis)
+        rotations_new = rotations @ rotation_to_apply.as_matrix().T
+        shifts_new = rotation_to_apply.as_matrix() @ shifts[..., None]
+        shifts_new = shifts_new[..., 0]
+
+        rotations_new_code = self.rotation_codebook.encode(rotations_new)
+        shifts_new_code = self.translation_codebook.encode(shifts_new)
+        rotations_new_decode = self.rotation_codebook.decode(rotations_new_code)
+        shifts_new_decode = self.translation_codebook.decode(shifts_new_code)
+        try:
+            assert np.abs(rotations_new_decode - rotations_new).mean() < 2e-3
+            assert np.abs(shifts_new_decode - shifts_new).mean() < 1e-3
+        except AssertionError:
+            return None, None, False
+
+        rtss_new = np.concatenate([shifts_new_code, rotations_new_code, rtss[:, 6:7]], axis=1)
+        tokens_new = np.concatenate([tokens[:, :7], rtss_new], axis=1)
+
+        points = rotation_to_apply.as_matrix() @ points[..., None]
+        points = points[..., 0]
+        return tokens_new, points, True
+
+    def apply_pc_augment(self, points, normals):
+        # points: (N, 3)
+        # augment the points
+        # 4. random jitter with gaussian noise
+        noise = np.random.normal(0, self.point_augment_intensity, points.shape)
+        points = points + noise
+        noise = np.random.normal(0, self.point_augment_intensity, points.shape)
+        normals = normals + noise
+        normals = normals / (np.linalg.norm(normals, axis=1, keepdims=True) + 1e-6)
+        return points, normals
+
+    def downsample_pc(self, points, normals):
+        # points: (N, 3)
+        # downsample the points
+        # 1. random sample self.pc_shape points
+        indices = np.random.choice(len(points), self.pc_shape, replace=False)
+        points = points[indices]
+        normals = normals[indices]
+        return points, normals
+
+    def reordering(self, tokens, poles, graph):
+
+        samples = self.samples_from_tokens(self.warp_codes(tokens), poles)
+        surface_centers = samples.mean(axis=(1, 2)) # (B, 3)
+        first_surface_idx = np.where(surface_centers[:, -1] == surface_centers[:, -1].min())[0][0]
+
+        if self.use_dfs:
+            old_order = list(nx.dfs_tree(graph, source=0))
+            new_order = list(nx.dfs_tree(graph, source=first_surface_idx))
+
+        else:
+            old_order = list(nx.bfs_tree(graph, source=0))
+            new_order = list(nx.bfs_tree(graph, source=first_surface_idx))
+        
+        # Create mapping from node to position in old_order
+        old_to_pos = {node: pos for pos, node in enumerate(old_order)}
+        # Create indexing: for each position in new_order, find its position in old_order
+        indexing = [old_to_pos[node] for node in new_order]
+        
+        # Find all bspline surfaces in original tokens (surface_type == 5)
+        # tokens shape: (N, 14), first element is surface_type
+        surface_types = tokens[:, 0] if len(tokens.shape) > 1 else tokens[0:1]
+        bspline_mask_old = (surface_types == 5)
+        bspline_poles_indexing = np.where(bspline_mask_old)[0]  # Positions of bspline surfaces in original tokens
+        # bspline_poles_indexing[i] is the position in original tokens for poles[i]
+        
+        # Reorder tokens using indexing
+        tokens = np.array(tokens)[indexing]
+        
+        # Find bspline surfaces in reordered tokens
+        surface_types_new = tokens[:, 0] if len(tokens.shape) > 1 else tokens[0:1]
+        bspline_mask_new = (surface_types_new == 5)
+        bspline_positions_new = np.where(bspline_mask_new)[0]  # Positions of bspline surfaces in reordered tokens
+        
+        # For each bspline in reordered tokens, find which pole it corresponds to
+        # Map: reordered_position -> original_position (via indexing) -> pole_index (via bspline_poles_indexing)
+        poles_reordering = []
+        for new_pos in bspline_positions_new:
+            old_pos = indexing[new_pos]  # Original position of this bspline in reordered tokens
+            # Find which pole index corresponds to this original position
+            pole_idx = np.where(bspline_poles_indexing == old_pos)[0]
+            if len(pole_idx) > 0:
+                poles_reordering.append(pole_idx[0])
+        
+        # Reorder poles according to the new bspline order
+        if len(poles_reordering) > 0 and len(poles) > 0:
+            if isinstance(poles, np.ndarray):
+                poles = poles[poles_reordering]
+            else:
+                poles = [poles[i] for i in poles_reordering]
+        
+        return tokens, poles
 
 
 
+
+    def samples_from_tokens(self, tokens, poles):
+        surfaces = self.detokenize(tokens, poles)
+        samples = []
+        for surface in surfaces:
+            if surface['type'] == 'bspline_surface':
+                surface['poles'] = np.array(surface['poles'])
+                sampled_points = params_to_samples(torch.zeros([]), surface['type'], 8, 8, surface).squeeze(0).numpy()
+            else:
+                surface['location'] = torch.tensor(surface['location'])
+                surface['direction'] = torch.tensor(surface['direction'])
+                surface['scalar'] =  torch.tensor(surface['scalar'])
+                surface['uv'] =  torch.tensor(surface['uv'])
+                sampled_points = params_to_samples(torch.zeros([]), surface['type'], 8, 8, surface).squeeze(0).numpy()
+            samples.append(sampled_points)
+        samples = np.stack(samples, axis=0) # (B, 8, 8, 3)
+        
+        return samples
+
+
+    def compute_surface_scale(self, all_tokens, all_bspline_poles):
+        samples = self.samples_from_tokens(all_tokens, all_bspline_poles)
+        surface_max_length = (samples.max(axis=(1, 2)) - samples.min(axis=(1, 2))).max(axis=-1) # (B, 8, 8, 3) -> (B) max length of each surface
+        return surface_max_length
 
     def __getitem__(self, idx):
         # all_recon_surfaces, all_codes, types_tensor, all_shifts, all_rotations, all_scales = self.dataset_compound[idx]
 
         solid_valid = True
-        json_path = self.dataset_compound.dataset_compound.json_names[idx]
+        json_path = self.dataset_compound.dataset_compound.json_names[idx % len(self.dataset_compound.dataset_compound)]
         npz_data = np.load(json_path.replace('.json', '.npz'), allow_pickle=True)
         # json_data = json.load(open(json_path, 'r'))
 
-        points = npz_data['points']  # (N_i, 3)
-        normals = npz_data['normals']  # List of arrays, each (N_i, 3)
+        points = np.array(npz_data['points'], dtype=np.float32)  # (N_i, 3)
+        normals = np.array(npz_data['normals'], dtype=np.float32)  # List of arrays, each (N_i, 3)
+
+        if self.point_augment:
+            points, normals = self.apply_pc_augment(points, normals)
+        if self.pc_shape != len(points):
+            points, normals = self.downsample_pc(points, normals)
 
         if len(points.shape) != 2:
             solid_valid = False
 
         # masks_list = npz_data['masks']  # List of arrays, each (N_i,)
         nodes = npz_data['graph_nodes']
+        # print(nodes)
         edges = npz_data['graph_edges']
         graph = nx.Graph()
         graph.add_nodes_from(nodes)
         graph.add_edges_from(edges)
 
-        bfs_nodes = list(nx.bfs_tree(graph, source=0))
+        if self.use_dfs:
+            bfs_nodes = list(nx.dfs_tree(graph, source=0))
+        else:   
+            bfs_nodes = list(nx.bfs_tree(graph, source=0))
 
 
-        all_recon_surfaces, all_codes, types_tensor, all_shifts, all_rotations, all_scales, all_orig_surfaces = self.dataset_compound[idx]
+        all_recon_surfaces, all_codes, types_tensor, all_shifts, all_rotations, all_scales, all_orig_surfaces = self.dataset_compound[idx % len(self.dataset_compound)]
+
+
+        all_tokens_padded = np.zeros((self.max_tokens), dtype=int) + self.pad_id
+        all_bspline_poles_padded = np.zeros((self.max_num_surfaces, 4, 4, 4), dtype=np.float32)
+        all_bspline_valid_mask = np.zeros((self.max_num_surfaces), dtype=bool)
 
 
         if len(nodes) != len(all_recon_surfaces):
             # Should be bspline drop
             solid_valid = False
-            return [], [],  [], [], solid_valid
+            return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, solid_valid
+
+
+        # print('0', solid_valid)
         all_shifts_code = self.translation_codebook.encode(all_shifts)
         all_rotations_code = self.rotation_codebook.encode(all_rotations)
         all_scales_code = self.scale_codebook.encode(all_scales)
@@ -216,72 +426,66 @@ class dataset_compound_tokenize_all(Dataset):
                 surface = all_recon_surfaces[s_idx]
 
                 # Try bspline fitting in the original space
+                try:
+                    surface = from_canonical(surface, all_shifts[s_idx], all_rotations[s_idx], float(all_scales[s_idx]))
+                    assert surface['type'] != 'bspline_surface'
+                    surface['location'] = torch.tensor(surface['location'])
+                    surface['direction'] = torch.tensor(surface['direction'])
+                    surface['scalar'] =  torch.tensor(surface['scalar'])
+                    surface['uv'] =  torch.tensor(surface['uv'])
 
-                surface = from_canonical(surface, all_shifts[s_idx], all_rotations[s_idx], float(all_scales[s_idx]))
-                
-                surface['location'] = torch.tensor(surface['location'])
-                surface['direction'] = torch.tensor(surface['direction'])
-                surface['scalar'] =  torch.tensor(surface['scalar'])
-                surface['uv'] =  torch.tensor(surface['uv'])
+                    sampled_points = params_to_samples(torch.zeros([]), surface['type'], 32, 32, surface).squeeze(0).numpy()
+                    fitted_poles = np.array(get_approx_face(sampled_points)).reshape(4, 4, 3)
 
-                sampled_points = params_to_samples(torch.zeros([]), surface['type'], 32, 32, surface).squeeze(0).numpy()
-                fitted_poles = np.array(get_approx_face(sampled_points)).reshape(4, 4, 3)
+                    fitted_poles_with_weights = np.concatenate(
+                        [fitted_poles, np.ones((4, 4, 1))], axis=-1
+                    )
+                    
+                    # Build fitted surface and compare
+                    fitted_knots = np.array([0.0, 1.0], dtype=np.float64)
+                    fitted_mults = np.array([4, 4], dtype=np.int32)
+                    fitted_surface = self.dataset_compound.dataset_compound._build_occ_bspline_surface(
+                        3, 3, 4, 4,
+                        fitted_knots, fitted_knots, fitted_mults, fitted_mults,
+                        fitted_poles_with_weights, False, False
+                    )
+                    
+                    # Sample fitted surface
+                    fitted_samples = self.dataset_compound.dataset_compound._sample_bspline_surface_grid(fitted_surface, 32, 32)
+                    
+                    # Compute MSE (both surfaces are in [-1, 1] canonical space)
+                    fit_error = np.mean((sampled_points - fitted_samples) ** 2)
 
-                fitted_poles_with_weights = np.concatenate(
-                    [fitted_poles, np.ones((4, 4, 1))], axis=-1
-                )
-                
-                # Build fitted surface and compare
-                fitted_knots = np.array([0.0, 1.0], dtype=np.float64)
-                fitted_mults = np.array([4, 4], dtype=np.int32)
-                fitted_surface = self.dataset_compound.dataset_compound._build_occ_bspline_surface(
-                    3, 3, 4, 4,
-                    fitted_knots, fitted_knots, fitted_mults, fitted_mults,
-                    fitted_poles_with_weights, False, False
-                )
-                
-                # Sample fitted surface
-                fitted_samples = self.dataset_compound.dataset_compound._sample_bspline_surface_grid(fitted_surface, 32, 32)
-                
-                # Compute MSE (both surfaces are in [-1, 1] canonical space)
-                fit_error = np.mean((sampled_points - fitted_samples) ** 2)
+                    if fit_error > self.bspline_fit_threshold:
+                        print(f'Over-range Bspline fitting error: {fit_error:.5f} to large, drop solid')
+                        solid_valid = False
+                    
+                    else:
+                        # Then we change the type to bspline surface, and re-calculate the rts.
 
-                if fit_error > self.bspline_fit_threshold:
-                    print(f'Over-range Bspline fitting error: {fit_error:.5f} to large, drop solid')
+                        poles_canonical, _rotation, _shift, _scale = self.dataset_compound.dataset_compound._canonicalize_bspline_poles(fitted_poles.copy(), fitted_surface)
+
+
+                        surface = surface_template['bspline_surface']
+                        surface['poles'] = np.concatenate(
+                        [poles_canonical, np.ones((4, 4, 1))], axis=-1
+                    ).tolist()
+
+                        all_recon_surfaces[s_idx] = surface
+                        types_tensor[s_idx] = 5
+                        all_codes[s_idx] = np.zeros(6, dtype=int) - 2
+                        all_shifts[s_idx] = _shift
+                        all_rotations[s_idx] = _rotation
+                        all_scales[s_idx] = _scale
+                except AssertionError:
                     solid_valid = False
-                
-                else:
-                    # Then we change the type to bspline surface, and re-calculate the rts.
-
-                    poles_canonical, _rotation, _shift, _scale = self.dataset_compound.dataset_compound._canonicalize_bspline_poles(fitted_poles.copy(), fitted_surface)
+                    return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, solid_valid
 
 
-                    surface = surface_template['bspline_surface']
-                    surface['poles'] = np.concatenate(
-                    [poles_canonical, np.ones((4, 4, 1))], axis=-1
-                ).tolist()
-
-                    all_recon_surfaces[s_idx] = surface
-                    types_tensor[s_idx] = 5
-                    all_codes[s_idx] = np.zeros(6, dtype=int) - 2
-                    all_shifts[s_idx] = _shift
-                    all_rotations[s_idx] = _rotation
-                    all_scales[s_idx] = _scale
-
-        
         # Then we do the tokenization of updated rts.
         all_shifts_code = self.translation_codebook.encode(all_shifts)
         all_rotations_code = self.rotation_codebook.encode(all_rotations)
         all_scales_code = self.scale_codebook.encode(all_scales)
-
-        # all_shifts_diff = np.abs(self.translation_codebook.decode(all_shifts_code) - all_shifts).sum(axis=1)
-        # all_scales_diff = np.abs(self.scale_codebook.decode(all_scales_code) - all_scales)
-        # flag_bspline_replacement = (all_scales_diff > 1e-2) | (all_shifts_diff > 1e-2)
-        # if sum(flag_bspline_replacement) > 0:
-        #     solid_valid = False
-        #     return [], [], [], [], [], solid_valid
-
-
 
 
         all_tokens = []
@@ -289,6 +493,7 @@ class dataset_compound_tokenize_all(Dataset):
         
         
         for node in bfs_nodes:
+            # print(node)
             surface = all_recon_surfaces[node]
             if surface['type'] == 'bspline_surface':
                 # Special marker for bspline for later fsq tokenize
@@ -305,22 +510,307 @@ class dataset_compound_tokenize_all(Dataset):
             token = np.concatenate([np.array(type_code, dtype=int)[None], surface_code, rts_code], axis=0)
             all_tokens.append(token)
 
-        all_tokens = np.stack(all_tokens, axis=0)
-        all_tokens = self.warp_codes(all_tokens)
-        if len(all_bspline_poles) > 0:
-            return points, normals, all_tokens, np.stack(all_bspline_poles, axis=0), solid_valid
+        if len(all_bspline_poles) == 0:
+            all_bspline_poles = np.zeros((self.max_num_surfaces, 4, 4, 4), dtype=np.float32)
         else:
-            return points, normals, all_tokens, [], solid_valid
+            all_bspline_poles = np.stack(all_bspline_poles, axis=0)
+            all_bspline_valid_mask[:len(all_bspline_poles)] = True
+
+        all_tokens = np.stack(all_tokens, axis=0)
+
+        # print('2', solid_valid)
+        # print(all_tokens.shape)
+        # Do the augmentaion if needed
+        if self.rotation_augment:
+            all_tokens, points, solid_valid = self.apply_rotation_augment(all_tokens, points)
+            if not solid_valid:
+                return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, solid_valid
+
+
+        # print(all_tokens.shape)
+        
+        all_tokens, all_bspline_poles = self.reordering(all_tokens, all_bspline_poles, graph)
+
+
+        
+        all_tokens = self.warp_codes(all_tokens)
+
+
+        # print('3', solid_valid)
+        if len(all_tokens) > self.max_tokens:
+            solid_valid = False
+        else:
+
+            all_tokens_padded[:len(all_tokens)] = all_tokens
+            all_bspline_poles_padded[:len(all_bspline_poles)] = all_bspline_poles
+
+
+        return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, solid_valid
+
+
+class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
+    # TODO: add rotation augmentation
+    def __init__(self, cache_file: str, rts_codebook_dir: str, max_tokens: int = 1000, canonical: bool = True, detect_closed: bool = False, bspline_fit_threshold: float = 1e-2, codebook_size=1024, replica=1, rotation_augment: bool = False, point_augment: bool = False, point_augment_intensity: float = 0.005, pc_shape: int = 16384, replace_file_header='', emphasize_long=False, use_dfs=False, min_surface_threshold: float = 0.01, inference=False, length_aug: bool = False):
+        super().__init__('', rts_codebook_dir, max_tokens, canonical, detect_closed, bspline_fit_threshold, codebook_size, replica, rotation_augment, point_augment, point_augment_intensity, pc_shape, use_dfs)
+        self.cache_file = cache_file
+        self.data = pickle.load(open(self.cache_file, 'rb'))
+        self.npz_path = self.data['npz_path']
+        self.replace_file_header = replace_file_header
+        if self.replace_file_header != '':
+            self.npz_path = [p.replace('/data/ssd/CAD/data/abc_step_pc', self.replace_file_header) for p in self.npz_path]
+
+        self.tokens = self.data['tokens']
+        self.poles = self.data['poles']
+
+        self._npz_path = []
+        self._tokens = []
+        self._poles = []
+        self.emphasize_long = emphasize_long
+        self.min_surface_threshold = min_surface_threshold
+        self.inference = inference
+        self.length_aug = length_aug
+        print(f"Minimum surface scale threshold: {self.min_surface_threshold}")
+
+
+        print(f"Length of original dataset: {len(self.npz_path)}")
+
+        if self.emphasize_long:
+            print(f"Emphasizing long tokens, 1.5 repeat for > 400 tokens, after 100 epochs")
+
+        for i in range(len(self.npz_path)):
+            token_length = len(self.tokens[i])
+            if token_length < 100:
+                repeat = 0
+            elif token_length >= 100 and token_length < 200:
+                repeat = 1
+            elif token_length >= 200 and token_length < 400:
+                repeat = 2
+            elif token_length >= 400 and token_length < 600:
+                repeat = 4
+            elif token_length >= 600:
+                repeat = 8
+
+            if self.emphasize_long and token_length >= 400:
+                repeat = int(repeat * 1.5)
+
+            if self.inference:
+                repeat = 0
+
+            if not self.length_aug:
+                repeat = 1
+            # print(repeat)
+            # print(self.inference)
+            self._npz_path.extend([self.npz_path[i]] * repeat)
+            self._tokens.extend([self.tokens[i]] * repeat)
+            self._poles.extend([self.poles[i]] * repeat)
+
+        self.npz_path = self._npz_path
+        self.tokens = self._tokens
+        self.poles = self._poles
+        print(f"Length of augmented dataset: {len(self.npz_path)}")
+        self.json_names = [p.replace('.npz', '.json') for p in self.npz_path]
+        
+
+    def __len__(self):
+        return len(self.npz_path) * int(self.replica)
+
+
+
+    def __getitem__(self, idx):
+
+        npz_data = np.load(self.npz_path[idx % len(self.npz_path)], allow_pickle=True)
+        json_data = json.load(open(self.npz_path[idx % len(self.npz_path)].replace('.npz', '.json'), 'r'))
+
+        points = np.array(npz_data['points'], dtype=np.float32)  # (N_i, 3)
+        normals = np.array(npz_data['normals'], dtype=np.float32)  # List of arrays, each (N_i, 3)
+
+        if self.point_augment:
+            points, normals = self.apply_pc_augment(points, normals)
+        if self.pc_shape != len(points):
+            points, normals = self.downsample_pc(points, normals)
+
+        nodes = npz_data['graph_nodes']
+        edges = npz_data['graph_edges']
+        graph = nx.Graph()
+        graph.add_nodes_from(nodes)
+        graph.add_edges_from(edges)
+        
+        
+        tokens = self.tokens[idx % len(self.tokens)]
+        poles = self.poles[idx % len(self.poles)]
+
+        all_tokens_padded = np.zeros((self.max_tokens), dtype=int) + self.pad_id
+        all_bspline_poles_padded = np.zeros((self.max_num_surfaces, 4, 4, 4), dtype=np.float32)
+        all_bspline_valid_mask = np.zeros((self.max_num_surfaces), dtype=bool)
+        
+
+        samples = self.samples_from_tokens(tokens, poles)
+        min_surface_scale = (samples.max(axis=(1, 2)) - samples.min(axis=(1, 2))).max(axis=-1)
+        min_surface_scale = min_surface_scale.min()
+        if min_surface_scale < self.min_surface_threshold:
+            return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, False
+
+        
+
+        if self.rotation_augment:
+            tries = 10
+            tokens = self.unwarp_codes(tokens)
+            tokens_new = None
+            points_new = None
+            solid_valid_new = False
+            while tries > 0:
+                tokens_new, points_new, solid_valid_new = self.apply_rotation_augment(tokens, points)
+                if solid_valid_new:
+                    break
+                tries -= 1
+            if solid_valid_new:
+                tokens = tokens_new
+                points = points_new
+                solid_valid = solid_valid_new
+            else:
+                points = np.zeros((self.pc_shape, 3), dtype=np.float32)
+                normals = np.zeros((self.pc_shape, 3), dtype=np.float32)
+                solid_valid = False
+                return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, solid_valid
+
+            tokens = self.warp_codes(tokens)
+
+        
+
+        # Do the reordering base on the rotated version
+
+        try:
+            tokens, poles = self.reordering(self.unwarp_codes(tokens), poles, graph)
+        except Exception as e:
+            print(f"Error in reordering: {e}")
+            if not os.path.exists('./assets/GPT_train'):
+                os.makedirs('./assets/GPT_train')
+            with open('./assets/GPT_train/error_reordering.txt', 'w') as f:
+                f.write(f"{self.npz_path[idx % len(self.npz_path)]}\n")
+            return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, False
+        tokens = self.warp_codes(tokens)
+
+
+
+        
+
+        all_tokens_padded[:len(tokens)] = tokens
+        all_bspline_poles_padded[:len(poles)] = poles
+        all_bspline_valid_mask[:len(poles)] = True
+
+        return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, True
+
+
+
+
+    
+
 
 
 if __name__ == '__main__':
-    dataset = dataset_compound_tokenize_all(json_dir='../data/abc_step_pc_0009', rts_codebook_dir='./assets/codebook', bspline_fit_threshold=1e-2)
+    # dataset = dataset_compound_tokenize_all(json_dir='../data/abc_step_pc_0009', rts_codebook_dir='./assets/codebook', bspline_fit_threshold=1e-2)
     
-    # for data in tqdm(dataset):
-    for idx in tqdm(range(len(dataset))):
-        points_list, normals_list, masks_list, tokens, bspline_poles, valid = dataset[idx]
+    # # for data in tqdm(dataset):
+    # for idx in tqdm(range(len(dataset))):
+    #     points_list, normals_list, masks_list, tokens, bspline_poles, valid = dataset[idx]
         
-        if valid:
-            surfaces = dataset.detokenize(tokens, bspline_poles)
-            print()
+    #     if valid:
+    #         surfaces = dataset.detokenize(tokens, bspline_poles)
+    #         print()
+    import sys
+    from pathlib import Path
+    sys.path.append(str(Path(__file__).parent.parent))
+    from src.utils.import_tools import load_dataset_from_config
+    from omegaconf import OmegaConf
+
+    # config = OmegaConf.load('./src/configs/gpt/gpt_0102_michel_A800.yaml')
+    config = OmegaConf.load('./src/configs/gpt/cache_laptop.yaml')
+    dataset = load_dataset_from_config(config, section='data_train')
+    num_rot_aug_invalid = 0
+    num_total_invalid = 0
+    scales_min = []
+    scales_max = []
+    for idx in tqdm(range(5000)):
+        print(idx)
+        data = dataset[idx]
+        if data[-1] == -2:
+            num_rot_aug_invalid += 1
+        if data[-1] != True:
+            num_total_invalid += 1
+
+        if data[-1] != True:
+            continue
+        tokens = data[2]
+        poles = data[3]
+        poles_mask = data[4]
+        actual_length = dataset.max_tokens - (tokens == dataset.pad_id).sum().item()
+        tokens = tokens[:actual_length]
+        poles = poles[poles_mask]
+        surface_scale = dataset.compute_surface_scale(tokens, poles)
+        scales_min.append(min(surface_scale))
+        scales_max.append(max(surface_scale))
+
+    print(num_rot_aug_invalid)
+    print(num_total_invalid)
+    print(scales_min)
+    print(scales_max)
     
+    # Calculate and print statistics for scales_max and scales_min
+    scales_max_array = np.array(scales_max)
+    scales_min_array = np.array(scales_min)
+    
+    print('\n=== Statistics for scales_max ===')
+    print(f'Mean: {np.mean(scales_max_array):.6f}')
+    print(f'Median: {np.median(scales_max_array):.6f}')
+    print(f'95% percentile: {np.percentile(scales_max_array, 95):.6f}')
+    print(f'5% percentile: {np.percentile(scales_max_array, 5):.6f}')
+    
+    print('\n=== Statistics for scales_min ===')
+    print(f'Mean: {np.mean(scales_min_array):.6f}')
+    print(f'Median: {np.median(scales_min_array):.6f}')
+    print(f'95% percentile: {np.percentile(scales_min_array, 95):.6f}')
+    print(f'5% percentile: {np.percentile(scales_min_array, 5):.6f}')
+    
+    # Plot distribution of scales_min and scales_max
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+    
+    # Calculate statistics for plotting
+    max_mean = np.mean(scales_max_array)
+    max_median = np.median(scales_max_array)
+    max_95 = np.percentile(scales_max_array, 95)
+    
+    min_mean = np.mean(scales_min_array)
+    min_median = np.median(scales_min_array)
+    min_95 = np.percentile(scales_min_array, 95)
+    
+    # Plot scales_max distribution
+    ax1.hist(scales_max, bins=50, alpha=0.7, color='blue', edgecolor='black')
+    ax1.axvline(max_mean, color='green', linestyle='--', linewidth=2, label=f'Mean: {max_mean:.4f}')
+    ax1.axvline(max_median, color='orange', linestyle='--', linewidth=2, label=f'Median: {max_median:.4f}')
+    ax1.axvline(max_95, color='purple', linestyle='--', linewidth=2, label=f'95%: {max_95:.4f}')
+    ax1.set_xlabel('Surface Scale (Max)')
+    ax1.set_ylabel('Frequency')
+    ax1.set_title('Distribution of scales_max')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    
+    # Plot scales_min distribution
+    ax2.hist(scales_min, bins=50, alpha=0.7, color='red', edgecolor='black')
+    ax2.axvline(min_mean, color='green', linestyle='--', linewidth=2, label=f'Mean: {min_mean:.4f}')
+    ax2.axvline(min_median, color='orange', linestyle='--', linewidth=2, label=f'Median: {min_median:.4f}')
+    ax2.axvline(min_95, color='purple', linestyle='--', linewidth=2, label=f'95%: {min_95:.4f}')
+    ax2.set_xlabel('Surface Scale (Min)')
+    ax2.set_ylabel('Frequency')
+    ax2.set_title('Distribution of scales_min')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    # Save the figure
+    output_dir = Path('assets')
+    output_dir.mkdir(exist_ok=True)
+    output_path = output_dir / 'surface_size_dist_max, min.jpg'
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    print(f'Distribution plot saved to {output_path}')
+    plt.close()

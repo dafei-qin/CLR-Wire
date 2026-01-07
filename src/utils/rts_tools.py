@@ -6,12 +6,22 @@ This module provides spherical k-means clustering on quaternions for rotation qu
 
 import numpy as np
 import pickle
+import warnings
 from pathlib import Path
 from typing import Tuple, Dict, Optional, Union
 from scipy.spatial.transform import Rotation as R
+import random
 from tqdm import tqdm
 
 
+def rotate_under_axis(angle, axis):
+    
+    radian = np.pi / 180 * angle
+    
+    rotation = R.from_rotvec(radian * np.array(axis))
+
+    return rotation
+    
 class RotationCodebook:
     """
     Uniform rotation quantization using Euler angles.
@@ -45,7 +55,10 @@ class RotationCodebook:
         """
         scipy_rots = R.from_matrix(rotations)
         # Use 'xyz' convention (roll-pitch-yaw)
-        euler_angles = scipy_rots.as_euler('xyz', degrees=False)
+        # Suppress gimbal lock warnings
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore', category=UserWarning, message='.*Gimbal lock.*')
+            euler_angles = scipy_rots.as_euler('xyz', degrees=False)
         return euler_angles
     
     def _euler_to_rotation(self, euler_angles: np.ndarray) -> np.ndarray:

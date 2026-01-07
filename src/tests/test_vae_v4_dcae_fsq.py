@@ -25,7 +25,7 @@ from src.dataset.dataset_v2 import dataset_compound
 from src.tools.surface_to_canonical_space import to_canonical, from_canonical
 from src.utils.config import load_config
 from src.utils.import_tools import load_model_from_config, load_dataset_from_config
-from utils.surface import visualize_json_interset
+from myutils.surface import visualize_json_interset
 import einops
 
 # Global variables for interactive visualization

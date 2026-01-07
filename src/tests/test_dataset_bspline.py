@@ -16,7 +16,7 @@ if str(project_root) not in sys.path:
 
 from src.dataset.dataset_bspline import dataset_bspline  # noqa: E402
 
-from utils.surface import build_bspline_surface, get_approx_face  # noqa: E402
+from myutils.surface import build_bspline_surface, get_approx_face  # noqa: E402
 from OCC.Core.BRep import BRep_Tool
 from OCC.Core.GeomAdaptor import GeomAdaptor_Surface
 

@@ -11,6 +11,7 @@ import json
 import random
 import networkx as nx
 import fpsample
+from copy import deepcopy
 
 # Suppress warnings BEFORE importing occwl
 warnings.filterwarnings('ignore', category=DeprecationWarning)
@@ -374,6 +375,7 @@ def step_to_pointcloud(step_filename, ply_filename, num_samples=1000, debug=True
 
         for face_idx in graph.nodes():
             face = graph.nodes[face_idx]["face"]
+            face_json = jsons_data[face_idx]
 
             # 逐步累积采样结果，而不是每次重采样都丢弃之前的点，
             # 这样可以减少需要放大的采样次数
@@ -411,11 +413,22 @@ def step_to_pointcloud(step_filename, ply_filename, num_samples=1000, debug=True
                 normals = np.zeros((0, 3), dtype=np.float32)
                 masks = np.zeros((0,), dtype=bool)
 
+
+            # Do the normal orientation adjustment.
+            if face_json['orientation'] == 'Reversed':
+                normals = -normals
+                
+
             all_points.append(points.astype(np.float32))
             all_normals.append(normals.astype(np.float32))
             all_masks.append(masks.astype(bool))
 
         graph_undirected = strip_features_and_make_undirected(graph)
+
+
+        all_points_per_face = deepcopy(all_points)
+        all_normals_per_face = deepcopy(all_normals)
+        all_masks_per_face = deepcopy(all_masks)
 
         # 与正式脚本同步：可选 FPS
         if fps:
@@ -445,6 +458,11 @@ def step_to_pointcloud(step_filename, ply_filename, num_samples=1000, debug=True
             masks=np.array(all_masks, dtype=object),
             graph_nodes=list(graph_undirected.nodes()),
             graph_edges=list(graph_undirected.edges()),
+        )
+        np.savez(save_name.replace('.npz', '_per_face.npz'),
+            points=np.array(all_points_per_face, dtype=object),
+            normals=np.array(all_normals_per_face, dtype=object),
+            masks=np.array(all_masks_per_face, dtype=object),
         )
         json.dump(jsons_data, open(save_name.replace('.npz', '.json'), 'w'), ensure_ascii=False, indent=2)
         print(f"\n✓ [DEBUG] Successfully saved {len(all_points)} surfaces/points to {save_name}")

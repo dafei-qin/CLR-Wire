@@ -19,7 +19,7 @@ import polyscope.imgui as psim
 import argparse
 
 from src.dataset.dataset_bspline import dataset_bspline
-from utils.surface import build_bspline_surface
+from myutils.surface import build_bspline_surface
 
 
 class BSplineDatasetViewer:

@@ -33,7 +33,7 @@ sys.path.insert(0, str(project_root))
 
 from src.dataset.dataset_v4_tokenize_all import dataset_compound_tokenize_all
 from src.utils.import_tools import load_model_from_config
-from utils.surface import visualize_json_interset, write_to_step
+from myutils.surface import visualize_json_interset, write_to_step
 
 
 def load_raw_json(json_path: Path):
@@ -169,7 +169,7 @@ def update_visualization():
     """Update polyscope visualization for the current index."""
     global current_idx, pending_idx
     global raw_group, detok_group
-    global raw_surfaces_vis, detok_surfaces_vis
+    global raw_surfaces_vis, detok_surfaces_vis, raw_surfaces, detok_surfaces
     global current_all_points, current_all_normals
 
     # Keep pending in sync with current index
@@ -241,7 +241,7 @@ def update_visualization():
 
 def save_current_sample():
     """Save raw faces, detokenized faces, and point cloud to the specified folder."""
-    global save_folder_path, raw_surfaces_vis, detok_surfaces_vis
+    global save_folder_path, raw_surfaces_vis, detok_surfaces_vis, raw_surfaces, detok_surfaces
     global current_all_points, current_all_normals, current_idx
 
     if not save_folder_path:
@@ -272,6 +272,7 @@ def save_current_sample():
         raw_step_path = save_dir / f"raw_surfaces_idx_{current_idx:04d}.step"
         try:
             write_to_step(raw_faces, str(raw_step_path))
+            open(save_dir / f"raw_surfaces_idx_{current_idx:04d}.json", "w").write(json.dumps(raw_surfaces, indent=2))
             print(f"Saved {len(raw_faces)} raw faces to {raw_step_path}")
         except Exception as e:
             print(f"Error saving raw faces to STEP: {e}")
@@ -283,6 +284,7 @@ def save_current_sample():
         detok_step_path = save_dir / f"detokenized_surfaces_idx_{current_idx:04d}.step"
         try:
             write_to_step(detok_faces, str(detok_step_path))
+            open(save_dir / f"detokenized_surfaces_idx_{current_idx:04d}.json", "w").write(json.dumps(detok_surfaces, indent=2))
             print(f"Saved {len(detok_faces)} detokenized faces to {detok_step_path}")
         except Exception as e:
             print(f"Error saving detokenized faces to STEP: {e}")

@@ -1,0 +1,45 @@
+
+vae:
+  name: src.vae.vae_v4_dcae_fsq.DCAE_FSQ_VAE
+  pred_is_closed: true
+  load_ckpt: true  # Don't load checkpoint on initialization (trainer will handle resume)
+  params:
+      input_size: 4
+      in_channels: 3
+      latent_channels: 3
+      width_base: 64
+      fsq_levels: [8, 5, 5, 5]
+      num_codebooks: 6
+  
+  checkpoint_folder: checkpoints/train_1223_vae_v4_bspline_only_dcae_fsq_6tokens_1024
+  checkpoint_file_name: model-10.pt
+
+data_train:
+  # name: src.dataset.dataset_v4_tokenize_all.dataset_compound_tokenize_all_cache
+  name: src.dataset.dataset_v4_tokenize_all.dataset_compound_tokenize_all
+  params:
+    json_dir: /data/ssd/CAD/data/abc_step_pc/2_0
+    # cache_file: /deemos-research-area-d/meshgen/cad_data/caches/test.pkl
+    rts_codebook_dir: assets/codebook_scale_1.2
+    max_tokens: 1000
+    canonical: true
+    detect_closed: false
+    bspline_fit_threshold: 1e-2
+    codebook_size: 1024
+    replica: 1
+    rotation_augment: false
+
+data_val:
+  name: src.dataset.dataset_v4_tokenize_all.dataset_compound_tokenize_all_cache
+  params:
+    # json_dir: /deemos-research-area-d/meshgen/cad_data/abc_step_pc/5
+    cache_file: /deemos-research-area-d/meshgen/cad_data/caches/test.pkl
+    rts_codebook_dir: assets/codebook_scale_1.2
+    max_tokens: 1000
+    canonical: true
+    detect_closed: false
+    bspline_fit_threshold: 1e-2
+    codebook_size: 1024
+    replica: 1
+    rotation_augment: true
+
