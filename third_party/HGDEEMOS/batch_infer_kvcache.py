@@ -23,6 +23,7 @@ sys.path.insert(0, str(project_root))
 import trimesh
 import numpy as np
 import torch.utils.data as data
+import open3d as o3d
 import random
 from omegaconf import OmegaConf
 import polyscope as ps
@@ -657,8 +658,17 @@ def main():
             # 保存单份点云（可选）
             if pc is not None:
                 ply_filename = f'{output_dir}/{idx}_batch_{j}.ply'
-                pointcloud = trimesh.points.PointCloud(pc[0].detach().cpu().numpy()[..., :3])
-                pointcloud.export(ply_filename)
+                pc_numpy = pc[0].detach().cpu().numpy()
+                vertices = pc_numpy[..., :3]
+                normals = pc_numpy[..., 3:6] if pc_numpy.shape[-1] >= 6 else None
+                
+                # 使用 open3d 保存点云
+                pcd = o3d.geometry.PointCloud()
+                pcd.points = o3d.utility.Vector3dVector(vertices)
+                if normals is not None:
+                    print('save_normals')
+                    pcd.normals = o3d.utility.Vector3dVector(normals)
+                o3d.io.write_point_cloud(ply_filename, pcd)
                 print(f"  点云保存到: {ply_filename}")
 
             target_dtype = next(model.conditioner.parameters()).dtype if hasattr(model, "conditioner") and model.conditioner is not None else next(model.parameters()).dtype
