@@ -2,11 +2,11 @@
 
 # 配置参数
 MAX_PARALLEL=128  # 最大并发数，可以根据需要修改
-NUM_SAMPLES=4096
+NUM_SAMPLES=2048
 FPS=True
-NUM_FPS=20480
-INPUT_BASE="/root/CAD/data/abc/8"
-OUTPUT_BASE="/root/CAD/data/abc_step_pc/8"
+NUM_FPS=10240
+INPUT_BASE="/root/CAD/data/abc_test"
+OUTPUT_BASE="/root/CAD/data/abc_step_pc_test"
 LOG_DIR="./logs/batch_step_to_pc/8"
 SCRIPT_PATH="src/tools/sample_step_to_pc_debug.py"
 

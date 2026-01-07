@@ -2,12 +2,12 @@
 
 # 配置参数
 MAX_PARALLEL=96 # 最大并发数，可以根据需要修改
-NUM_SAMPLES=4096
+NUM_SAMPLES=2048
 FPS=True
-NUM_FPS=20480
-INPUT_BASE="/data/ssd/CAD/data/abc/4"
-OUTPUT_BASE="/data/ssd/CAD/data/abc_step_pc/4"
-LOG_DIR="/data/ssd/CAD/data/abc_step_pc/logs/batch_step_to_pc/4"
+NUM_FPS=10240
+INPUT_BASE="/data/ssd/CAD/data/abc/3"
+OUTPUT_BASE="/data/ssd/CAD/data/abc_step_pc_correct_normal/3"
+LOG_DIR="/data/ssd/CAD/data/abc_step_pc_correct_normal/logs/batch_step_to_pc/3"
 SCRIPT_PATH="src/tools/sample_step_to_pc_debug.py"
 
 # 创建日志目录
