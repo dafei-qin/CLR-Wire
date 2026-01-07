@@ -6,7 +6,7 @@ CUDA_VISIBLE_DEVICES=1 xvfb-run --auto-servernum python third_party/HGDEEMOS/bat
     --num_samples 300 \
     --max_new_tokens 1000 \
     --max_seq_len 1000 \
-    --temperature 0.1 \
+    --temperature 0.0 \
     --device cuda \
     --dtype bf16 \
-    --output_dir /data/ssd/CAD/checkpoints/GPT_INIT_142M_CONDITIONER/train0/iter-010620-final-ckpt/
+    --output_dir /data/ssd/CAD/checkpoints/GPT_INIT_142M_CONDITIONER/train0/iter-010620-final-ckpt-train/
