@@ -2,12 +2,12 @@
 
 # 配置参数
 MAX_PARALLEL=48  # 最大并发数，可以根据需要修改
-NUM_SAMPLES=4096
+NUM_SAMPLES=2048
 FPS=True
-NUM_FPS=20480
-INPUT_BASE="/home/qindafei/CAD/data/abc_step_full/2_1"
-OUTPUT_BASE="/home/qindafei/CAD/data/abc_step_pc/2_1"
-LOG_DIR="./logs/batch_step_to_pc/1"
+NUM_FPS=10240
+INPUT_BASE="/home/qindafei/CAD/data/abc_step_full/0"
+OUTPUT_BASE="/home/qindafei/CAD/data/abc_step_pc_correct_normal/0"
+LOG_DIR="./logs/batch_step_to_pc/correct_normal/0"
 SCRIPT_PATH="src/tools/sample_step_to_pc_debug.py"
 
 # 创建日志目录
