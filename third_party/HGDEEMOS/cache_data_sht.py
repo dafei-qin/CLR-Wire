@@ -1,22 +1,10 @@
-import glob
-import math
+
 import sys
-import time
+
 from pathlib import Path
-from typing import List, Optional, Tuple, Union
+
 import math
-import lightning as L
-import torch
-from lightning.fabric.strategies import FSDPStrategy
-from torch.utils.data import DataLoader
-from functools import partial
-import random
-import os
-from datetime import datetime
-import numpy as np
-import trimesh
-import warnings
-import einops
+
 import pickle 
 from tqdm import tqdm
 sys.path.insert(0, str(Path(__file__).parent))
@@ -24,8 +12,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 project_root = Path(__file__).parent.parent.parent.resolve()
 sys.path.insert(0, str(project_root))
 
-from src.utils.import_tools import load_dataset_from_config, load_model_from_config
-from src.utils.gpt_tools import tokenize_bspline_poles
+from src.utils.import_tools import load_dataset_from_config
+
 from omegaconf import OmegaConf
 import argparse
 
