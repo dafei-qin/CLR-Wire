@@ -365,7 +365,8 @@ def step_to_pointcloud(step_filename, ply_filename, num_samples=1000, debug=True
             ic(f"Graph nodes: {len(graph.nodes())}, edges: {len(graph.edges())}")
         except Exception as e:
             ic(f"Face adjacency failed: {e}")
-            raise ValueError("Face adjacency failed. The solid may be invalid.")
+            # raise ValueError("Face adjacency failed. The solid may be invalid.")
+            continue
 
         jsons_data = processor.tokenize_cad_data_preload(graph)
         # Collect points and normals from all faces
