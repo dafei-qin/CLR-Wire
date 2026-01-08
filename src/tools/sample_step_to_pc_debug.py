@@ -439,7 +439,7 @@ def step_to_pointcloud(step_filename, ply_filename, num_samples=1000, debug=True
             print('[DEBUG] Num valid points total: ', len(all_points_valid))
             if len(all_points_valid) < num_fps * 2:
                 print('[DEBUG] Num valid points too few, skipping FPS sampling')
-                return
+                continue
             fps_idx = fpsample.bucket_fps_kdtree_sampling(all_points_valid, num_fps)
             all_points = all_points_valid[fps_idx]
             all_normals = all_normals_valid[fps_idx]
