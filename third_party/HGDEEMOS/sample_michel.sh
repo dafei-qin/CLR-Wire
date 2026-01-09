@@ -8,5 +8,5 @@ CUDA_VISIBLE_DEVICES=0 xvfb-run --auto-servernum python third_party/HGDEEMOS/bat
     --temperature 0.1 \
     --device cuda \
     --dtype bf16 \
-    --aug_num 2 \
+    --aug_num 16 \
     --output_dir /deemos-research-area-d/meshgen/cad/checkpoints/GPT_INIT_142M/train_0108_michel/test_00
