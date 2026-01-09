@@ -94,7 +94,7 @@ class dataset_compound_tokenize_all(Dataset):
 
         self.max_num_surfaces = max_tokens // self.tokens_per_surface
         self.dataset_compound = dataset_compound_tokenize(json_dir, 500, canonical, detect_closed, bspline_fit_threshold, return_orig_surfaces=True)
-
+        print('dv4 canonical: ', canonical)
         self.codebook_size = codebook_size
         self.start_id = self.codebook_size
         self.end_id = self.codebook_size + 1
