@@ -380,7 +380,8 @@ class GPT(nn.Module):
             if self.use_michelangelo:
                 _x, _ = self.michel(pc[..., :3], feats=pc[..., 3:6])
                 # shape_embed = x[:, 0]
-                shape_latents = _x[:, 1:]
+                # shape_latents = _x[:, 1:]
+                shape_latents = _x
                 cond_embeds = shape_latents
             else:
                 latent_codes = self.conditioner.encode(pc)
