@@ -227,7 +227,7 @@ class dataset_compound_tokenize_all(Dataset):
         return codes
         
 
-    def apply_rotation_augment(self, tokens, points):
+    def apply_rotation_augment(self, tokens, points, normals):
 
         # Only influence the rts, letting the surface parameters untouched
         # Unpadded tokens as input
@@ -262,7 +262,9 @@ class dataset_compound_tokenize_all(Dataset):
 
         points = rotation_to_apply.as_matrix() @ points[..., None]
         points = points[..., 0]
-        return tokens_new, points, True
+        normals = rotation_to_apply.as_matrix() @ normals[..., None]
+        normals = normals[..., 0]
+        return tokens_new, points, normals, True
 
     def apply_pc_augment(self, points, normals):
         # points: (N, 3)
@@ -522,7 +524,7 @@ class dataset_compound_tokenize_all(Dataset):
         # print(all_tokens.shape)
         # Do the augmentaion if needed
         if self.rotation_augment:
-            all_tokens, points, solid_valid = self.apply_rotation_augment(all_tokens, points)
+            all_tokens, points, normals, solid_valid = self.apply_rotation_augment(all_tokens, points, normals)
             if not solid_valid:
                 return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, solid_valid
 
