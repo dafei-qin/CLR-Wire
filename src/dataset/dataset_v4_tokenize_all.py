@@ -625,12 +625,12 @@ class dataset_compound_tokenize_all(Dataset):
         
         # Don't do reordering in caching
         # all_tokens, all_bspline_poles = self.reordering(all_tokens, all_bspline_poles, graph)
-        try:
-            all_tokens, all_bspline_poles = self.reordering(all_tokens, all_bspline_poles, graph)
-        except Exception as e:
-            print(f"Error in reordering: {e}")
+        # try:
+        #     all_tokens, all_bspline_poles = self.reordering(all_tokens, all_bspline_poles, graph)
+        # except Exception as e:
+        #     print(f"Error in reordering: {e}")
             
-            return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, False
+        #     return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, False
         all_tokens = self.warp_codes(all_tokens)
 
 
