@@ -1,5 +1,6 @@
 import torch
 from torch.utils.data import Dataset
+import heapq
 import numpy as np
 import pickle
 import os
@@ -81,6 +82,83 @@ surface_template = {
         'v_periodic': False,
     }
 }
+
+priority_weights = {
+    'plane': 0,
+    'cylinder': 1,
+    'cone': 2,
+    'sphere': 3,
+    'torus': 4,
+    'bspline_surface': 5,
+}
+def priority_bfs(G, source, weight_attr='weight'):
+    """
+    使用优先队列的BFS，同层内按权重排序
+    权重越小优先级越高（先遍历）
+    """
+    visited = set([source])
+    # (层级, 权重, 节点索引, 节点) - 用于优先队列排序
+    # 节点索引用于相同权重时保持稳定的排序
+    pq = [(0, G.nodes[source].get(weight_attr, 0), source, source)]
+    
+    while pq:
+        depth, weight, node_idx, node = heapq.heappop(pq)
+        yield node
+        
+        # 获取所有未访问的邻居
+        neighbors = list(G.neighbors(node))
+        for neighbor in neighbors:
+            if neighbor not in visited:
+                visited.add(neighbor)
+                neighbor_weight = G.nodes[neighbor].get(weight_attr, 0)
+                heapq.heappush(pq, (depth + 1, neighbor_weight, neighbor, neighbor))
+
+
+def distance_based_bfs(G, source, surface_centers):
+    """
+    BFS遍历，同层内按与全局上一个被访问节点的surface center距离贪心选择
+    每次从当前层选择距离上一个访问节点最近的节点
+    
+    Args:
+        G: NetworkX图
+        source: 起始节点
+        surface_centers: numpy array, shape (N, 3), 每个节点的surface center坐标
+    """
+    visited = set([source])
+    last_visited = source  # 全局上一个被访问的节点
+    current_level = [source]  # 当前层的待访问节点
+    
+    yield source  # 先返回起始节点
+    
+    while current_level:
+        next_level = []
+        
+        # 收集当前层所有节点的所有未访问邻居
+        candidates = set()
+        for node in current_level:
+            for neighbor in G.neighbors(node):
+                if neighbor not in visited:
+                    candidates.add(neighbor)
+        
+        # 将候选节点转为列表并标记为已访问
+        candidates_list = list(candidates)
+        for candidate in candidates_list:
+            visited.add(candidate)
+        
+        # 按距离上一个访问节点的距离，贪心地依次选择最近的节点
+        while candidates_list:
+            # 找到距离 last_visited 最近的节点
+            closest_node = min(candidates_list, key=lambda n: np.linalg.norm(
+                surface_centers[n] - surface_centers[last_visited]
+            ))
+            
+            yield closest_node
+            last_visited = closest_node  # 更新全局上一个访问的节点
+            next_level.append(closest_node)
+            candidates_list.remove(closest_node)
+        
+        current_level = next_level
+
 
     
 class dataset_compound_tokenize_all(Dataset):
@@ -290,17 +368,25 @@ class dataset_compound_tokenize_all(Dataset):
     def reordering(self, tokens, poles, graph):
 
         samples = self.samples_from_tokens(self.warp_codes(tokens), poles)
-        surface_centers = samples.mean(axis=(1, 2)) # (B, 3)
-        first_surface_idx = np.where(surface_centers[:, -1] == surface_centers[:, -1].min())[0][0]
+        surface_min_points = samples.min(axis=(1, 2)) # (B, 3) - 每个曲面的最小值点 [x, y, z]
 
         old_order = list(range(len(graph.nodes)))
+        
         if self.use_dfs:
-            # old_order = list(nx.dfs_tree(graph, source=0))
+            # DFS based ordering
+            first_surface_idx = np.where(surface_min_points[:, -1] == surface_min_points[:, -1].min())[0][0]
             new_order = list(nx.dfs_tree(graph, source=first_surface_idx))
-
         else:
-            # old_order = list(nx.bfs_tree(graph, source=0))
-            new_order = list(nx.bfs_tree(graph, source=first_surface_idx))
+            # Global ordering based on (z_min, x_min, y_min) lexicographic sort
+            # Create list of (index, z_min, x_min, y_min) for sorting
+            # surface_min_points shape: (N, 3) where each row is [x, y, z]
+            indices_with_mins = [
+                (idx, surface_min_points[idx, 2], surface_min_points[idx, 0], surface_min_points[idx, 1])  # (idx, z, x, y)
+                for idx in range(len(surface_min_points))
+            ]
+            # Sort by (z_min, x_min, y_min) in ascending order
+            indices_with_mins.sort(key=lambda item: (item[1], item[2], item[3]))
+            new_order = [item[0] for item in indices_with_mins]
         
         # Create mapping from node to position in old_order
         old_to_pos = {node: pos for pos, node in enumerate(old_order)}
@@ -539,12 +625,12 @@ class dataset_compound_tokenize_all(Dataset):
         
         # Don't do reordering in caching
         # all_tokens, all_bspline_poles = self.reordering(all_tokens, all_bspline_poles, graph)
-        # try:
-        #     all_tokens, all_bspline_poles = self.reordering(all_tokens, all_bspline_poles, graph)
-        # except Exception as e:
-        #     print(f"Error in reordering: {e}")
+        try:
+            all_tokens, all_bspline_poles = self.reordering(all_tokens, all_bspline_poles, graph)
+        except Exception as e:
+            print(f"Error in reordering: {e}")
             
-        #     return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, False
+            return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, False
         all_tokens = self.warp_codes(all_tokens)
 
 
