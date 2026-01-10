@@ -1,6 +1,6 @@
 CUDA_VISIBLE_DEVICES=0 xvfb-run --auto-servernum python third_party/HGDEEMOS/batch_infer_kvcache.py \
-    --config_path src/configs/gpt/gpt_0108_michel.yaml \
-    --ckpt /deemos-research-area-d/meshgen/cad/checkpoints/GPT_INIT_142M/train_0108_michel_257/iter-064000-final-ckpt.pth \
+    --config_path /deemos-research-area-d/meshgen/cad/CLR-Wire/src/configs/gpt/gpt_0110_michel_aug_disable.yaml \
+    --ckpt /deemos-research-area-d/meshgen/cad/checkpoints/GPT_INIT_142M/train_0108_michel_257/iter-020000-ckpt.pth \
     --start_idx 0 \
     --num_samples 300 \
     --max_new_tokens 1000 \
@@ -8,5 +8,5 @@ CUDA_VISIBLE_DEVICES=0 xvfb-run --auto-servernum python third_party/HGDEEMOS/bat
     --temperature 0.0 \
     --device cuda \
     --dtype bf16 \
-    --aug_num 8 \
-    --output_dir /deemos-research-area-d/meshgen/cad/checkpoints/GPT_INIT_142M/train_0108_michel_257/train_42_aug
+    --aug_num 1 \
+    --output_dir /deemos-research-area-d/meshgen/cad/checkpoints/GPT_INIT_142M/train_0108_michel_257_no_aug/train_42
