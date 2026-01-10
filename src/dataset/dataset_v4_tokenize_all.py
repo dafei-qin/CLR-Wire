@@ -255,7 +255,8 @@ class dataset_compound_tokenize_all(Dataset):
             assert np.abs(rotations_new_decode - rotations_new).mean() < 2e-3
             assert np.abs(shifts_new_decode - shifts_new).mean() < 1e-3
         except AssertionError:
-            return None, None, False
+            print(f'Rotation augmentation failed with axis {axis} and angle {angle}')
+            return None, None, None, False
 
         rtss_new = np.concatenate([shifts_new_code, rotations_new_code, rtss[:, 6:7]], axis=1)
         tokens_new = np.concatenate([tokens[:, :7], rtss_new], axis=1)
@@ -292,12 +293,14 @@ class dataset_compound_tokenize_all(Dataset):
         surface_centers = samples.mean(axis=(1, 2)) # (B, 3)
         first_surface_idx = np.where(surface_centers[:, -1] == surface_centers[:, -1].min())[0][0]
 
+        # Old order is generated from cache of dataset_compound_tokenize_all
+        old_order = list(range(len(graph.nodes)))
+
         if self.use_dfs:
-            old_order = list(nx.dfs_tree(graph, source=0))
             new_order = list(nx.dfs_tree(graph, source=first_surface_idx))
 
         else:
-            old_order = list(nx.bfs_tree(graph, source=0))
+            # old_order = list(nx.bfs_tree(graph, source=0))
             new_order = list(nx.bfs_tree(graph, source=first_surface_idx))
         
         # Create mapping from node to position in old_order
@@ -393,10 +396,14 @@ class dataset_compound_tokenize_all(Dataset):
         graph.add_nodes_from(nodes)
         graph.add_edges_from(edges)
 
-        if self.use_dfs:
-            bfs_nodes = list(nx.dfs_tree(graph, source=0))
-        else:   
-            bfs_nodes = list(nx.bfs_tree(graph, source=0))
+
+
+        # if self.use_dfs:
+        #     bfs_nodes = list(nx.dfs_tree(graph, source=0))
+        # else:   
+        #     bfs_nodes = list(nx.bfs_tree(graph, source=0))
+
+        bfs_nodes = list(range(len(nodes)))
 
 
         all_recon_surfaces, all_codes, types_tensor, all_shifts, all_rotations, all_scales, all_orig_surfaces = self.dataset_compound[idx % len(self.dataset_compound)]
@@ -531,10 +538,14 @@ class dataset_compound_tokenize_all(Dataset):
 
         # print(all_tokens.shape)
         
-        all_tokens, all_bspline_poles = self.reordering(all_tokens, all_bspline_poles, graph)
-
-
-        
+        # Don't do reordering in caching
+        # all_tokens, all_bspline_poles = self.reordering(all_tokens, all_bspline_poles, graph)
+        # try:
+        #     all_tokens, all_bspline_poles = self.reordering(all_tokens, all_bspline_poles, graph)
+        # except Exception as e:
+        #     print(f"Error in reordering: {e}")
+            
+        #     return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, False
         all_tokens = self.warp_codes(all_tokens)
 
 
@@ -659,19 +670,22 @@ class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
             tokens = self.unwarp_codes(tokens)
             tokens_new = None
             points_new = None
+            normals_new = None
             solid_valid_new = False
             while tries > 0:
-                tokens_new, points_new, solid_valid_new = self.apply_rotation_augment(tokens, points)
+                tokens_new, points_new, normals_new, solid_valid_new = self.apply_rotation_augment(tokens, points, normals)
                 if solid_valid_new:
                     break
                 tries -= 1
             if solid_valid_new:
                 tokens = tokens_new
                 points = points_new
+                normals = normals_new
                 solid_valid = solid_valid_new
             else:
                 points = np.zeros((self.pc_shape, 3), dtype=np.float32)
                 normals = np.zeros((self.pc_shape, 3), dtype=np.float32)
+
                 solid_valid = False
                 return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, solid_valid
 
@@ -679,8 +693,8 @@ class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
 
         
 
-        # Do the reordering base on the rotated version
-
+        # Do the reordering 
+        # print('Warning, disable post rotation ordering')
         try:
             tokens, poles = self.reordering(self.unwarp_codes(tokens), poles, graph)
         except Exception as e:
@@ -690,6 +704,7 @@ class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
             with open('./assets/GPT_train/error_reordering.txt', 'w') as f:
                 f.write(f"{self.npz_path[idx % len(self.npz_path)]}\n")
             return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, False
+
         tokens = self.warp_codes(tokens)
 
 

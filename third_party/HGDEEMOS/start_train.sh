@@ -21,6 +21,5 @@ torchrun \
     --master_addr=$MLP_WORKER_0_HOST \
     --master_port=$MLP_WORKER_0_PORT \
     /deemos-research-area-d/meshgen/cad/CLR-Wire/third_party/HGDEEMOS/pretrain.py \
-    --config_path /deemos-research-area-d/meshgen/cad/CLR-Wire/src/configs/gpt/gpt_0108_michel.yaml --resume True
-
+    --config_path /deemos-research-area-d/meshgen/cad/CLR-Wire/src/configs/gpt/gpt_0110_michel_aug_disable.yaml --resume False
 

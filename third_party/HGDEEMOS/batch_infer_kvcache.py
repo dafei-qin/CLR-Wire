@@ -11,6 +11,7 @@ import torch
 from tqdm.auto import tqdm
 import einops
 import json
+import shutil
 # Support running without installing as a package (match training script behavior)
 import sys
 wd = Path(__file__).parent.resolve()
@@ -424,7 +425,9 @@ def load_model(ckpt_path: str, config_dict: dict, device: str = "cuda", dtype: s
         ckpt = torch.load(ckpt_path, map_location="cpu")
         state_dict = ckpt.get("model", ckpt) if isinstance(ckpt, dict) else ckpt
         model.load_state_dict(state_dict, strict=False)
-
+    else:
+        print(f"No checkpoint found at {ckpt_path}, exit")
+        exit()
     model.eval()
 
     # 设置数据类型和设备
@@ -641,6 +644,10 @@ def main():
             # 4 times of augmentation
 
             train_data = dataset[idx]
+            json_path = dataset.npz_path[idx % len(dataset.npz_path)].replace('.npz', '.json')
+            # copy json to the output folder
+            shutil.copy(json_path, output_dir / f'{idx}_gt_data.json')
+
             if train_data[-1] != True:
                 print(f'invalid sample found for idx: {idx} with batch {j}')
                 continue
