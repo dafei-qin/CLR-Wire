@@ -105,8 +105,6 @@ class dataset_compound_tokenize(Dataset):
             elif surface_type == 'cylinder' or surface_type =='cone':
                 u = uv[:2]
                 v = uv[2:]
-                # u[1] = u[1] + u[0]
-                # u[0] = 0
 
                 u_center = (u[0] + u[1]) / 2 / (2* np.pi) # Should be in [-1, 1]
                 u_gap = np.clip((u[1] - u[0]), 0, 2 * np.pi) / (2 * np.pi) # Should be in [0, 1]
@@ -118,10 +116,6 @@ class dataset_compound_tokenize(Dataset):
                 u_quantized = [u_quantized[0]*2*np.pi, u_quantized[1]*2*np.pi]
                 codes_u = [code_u_center, code_u_gap]
 
-                # if u_quantized[1] - u_quantized[0] > 1:
-                #     # u_quantized[1] = u_quantized[0] + 1 - 1e-5
-                #     u_quantized[0] = u_quantized[0] + 1e-5
-                # u_quantized = u_quantized * 2 * np.pi
 
                 v_quantized, code_v = quantize_to_codebook(v[1], 0, 1, self.codebook_size)
                 v_quantized = [0, v_quantized]
@@ -153,11 +147,6 @@ class dataset_compound_tokenize(Dataset):
                 u_quantized = [u_quantized[0]*2*np.pi, u_quantized[1]*2*np.pi]
                 codes_u = [code_u_center, code_u_gap]
 
-                # u_quantized, codes_u = quantize_to_codebook(u / 2 / np.pi, -1, 1, self.codebook_size)
-                # if u_quantized[1] - u_quantized[0] > 1:
-                #     # u_quantized[1] = u_quantized[0] + 1 - 1e-5
-                #     u_quantized[0] = u_quantized[0] + 1e-5
-                # u_quantized = u_quantized * 2 * np.pi
 
                 v_center = (v[0] + v[1]) / 2 / np.pi # Should be in [-1, 1]
                 v_gap = np.clip((v[1] - v[0]), 0, np.pi) / np.pi # Should be in [0, 1]
@@ -167,11 +156,7 @@ class dataset_compound_tokenize(Dataset):
                 v_quantized = [v_quantized[0]*np.pi, v_quantized[1]*np.pi]
                 codes_v = [code_v_center, code_v_gap]
 
-                # v_quantized, codes_v = quantize_to_codebook(v / np.pi * 2, -1, 1, self.codebook_size)
-                # if v_quantized[1] - v_quantized[0] > 1:
-                #     # v_quantized[1] = v_quantized[0] + 1 - 1e-5
-                #     v_quantized[0] = v_quantized[0] + 1e-5
-                # v_quantized = v_quantized * np.pi / 2
+
 
                 surface['uv'] = u_quantized+ v_quantized
     
@@ -198,17 +183,6 @@ class dataset_compound_tokenize(Dataset):
                 v_quantized = [v_quantized[0]*2*np.pi, v_quantized[1]*2*np.pi]
                 codes_v = [code_v_center, code_v_gap]
 
-                # u_quantized, codes_u = quantize_to_codebook(u / 2 / np.pi, -1, 1, self.codebook_size)
-                # if u_quantized[1] - u_quantized[0] > 1:
-                #     # u_quantized[1] = u_quantized[0] + 1 - 1e-5
-                #     u_quantized[0] = u_quantized[0] + 1e-5
-                # u_quantized = u_quantized * 2 * np.pi
-                # v_quantized, codes_v = quantize_to_codebook(v / 2 / np.pi, -1, 1, self.codebook_size)
-                # if v_quantized[1] - v_quantized[0] > 1:
-                #     # v_quantized[1] = v_quantized[0] + 1 - 1e-5
-                #     v_quantized[0] = v_quantized[0] + 1e-5
-                # v_quantized = v_quantized * 2 * np.pi
-
                 surface['uv'] = u_quantized + v_quantized
                 
                 scale_2_quantized, scale_2_code = quantize_to_codebook(surface['scalar'][1], 0, 1, self.codebook_size)
@@ -218,6 +192,7 @@ class dataset_compound_tokenize(Dataset):
 
 
             return surface, codes
+
 
     def de_tokenize(self, surface, code):
         """
@@ -313,6 +288,9 @@ class dataset_compound_tokenize(Dataset):
                 surface['scalar'] = [1.0, float(scale2)]
 
         return surface
+
+
+
 
     def __getitem__(self, idx):
 

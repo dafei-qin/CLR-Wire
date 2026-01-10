@@ -94,7 +94,7 @@ class dataset_compound_tokenize_all(Dataset):
 
         self.max_num_surfaces = max_tokens // self.tokens_per_surface
         self.dataset_compound = dataset_compound_tokenize(json_dir, 500, canonical, detect_closed, bspline_fit_threshold, return_orig_surfaces=True)
-
+        print('dv4 canonical: ', canonical)
         self.codebook_size = codebook_size
         self.start_id = self.codebook_size
         self.end_id = self.codebook_size + 1
@@ -293,10 +293,9 @@ class dataset_compound_tokenize_all(Dataset):
         surface_centers = samples.mean(axis=(1, 2)) # (B, 3)
         first_surface_idx = np.where(surface_centers[:, -1] == surface_centers[:, -1].min())[0][0]
 
-        # Old order is generated from cache of dataset_compound_tokenize_all
         old_order = list(range(len(graph.nodes)))
-
         if self.use_dfs:
+            # old_order = list(nx.dfs_tree(graph, source=0))
             new_order = list(nx.dfs_tree(graph, source=first_surface_idx))
 
         else:
@@ -396,8 +395,6 @@ class dataset_compound_tokenize_all(Dataset):
         graph.add_nodes_from(nodes)
         graph.add_edges_from(edges)
 
-
-
         # if self.use_dfs:
         #     bfs_nodes = list(nx.dfs_tree(graph, source=0))
         # else:   
@@ -417,6 +414,7 @@ class dataset_compound_tokenize_all(Dataset):
         if len(nodes) != len(all_recon_surfaces):
             # Should be bspline drop
             solid_valid = False
+            # print('Bspline Drop')
             return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, solid_valid
 
 
@@ -487,6 +485,7 @@ class dataset_compound_tokenize_all(Dataset):
                         all_rotations[s_idx] = _rotation
                         all_scales[s_idx] = _scale
                 except AssertionError:
+                    # print('Bspline Fitting Error')
                     solid_valid = False
                     return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, solid_valid
 
@@ -552,6 +551,7 @@ class dataset_compound_tokenize_all(Dataset):
         # print('3', solid_valid)
         if len(all_tokens) > self.max_tokens:
             solid_valid = False
+            # print('Token Length Too Long')
         else:
 
             all_tokens_padded[:len(all_tokens)] = all_tokens
