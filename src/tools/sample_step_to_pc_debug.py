@@ -11,6 +11,7 @@ import json
 import random
 import networkx as nx
 import fpsample
+from copy import deepcopy
 
 # Suppress warnings BEFORE importing occwl
 warnings.filterwarnings('ignore', category=DeprecationWarning)
@@ -364,7 +365,8 @@ def step_to_pointcloud(step_filename, ply_filename, num_samples=1000, debug=True
             ic(f"Graph nodes: {len(graph.nodes())}, edges: {len(graph.edges())}")
         except Exception as e:
             ic(f"Face adjacency failed: {e}")
-            raise ValueError("Face adjacency failed. The solid may be invalid.")
+            # raise ValueError("Face adjacency failed. The solid may be invalid.")
+            continue
 
         jsons_data = processor.tokenize_cad_data_preload(graph)
         # Collect points and normals from all faces
@@ -374,7 +376,7 @@ def step_to_pointcloud(step_filename, ply_filename, num_samples=1000, debug=True
 
         for face_idx in graph.nodes():
             face = graph.nodes[face_idx]["face"]
-            face_json = jsons_data[face]
+            face_json = jsons_data[face_idx]
 
             # 逐步累积采样结果，而不是每次重采样都丢弃之前的点，
             # 这样可以减少需要放大的采样次数
@@ -424,6 +426,11 @@ def step_to_pointcloud(step_filename, ply_filename, num_samples=1000, debug=True
 
         graph_undirected = strip_features_and_make_undirected(graph)
 
+
+        all_points_per_face = deepcopy(all_points)
+        all_normals_per_face = deepcopy(all_normals)
+        all_masks_per_face = deepcopy(all_masks)
+
         # 与正式脚本同步：可选 FPS
         if fps:
             all_points_valid = [p[m.astype(bool)] for p, m in zip(all_points, all_masks)]
@@ -433,7 +440,7 @@ def step_to_pointcloud(step_filename, ply_filename, num_samples=1000, debug=True
             print('[DEBUG] Num valid points total: ', len(all_points_valid))
             if len(all_points_valid) < num_fps * 2:
                 print('[DEBUG] Num valid points too few, skipping FPS sampling')
-                return
+                continue
             fps_idx = fpsample.bucket_fps_kdtree_sampling(all_points_valid, num_fps)
             all_points = all_points_valid[fps_idx]
             all_normals = all_normals_valid[fps_idx]
@@ -452,6 +459,11 @@ def step_to_pointcloud(step_filename, ply_filename, num_samples=1000, debug=True
             masks=np.array(all_masks, dtype=object),
             graph_nodes=list(graph_undirected.nodes()),
             graph_edges=list(graph_undirected.edges()),
+        )
+        np.savez(save_name.replace('.npz', '_per_face.npz'),
+            points=np.array(all_points_per_face, dtype=object),
+            normals=np.array(all_normals_per_face, dtype=object),
+            masks=np.array(all_masks_per_face, dtype=object),
         )
         json.dump(jsons_data, open(save_name.replace('.npz', '.json'), 'w'), ensure_ascii=False, indent=2)
         print(f"\n✓ [DEBUG] Successfully saved {len(all_points)} surfaces/points to {save_name}")

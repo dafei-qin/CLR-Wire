@@ -304,7 +304,7 @@ def setup(
         print(f"⚠️  Config file not found: {config_path}, using default settings")
     
     # ========== 从配置文件读取训练参数 ==========
-    global model_name, train_config, train_name, name, out_dir, devices, use_sample_dataset
+    global model_name, train_config, train_name, name, out_dir, devices, num_nodes, total_gpus, use_sample_dataset
     global freeze_conditioner, conditioner_lr_scale, fsdp_state_dict_type
     global max_tokens, global_batch_size, micro_batch_size, learning_rate
     global total_evals, warmup_tokens, log_step_interval, save_step_interval
@@ -387,8 +387,12 @@ def setup(
     name = train_config + "_" +  train_name + "_" + model_name
     
     # 计算 batch_size 和 gradient_accumulation_steps
+    # 🔥 修复：从环境变量读取节点数，避免 world_size 不匹配
     devices = torch.cuda.device_count() or 1
-    batch_size = global_batch_size // devices
+    num_nodes = int(os.environ.get("MLP_WORKER_NUM", 1))  # 从环境变量读取节点数
+    total_gpus = devices * num_nodes  # 总 GPU 数 = 每节点GPU数 × 节点数
+    
+    batch_size = global_batch_size // total_gpus  # 使用总 GPU 数计算
     gradient_accumulation_steps = batch_size // micro_batch_size
     assert gradient_accumulation_steps > 0, f"gradient_accumulation_steps must be > 0, got {gradient_accumulation_steps}"
     
@@ -404,7 +408,9 @@ def setup(
     print(f"📊 Training configuration:")
     print(f"   - Model: {model_name}, Config: {train_config}")
     print(f"   - Output dir: {out_dir}")
-    print(f"   - Devices: {devices}, Batch size: {batch_size}, Micro batch: {micro_batch_size}")
+    print(f"   - Nodes: {num_nodes}, GPUs per node: {devices}, Total GPUs: {total_gpus}")
+    print(f"   - Batch size per GPU: {batch_size}, Micro batch: {micro_batch_size}")
+    print(f"   - Global batch size: {global_batch_size}")
     print(f"   - Gradient accumulation steps: {gradient_accumulation_steps}")
     print(f"   - Learning rate: {learning_rate}, Max tokens: {max_tokens}")
     print(f"   - Warmup tokens: {warmup_tokens}")
@@ -418,7 +424,9 @@ def setup(
         "train_name": train_name,
         "name": name,
         "out_dir": str(out_dir),
+        "num_nodes": num_nodes,
         "devices": devices,
+        "total_gpus": total_gpus,
         "use_sample_dataset": use_sample_dataset,
         "freeze_conditioner": freeze_conditioner,
         "conditioner_lr_scale": conditioner_lr_scale,
@@ -489,7 +497,7 @@ def setup(
         if fabric.global_rank == 0 if hasattr(locals().get('fabric'), 'global_rank') else True:
             michel_params = sum(p.numel() for p in michel_module.parameters()) / 1e6
             print(f"⚠️  WARNING: 'michel' module ({michel_params:.1f}M params) in ignored_modules")
-            print(f"   Each GPU will hold a FULL copy → {michel_params:.1f}M params × {devices} GPUs")
+            print(f"   Each GPU will hold a FULL copy → {michel_params:.1f}M params × {total_gpus} GPUs")
             print(f"   Consider reducing model size or not using ignored_modules for large modules")
     
     # 不要 ignore conditioner - 让 FSDP 分片它
@@ -513,6 +521,7 @@ def setup(
     # 5) 创建 Fabric 并 launch
     fabric = L.Fabric(
         devices=devices,
+        num_nodes=num_nodes,  # 🔥 修复：传入节点数，避免 world_size 不匹配
         strategy=strategy,
         precision="bf16-mixed",  # 🔥 启用混合精度：显存减半，速度提升
         # precision="32",  # 如果bf16有问题，可以尝试 "16-mixed"
