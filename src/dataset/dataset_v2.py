@@ -390,7 +390,8 @@ class dataset_compound(Dataset):
         super().__init__()
         self.json_dir = Path(json_dir)
         self.max_num_surfaces = max_num_surfaces
-        self.canonical = canonical        
+        self.canonical = canonical   
+        print('canonical: ', self.canonical)     
         self.bspline_fit_threshold = bspline_fit_threshold
         # Discover all JSON files in directory and subdirectories
         self.json_names = sorted([
@@ -1288,13 +1289,23 @@ class dataset_compound(Dataset):
                 # Extract transformation info from params
                 if surface_type_idx == SURFACE_TYPE_MAP.get('bspline_surface', -1):
                     # Extract transformation info from P, D, X, UV positions
+
                     shift = copy(params[0:3])   
                     rotation_row0 = copy(params[3:6])
                     rotation_row1 = copy(params[6:9])
                     rotation_row2 = copy(params[9:12])
                     rotation = np.array([rotation_row0, rotation_row1, rotation_row2], dtype=np.float64)
-                    scale = copy(params[12])
+                    scale = float(params[12])
                     params[:17] = 0
+
+                    if not self.canonical:
+                        poles = params[17:65].reshape(4, 4, 3)
+                        poles[..., :3] = (poles[..., :3] * scale) @ rotation + shift
+                        params[17:65] = poles.flatten()
+
+                        shift = np.zeros(3, dtype=np.float64)
+                        rotation = np.eye(3, dtype=np.float64)
+                        scale = 1.0
 
                 elif self.canonical and surface_type_idx != -1:
                     # For other surface types, use to_canonical
@@ -1310,7 +1321,7 @@ class dataset_compound(Dataset):
                     shift = np.zeros(3, dtype=np.float64)
                     rotation = np.eye(3, dtype=np.float64)
                     scale = 1.0
-                    pass
+
 
                 if surface_type_idx == -1:
                     # Bad surface, skip
