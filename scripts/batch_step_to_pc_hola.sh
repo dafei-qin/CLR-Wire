@@ -1,13 +1,13 @@
 #!/bin/bash
 
 # 配置参数
-MAX_PARALLEL=128 # 最大并发数，可以根据需要修改
+MAX_PARALLEL=32 # 最大并发数，可以根据需要修改
 NUM_SAMPLES=2048
 FPS=True
 NUM_FPS=10240
-INPUT_BASE="/data/ssd/CAD/data/abc/2"
-OUTPUT_BASE="/data/ssd/CAD/data/abc_step_pc_correct_normal/2"
-LOG_DIR="/data/ssd/CAD/data/abc_step_pc_correct_normal/logs/batch_step_to_pc_new/2"
+INPUT_BASE="/data/ssd/CAD/experiments/HoLa/gpu_0"
+OUTPUT_BASE="/data/ssd/CAD/experiments/HoLa/gpu_0_json"
+LOG_DIR="/data/ssd/CAD/experiments/HoLa/logs/gpu_0"
 SCRIPT_PATH="src/tools/sample_step_to_pc_debug.py"
 
 # 创建日志目录

@@ -1,5 +1,6 @@
 import torch
 from torch.utils.data import Dataset
+import heapq
 import numpy as np
 import pickle
 import os
@@ -82,6 +83,83 @@ surface_template = {
     }
 }
 
+priority_weights = {
+    'plane': 0,
+    'cylinder': 1,
+    'cone': 2,
+    'sphere': 3,
+    'torus': 4,
+    'bspline_surface': 5,
+}
+def priority_bfs(G, source, weight_attr='weight'):
+    """
+    使用优先队列的BFS，同层内按权重排序
+    权重越小优先级越高（先遍历）
+    """
+    visited = set([source])
+    # (层级, 权重, 节点索引, 节点) - 用于优先队列排序
+    # 节点索引用于相同权重时保持稳定的排序
+    pq = [(0, G.nodes[source].get(weight_attr, 0), source, source)]
+    
+    while pq:
+        depth, weight, node_idx, node = heapq.heappop(pq)
+        yield node
+        
+        # 获取所有未访问的邻居
+        neighbors = list(G.neighbors(node))
+        for neighbor in neighbors:
+            if neighbor not in visited:
+                visited.add(neighbor)
+                neighbor_weight = G.nodes[neighbor].get(weight_attr, 0)
+                heapq.heappush(pq, (depth + 1, neighbor_weight, neighbor, neighbor))
+
+
+def distance_based_bfs(G, source, surface_centers):
+    """
+    BFS遍历，同层内按与全局上一个被访问节点的surface center距离贪心选择
+    每次从当前层选择距离上一个访问节点最近的节点
+    
+    Args:
+        G: NetworkX图
+        source: 起始节点
+        surface_centers: numpy array, shape (N, 3), 每个节点的surface center坐标
+    """
+    visited = set([source])
+    last_visited = source  # 全局上一个被访问的节点
+    current_level = [source]  # 当前层的待访问节点
+    
+    yield source  # 先返回起始节点
+    
+    while current_level:
+        next_level = []
+        
+        # 收集当前层所有节点的所有未访问邻居
+        candidates = set()
+        for node in current_level:
+            for neighbor in G.neighbors(node):
+                if neighbor not in visited:
+                    candidates.add(neighbor)
+        
+        # 将候选节点转为列表并标记为已访问
+        candidates_list = list(candidates)
+        for candidate in candidates_list:
+            visited.add(candidate)
+        
+        # 按距离上一个访问节点的距离，贪心地依次选择最近的节点
+        while candidates_list:
+            # 找到距离 last_visited 最近的节点
+            closest_node = min(candidates_list, key=lambda n: np.linalg.norm(
+                surface_centers[n] - surface_centers[last_visited]
+            ))
+            
+            yield closest_node
+            last_visited = closest_node  # 更新全局上一个访问的节点
+            next_level.append(closest_node)
+            candidates_list.remove(closest_node)
+        
+        current_level = next_level
+
+
     
 class dataset_compound_tokenize_all(Dataset):
 
@@ -94,7 +172,7 @@ class dataset_compound_tokenize_all(Dataset):
 
         self.max_num_surfaces = max_tokens // self.tokens_per_surface
         self.dataset_compound = dataset_compound_tokenize(json_dir, 500, canonical, detect_closed, bspline_fit_threshold, return_orig_surfaces=True)
-
+        print('dv4 canonical: ', canonical)
         self.codebook_size = codebook_size
         self.start_id = self.codebook_size
         self.end_id = self.codebook_size + 1
@@ -227,7 +305,7 @@ class dataset_compound_tokenize_all(Dataset):
         return codes
         
 
-    def apply_rotation_augment(self, tokens, points):
+    def apply_rotation_augment(self, tokens, points, normals):
 
         # Only influence the rts, letting the surface parameters untouched
         # Unpadded tokens as input
@@ -255,14 +333,17 @@ class dataset_compound_tokenize_all(Dataset):
             assert np.abs(rotations_new_decode - rotations_new).mean() < 2e-3
             assert np.abs(shifts_new_decode - shifts_new).mean() < 1e-3
         except AssertionError:
-            return None, None, False
+            print(f'Rotation augmentation failed with axis {axis} and angle {angle}')
+            return None, None, None, False
 
         rtss_new = np.concatenate([shifts_new_code, rotations_new_code, rtss[:, 6:7]], axis=1)
         tokens_new = np.concatenate([tokens[:, :7], rtss_new], axis=1)
 
         points = rotation_to_apply.as_matrix() @ points[..., None]
         points = points[..., 0]
-        return tokens_new, points, True
+        normals = rotation_to_apply.as_matrix() @ normals[..., None]
+        normals = normals[..., 0]
+        return tokens_new, points, normals, True
 
     def apply_pc_augment(self, points, normals):
         # points: (N, 3)
@@ -287,16 +368,25 @@ class dataset_compound_tokenize_all(Dataset):
     def reordering(self, tokens, poles, graph):
 
         samples = self.samples_from_tokens(self.warp_codes(tokens), poles)
-        surface_centers = samples.mean(axis=(1, 2)) # (B, 3)
-        first_surface_idx = np.where(surface_centers[:, -1] == surface_centers[:, -1].min())[0][0]
+        surface_min_points = samples.min(axis=(1, 2)) # (B, 3) - 每个曲面的最小值点 [x, y, z]
 
+        old_order = list(range(len(graph.nodes)))
+        
         if self.use_dfs:
-            old_order = list(nx.dfs_tree(graph, source=0))
+            # DFS based ordering
+            first_surface_idx = np.where(surface_min_points[:, -1] == surface_min_points[:, -1].min())[0][0]
             new_order = list(nx.dfs_tree(graph, source=first_surface_idx))
-
         else:
-            old_order = list(nx.bfs_tree(graph, source=0))
-            new_order = list(nx.bfs_tree(graph, source=first_surface_idx))
+            # Global ordering based on (z_min, x_min, y_min) lexicographic sort
+            # Create list of (index, z_min, x_min, y_min) for sorting
+            # surface_min_points shape: (N, 3) where each row is [x, y, z]
+            indices_with_mins = [
+                (idx, surface_min_points[idx, 2], surface_min_points[idx, 0], surface_min_points[idx, 1])  # (idx, z, x, y)
+                for idx in range(len(surface_min_points))
+            ]
+            # Sort by (z_min, x_min, y_min) in ascending order
+            indices_with_mins.sort(key=lambda item: (item[1], item[2], item[3]))
+            new_order = [item[0] for item in indices_with_mins]
         
         # Create mapping from node to position in old_order
         old_to_pos = {node: pos for pos, node in enumerate(old_order)}
@@ -391,10 +481,12 @@ class dataset_compound_tokenize_all(Dataset):
         graph.add_nodes_from(nodes)
         graph.add_edges_from(edges)
 
-        if self.use_dfs:
-            bfs_nodes = list(nx.dfs_tree(graph, source=0))
-        else:   
-            bfs_nodes = list(nx.bfs_tree(graph, source=0))
+        # if self.use_dfs:
+        #     bfs_nodes = list(nx.dfs_tree(graph, source=0))
+        # else:   
+        #     bfs_nodes = list(nx.bfs_tree(graph, source=0))
+
+        bfs_nodes = list(range(len(nodes)))
 
 
         all_recon_surfaces, all_codes, types_tensor, all_shifts, all_rotations, all_scales, all_orig_surfaces = self.dataset_compound[idx % len(self.dataset_compound)]
@@ -408,6 +500,7 @@ class dataset_compound_tokenize_all(Dataset):
         if len(nodes) != len(all_recon_surfaces):
             # Should be bspline drop
             solid_valid = False
+            # print('Bspline Drop')
             return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, solid_valid
 
 
@@ -478,6 +571,7 @@ class dataset_compound_tokenize_all(Dataset):
                         all_rotations[s_idx] = _rotation
                         all_scales[s_idx] = _scale
                 except AssertionError:
+                    # print('Bspline Fitting Error')
                     solid_valid = False
                     return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, solid_valid
 
@@ -522,23 +616,28 @@ class dataset_compound_tokenize_all(Dataset):
         # print(all_tokens.shape)
         # Do the augmentaion if needed
         if self.rotation_augment:
-            all_tokens, points, solid_valid = self.apply_rotation_augment(all_tokens, points)
+            all_tokens, points, normals, solid_valid = self.apply_rotation_augment(all_tokens, points, normals)
             if not solid_valid:
                 return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, solid_valid
 
 
         # print(all_tokens.shape)
         
-        all_tokens, all_bspline_poles = self.reordering(all_tokens, all_bspline_poles, graph)
-
-
-        
+        # Don't do reordering in caching
+        # all_tokens, all_bspline_poles = self.reordering(all_tokens, all_bspline_poles, graph)
+        # try:
+        #     all_tokens, all_bspline_poles = self.reordering(all_tokens, all_bspline_poles, graph)
+        # except Exception as e:
+        #     print(f"Error in reordering: {e}")
+            
+        #     return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, False
         all_tokens = self.warp_codes(all_tokens)
 
 
         # print('3', solid_valid)
         if len(all_tokens) > self.max_tokens:
             solid_valid = False
+            # print('Token Length Too Long')
         else:
 
             all_tokens_padded[:len(all_tokens)] = all_tokens
@@ -657,19 +756,22 @@ class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
             tokens = self.unwarp_codes(tokens)
             tokens_new = None
             points_new = None
+            normals_new = None
             solid_valid_new = False
             while tries > 0:
-                tokens_new, points_new, solid_valid_new = self.apply_rotation_augment(tokens, points)
+                tokens_new, points_new, normals_new, solid_valid_new = self.apply_rotation_augment(tokens, points, normals)
                 if solid_valid_new:
                     break
                 tries -= 1
             if solid_valid_new:
                 tokens = tokens_new
                 points = points_new
+                normals = normals_new
                 solid_valid = solid_valid_new
             else:
                 points = np.zeros((self.pc_shape, 3), dtype=np.float32)
                 normals = np.zeros((self.pc_shape, 3), dtype=np.float32)
+
                 solid_valid = False
                 return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, solid_valid
 
@@ -677,8 +779,8 @@ class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
 
         
 
-        # Do the reordering base on the rotated version
-
+        # Do the reordering 
+        # print('Warning, disable post rotation ordering')
         try:
             tokens, poles = self.reordering(self.unwarp_codes(tokens), poles, graph)
         except Exception as e:
@@ -688,6 +790,7 @@ class dataset_compound_tokenize_all_cache(dataset_compound_tokenize_all):
             with open('./assets/GPT_train/error_reordering.txt', 'w') as f:
                 f.write(f"{self.npz_path[idx % len(self.npz_path)]}\n")
             return points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, False
+
         tokens = self.warp_codes(tokens)
 
 
