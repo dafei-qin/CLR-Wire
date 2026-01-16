@@ -162,22 +162,38 @@ def find_json_pairs(test_dir: str, checkpoint: str) -> Dict[str, List[Tuple[str,
 def compute_chamfer_distances_for_checkpoint(
     test_dir: str, 
     checkpoint: str, 
-    resolution: int = 16
-) -> Dict[str, float]:
+    resolution: int = 16,
+    range_min: int = None,
+    range_max: int = None
+) -> Tuple[Dict[str, float], List[Dict]]:
     pairs_by_idx = find_json_pairs(test_dir, checkpoint)
     
     if not pairs_by_idx:
         print(f"No valid pred/gt pairs found for checkpoint {checkpoint}")
-        return {}
+        return {}, []
+    
+    # Filter indices by range if specified
+    if range_min is not None or range_max is not None:
+        filtered_pairs = {}
+        for idx in pairs_by_idx:
+            idx_int = int(idx)
+            if range_min is not None and idx_int < range_min:
+                continue
+            if range_max is not None and idx_int > range_max:
+                continue
+            filtered_pairs[idx] = pairs_by_idx[idx]
+        pairs_by_idx = filtered_pairs
+        print(f"Filtering indices: range_min={range_min}, range_max={range_max}")
     
     total_pairs = sum(len(pairs) for pairs in pairs_by_idx.values())
     print(f"Found {len(pairs_by_idx)} unique indices with {total_pairs} total pairs")
     
-    min_chamfer_dists = []
+    idx_results = []
     
     for idx in tqdm(sorted(pairs_by_idx.keys(), key=lambda x: int(x)), desc="Processing indices"):
         pairs = pairs_by_idx[idx]
         idx_chamfer_dists = []
+        idx_file_info = []
         
         print(f"\nIdx {idx} ({len(pairs)} batch variants):")
         for pred_path, gt_path in pairs:
@@ -198,17 +214,32 @@ def compute_chamfer_distances_for_checkpoint(
                 
                 print(f"  {gt_name} {gt_bbox_str} {pred_name} {pred_bbox_str} CD={chamfer_dist:.6f}")
                 idx_chamfer_dists.append(chamfer_dist)
+                idx_file_info.append({
+                    'gt_path': gt_path,
+                    'pred_path': pred_path,
+                    'chamfer_dist': chamfer_dist
+                })
         
         if idx_chamfer_dists:
-            min_cd = min(idx_chamfer_dists)
-            min_chamfer_dists.append(min_cd)
+            min_idx = np.argmin(idx_chamfer_dists)
+            min_cd = idx_chamfer_dists[min_idx]
+            best_files = idx_file_info[min_idx]
+            
+            idx_results.append({
+                'idx': idx,
+                'chamfer_dist': min_cd,
+                'gt_path': best_files['gt_path'],
+                'pred_path': best_files['pred_path']
+            })
             print(f"  -> Min CD for idx {idx}: {min_cd:.6f}")
     
-    if not min_chamfer_dists:
+    if not idx_results:
         print("No valid Chamfer distances computed!")
-        return {}
+        return {}, []
     
-    chamfer_array = np.array(min_chamfer_dists)
+    idx_results_sorted = sorted(idx_results, key=lambda x: x['chamfer_dist'])
+    
+    chamfer_array = np.array([r['chamfer_dist'] for r in idx_results])
     
     stats = {
         'mean': float(np.mean(chamfer_array)),
@@ -218,26 +249,34 @@ def compute_chamfer_distances_for_checkpoint(
         'max': float(np.max(chamfer_array)),
         'percentile_5': float(np.percentile(chamfer_array, 5)),
         'percentile_95': float(np.percentile(chamfer_array, 95)),
-        'num_indices': len(min_chamfer_dists),
+        'num_indices': len(idx_results),
         'total_pairs': total_pairs
     }
     
-    return stats
+    return stats, idx_results_sorted
 
 
 def main():
     parser = argparse.ArgumentParser(description='Compute Chamfer Distance between pred and gt JSON files.')
     parser.add_argument('--test_dir', type=str,
         default='/deemos-research-area-d/meshgen/cad/checkpoints/GPT_INIT_142M/train_0110_michel_4096_full/test_00')
-    parser.add_argument('--checkpoint', type=str, default='230000')
+    parser.add_argument('--checkpoint', type=str, default='253500')
     parser.add_argument('--resolution', type=int, default=16)
-    parser.add_argument('--output', type=str, default=None)
+    parser.add_argument('--output', type=str, default='chamfer_results.json')
+    parser.add_argument('--range_min', type=int, default=None, help='Minimum idx to process (inclusive)')
+    parser.add_argument('--range_max', type=int, default=None, help='Maximum idx to process (inclusive)')
     
     args = parser.parse_args()
     
     print(f"Checkpoint: {args.checkpoint}, Resolution: {args.resolution}x{args.resolution}\n")
     
-    stats = compute_chamfer_distances_for_checkpoint(args.test_dir, args.checkpoint, args.resolution)
+    stats, idx_results = compute_chamfer_distances_for_checkpoint(
+        args.test_dir, 
+        args.checkpoint, 
+        args.resolution,
+        args.range_min,
+        args.range_max
+    )
     
     if stats:
         print(f"\n{'='*60}")
@@ -250,9 +289,18 @@ def main():
         if args.output:
             output_path = Path(args.output)
             output_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            output_data = {
+                'checkpoint': args.checkpoint,
+                'resolution': args.resolution,
+                'statistics': stats,
+                'results_sorted_by_cd': idx_results
+            }
+            
             with open(output_path, 'w') as f:
-                json.dump(stats, f, indent=2)
+                json.dump(output_data, f, indent=2)
             print(f"Saved to: {args.output}")
+            print(f"Saved {len(idx_results)} index results sorted by chamfer distance")
 
 
 if __name__ == '__main__':
