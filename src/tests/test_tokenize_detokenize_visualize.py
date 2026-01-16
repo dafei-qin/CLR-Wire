@@ -28,6 +28,9 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
+project_root = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(project_root))
+
 from src.dataset.dataset_v4_tokenize_all import dataset_compound_tokenize_all
 from src.utils.import_tools import load_model_from_config
 from myutils.surface import visualize_json_interset, write_to_step
