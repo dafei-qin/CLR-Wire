@@ -4,7 +4,7 @@
 # Extracts abc_XXXX_step_v00.7z to Y/XXXX where Y is the second digit of XXXX
 # Then deletes the .7z file
 
-SOURCE_DIR="/data/ssd/CAD/data/abc/9"
+SOURCE_DIR="/data/ssd/CAD/data/abc/3"
 
 # Check if source directory exists
 if [ ! -d "$SOURCE_DIR" ]; then

@@ -310,7 +310,8 @@ class GPT(nn.Module):
 
     def forward(
         self, idx: torch.Tensor, pc=None, max_seq_length: Optional[int] = None,\
-         input_pos: Optional[torch.Tensor] = None,start: Optional[int] = 0,window_size: Optional[int] = 9000
+         input_pos: Optional[torch.Tensor] = None,start: Optional[int] = 0,window_size: Optional[int] = 9000,\
+         use_conditioning: bool = True
     ) -> torch.Tensor:
         B, T = idx.size()
         use_kv_cache = input_pos is not None  # Enable KV cache for inference
@@ -364,7 +365,11 @@ class GPT(nn.Module):
         # ========== PC Caching Logic ==========
         # Training: always compute, never cache
         # Inference: cache on first forward, reuse on subsequent forwards
-        if not self.training and pc is None and self.cached_pc_features is not None:
+        # 🔥 NEW: use_conditioning 控制是否使用 conditioning（支持 CFG 训练）
+        if not use_conditioning:
+            # 强制 unconditioned：即使有 pc 也不使用
+            cond_embeds = None
+        elif not self.training and pc is None and self.cached_pc_features is not None:
             # Inference mode: reuse cached features
             cond_embeds = self.cached_pc_features
         elif pc is not None:

@@ -1,12 +1,13 @@
 #!/bin/bash
 
 # 配置参数
-MAX_PARALLEL=128 # 最大并发数，可以根据需要修改
+MAX_PARALLEL=96 # 最大并发数，可以根据需要修改
 NUM_SAMPLES=2048
 FPS=True
 NUM_FPS=10240
-INPUT_BASE="/data/ssd/CAD/data/abc/2"
-OUTPUT_BASE="/data/ssd/CAD/data/abc_step_pc_correct_normal/2"
+SAVE_STEP=true  # 是否保存处理后的STEP文件，true/false
+INPUT_BASE="/data/ssd/CAD/data/abc/9/0090"
+OUTPUT_BASE="/data/ssd/CAD/data/abc_step_pc_correct_normal/0090_step"
 LOG_DIR="/data/ssd/CAD/data/abc_step_pc_correct_normal/logs/batch_step_to_pc_new/2"
 SCRIPT_PATH="src/tools/sample_step_to_pc_debug.py"
 
@@ -43,6 +44,7 @@ echo "找到 $TOTAL 个 STEP 文件需要处理"
 echo "最大并发数: $MAX_PARALLEL"
 echo "Num samples: $NUM_SAMPLES"
 echo "FPS: $FPS, Num FPS: $NUM_FPS"
+echo "Save STEP: $SAVE_STEP"
 echo "----------------------------------------"
 
 # 计数器
@@ -109,16 +111,25 @@ for step_file in "${STEP_FILES[@]}"; do
     echo "  输出: $output_dir"
     echo "  日志: $log_file"
     
+    # 构建Python命令参数
+    python_args=(
+        "$SCRIPT_PATH"
+        --single-file
+        "$step_file"
+        --output_dir "$output_dir"
+        --num_samples $NUM_SAMPLES
+        --fps $FPS
+        --num_fps $NUM_FPS
+        --no-debug
+    )
+    
+    # 如果启用保存STEP，添加参数
+    if [ "$SAVE_STEP" = "true" ]; then
+        python_args+=(--save_step)
+    fi
+    
     # 在后台运行命令
-    python3 "$SCRIPT_PATH" \
-        --single-file \
-        "$step_file" \
-        --output_dir "$output_dir" \
-        --num_samples $NUM_SAMPLES \
-        --fps $FPS \
-        --num_fps $NUM_FPS \
-        --no-debug \
-        > "$log_file" 2>&1 &
+    python3 "${python_args[@]}" > "$log_file" 2>&1 &
     
     # 保存进程PID
     PIDS+=($!)

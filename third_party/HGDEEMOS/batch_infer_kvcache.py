@@ -297,26 +297,29 @@ def render_three_views(surfaces, all_points, base_output_path, view_distance=5.0
     return output_paths
 
 
-def create_three_views_grid(pc_paths, gt_paths, pred_paths, output_path):
+def create_three_views_grid(pc_highres_paths, pc_lowres_paths, gt_paths, pred_paths, output_path):
     """
-    Create a 3x3 grid of three views (front, left, top) for pc, gt, and pred.
+    Create a 4x3 grid of three views (front, left, top) for high-res pc, low-res pc, gt, and pred.
     
     Layout:
-        [pc_front]  [pc_left]  [pc_top]
-        [gt_front]  [gt_left]  [gt_top]
-        [pred_front] [pred_left] [pred_top]
+        [pc_highres_front]  [pc_highres_left]  [pc_highres_top]   (10240 points, no noise)
+        [pc_lowres_front]   [pc_lowres_left]   [pc_lowres_top]    (4096 points, with noise)
+        [gt_front]          [gt_left]          [gt_top]            (Ground truth surfaces)
+        [pred_front]        [pred_left]        [pred_top]          (Predicted surfaces)
     
     Args:
-        pc_paths: dict with keys 'front', 'left', 'top' containing paths to pc view images
+        pc_highres_paths: dict with keys 'front', 'left', 'top' containing paths to high-res pc view images
+        pc_lowres_paths: dict with keys 'front', 'left', 'top' containing paths to low-res pc view images
         gt_paths: dict with keys 'front', 'left', 'top' containing paths to gt view images
         pred_paths: dict with keys 'front', 'left', 'top' containing paths to pred view images
-        output_path: path to save the final 3x3 grid image (jpg format)
+        output_path: path to save the final 4x3 grid image (jpg format)
     """
     # Load all images
     images = {}
     target_size = None
     
-    for name, paths_dict in [('pc', pc_paths), ('gt', gt_paths), ('pred', pred_paths)]:
+    for name, paths_dict in [('pc_highres', pc_highres_paths), ('pc_lowres', pc_lowres_paths), 
+                              ('gt', gt_paths), ('pred', pred_paths)]:
         for view in ['front', 'left', 'top']:
             if view in paths_dict and Path(paths_dict[view]).exists():
                 img = Image.open(paths_dict[view])
@@ -343,30 +346,37 @@ def create_three_views_grid(pc_paths, gt_paths, pred_paths, output_path):
         if images[key].size != target_size:
             images[key] = images[key].resize(target_size, Image.Resampling.LANCZOS)
     
-    # Create 3x3 grid
-    # Row 1: pc views
+    # Create 4x3 grid
+    # Row 1: high-res pc views (10240 points, no noise)
     row1 = Image.new('RGB', (target_size[0] * 3, target_size[1]))
-    row1.paste(images['pc_front'], (0, 0))
-    row1.paste(images['pc_left'], (target_size[0], 0))
-    row1.paste(images['pc_top'], (target_size[0] * 2, 0))
+    row1.paste(images['pc_highres_front'], (0, 0))
+    row1.paste(images['pc_highres_left'], (target_size[0], 0))
+    row1.paste(images['pc_highres_top'], (target_size[0] * 2, 0))
     
-    # Row 2: gt views
+    # Row 2: low-res pc views (4096 points, with noise)
     row2 = Image.new('RGB', (target_size[0] * 3, target_size[1]))
-    row2.paste(images['gt_front'], (0, 0))
-    row2.paste(images['gt_left'], (target_size[0], 0))
-    row2.paste(images['gt_top'], (target_size[0] * 2, 0))
+    row2.paste(images['pc_lowres_front'], (0, 0))
+    row2.paste(images['pc_lowres_left'], (target_size[0], 0))
+    row2.paste(images['pc_lowres_top'], (target_size[0] * 2, 0))
     
-    # Row 3: pred views
+    # Row 3: gt views
     row3 = Image.new('RGB', (target_size[0] * 3, target_size[1]))
-    row3.paste(images['pred_front'], (0, 0))
-    row3.paste(images['pred_left'], (target_size[0], 0))
-    row3.paste(images['pred_top'], (target_size[0] * 2, 0))
+    row3.paste(images['gt_front'], (0, 0))
+    row3.paste(images['gt_left'], (target_size[0], 0))
+    row3.paste(images['gt_top'], (target_size[0] * 2, 0))
+    
+    # Row 4: pred views
+    row4 = Image.new('RGB', (target_size[0] * 3, target_size[1]))
+    row4.paste(images['pred_front'], (0, 0))
+    row4.paste(images['pred_left'], (target_size[0], 0))
+    row4.paste(images['pred_top'], (target_size[0] * 2, 0))
     
     # Combine rows vertically
-    final_image = Image.new('RGB', (target_size[0] * 3, target_size[1] * 3))
+    final_image = Image.new('RGB', (target_size[0] * 3, target_size[1] * 4))
     final_image.paste(row1, (0, 0))
     final_image.paste(row2, (0, target_size[1]))
     final_image.paste(row3, (0, target_size[1] * 2))
+    final_image.paste(row4, (0, target_size[1] * 3))
     
     # Save as JPG
     output_path = Path(output_path)
@@ -374,11 +384,11 @@ def create_three_views_grid(pc_paths, gt_paths, pred_paths, output_path):
         output_path = output_path.with_suffix('.jpg')
     
     final_image.save(output_path, 'JPEG', quality=95)
-    print(f"  九宫格图像保存到: {output_path}")
+    print(f"  4x3网格图像保存到: {output_path}")
     
     # Delete all temporary PNG files after creating the grid
     all_png_paths = []
-    for paths_dict in [pc_paths, gt_paths, pred_paths]:
+    for paths_dict in [pc_highres_paths, pc_lowres_paths, gt_paths, pred_paths]:
         for view in ['front', 'left', 'top']:
             if view in paths_dict:
                 png_path = Path(paths_dict[view])
@@ -644,16 +654,38 @@ def main():
             # 4 times of augmentation
 
             train_data = dataset[idx]
-            json_path = dataset.npz_path[idx % len(dataset.npz_path)].replace('.npz', '.json')
+            npz_path = dataset.npz_path[idx % len(dataset.npz_path)]
+            json_path = npz_path.replace('.npz', '.json')
+            
             # copy json to the output folder
             shutil.copy(json_path, output_dir / f'{idx}_gt_data.json')
+            
+            # Load and save graph topology (nodes and edges)
+            npz_data_graph = np.load(npz_path, allow_pickle=True)
+            graph_nodes = npz_data_graph['graph_nodes']
+            graph_edges = npz_data_graph['graph_edges']
+            graph_output_path = output_dir / f'{idx}_graph.npz'
+            np.savez(graph_output_path, nodes=graph_nodes, edges=graph_edges)
+            print(f"  图拓扑保存到: {graph_output_path}")
 
             if train_data[-1] != True:
                 print(f'invalid sample found for idx: {idx} with batch {j}')
                 continue
-            train_data = [_t[train_data[-1]] for _t in train_data[:-1]]
-            train_data = [torch.from_numpy(_t).to(args.device) for _t in train_data]
-            points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask = train_data
+            
+            # Extract data - new dataset returns 8 values (including highres point clouds)
+            train_data_list = [_t[train_data[-1]] for _t in train_data[:-1]]
+            train_data_list = [torch.from_numpy(_t).to(args.device) for _t in train_data_list]
+            
+            # Unpack: 5 original values + 2 highres values
+            if len(train_data_list) == 7:  # New inference dataset
+                points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask, points_highres, normals_highres = train_data_list
+            else:  # Old dataset (fallback compatibility)
+                points, normals, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask = train_data_list
+                points_highres = None
+                normals_highres = None
+
+            print('points_highres: ', points_highres.shape)
+            
             all_tokens_padded = tokenize_bspline_poles(vae, dataset, all_tokens_padded, all_bspline_poles_padded, all_bspline_valid_mask)
 
             pc = torch.cat([points, normals], dim=-1)
@@ -667,16 +699,31 @@ def main():
                 ply_filename = f'{output_dir}/{idx}_batch_{j}.ply'
                 pc_numpy = pc[0].detach().cpu().numpy()
                 vertices = pc_numpy[..., :3]
-                normals = pc_numpy[..., 3:6] if pc_numpy.shape[-1] >= 6 else None
+                normals_pc = pc_numpy[..., 3:6] if pc_numpy.shape[-1] >= 6 else None
                 
                 # 使用 open3d 保存点云
                 pcd = o3d.geometry.PointCloud()
                 pcd.points = o3d.utility.Vector3dVector(vertices)
-                if normals is not None:
+                if normals_pc is not None:
                     print('save_normals')
-                    pcd.normals = o3d.utility.Vector3dVector(normals)
+                    pcd.normals = o3d.utility.Vector3dVector(normals_pc)
                 o3d.io.write_point_cloud(ply_filename, pcd)
                 print(f"  点云保存到: {ply_filename}")
+            
+            # 保存高分辨率点云（10240点，无噪声，有旋转）
+            if points_highres is not None:
+                ply_filename_highres = f'{output_dir}/{idx}_batch_{j}_highres.ply'
+                vertices_highres = points_highres[0].detach().cpu().numpy()
+                normals_highres_np = normals_highres[0].detach().cpu().numpy() if normals_highres is not None else None
+                
+                # 使用 open3d 保存高分辨率点云
+                pcd_highres = o3d.geometry.PointCloud()
+                pcd_highres.points = o3d.utility.Vector3dVector(vertices_highres.astype(float))
+                if normals_highres_np is not None:
+                    print('save_highres_normals')
+                    pcd_highres.normals = o3d.utility.Vector3dVector(normals_highres_np.astype(float))
+                o3d.io.write_point_cloud(ply_filename_highres, pcd_highres)
+                print(f"  高分辨率点云保存到: {ply_filename_highres} (点数: {len(vertices_highres)})")
 
             target_dtype = next(model.conditioner.parameters()).dtype if hasattr(model, "conditioner") and model.conditioner is not None else next(model.parameters()).dtype
             pc = pc.to(args.device, dtype=target_dtype)
@@ -746,16 +793,29 @@ def main():
                 # 渲染三视图
                 pred_base = str(output_dir / f'{idx}_pred_iter_{num_iter}').replace('.png', '')
                 gt_base = str(output_dir / f'{idx}_gt_iter_{num_iter}').replace('.png', '')
-                pc_base = str(output_dir / f'{idx}_pc_iter_{num_iter}').replace('.png', '')
+                pc_highres_base = str(output_dir / f'{idx}_pc_highres_iter_{num_iter}').replace('.png', '')
+                pc_lowres_base = str(output_dir / f'{idx}_pc_lowres_iter_{num_iter}').replace('.png', '')
                 
                 # Render three views for each type
                 pred_paths = render_three_views(surfaces_pred, None, pred_base)
                 gt_paths = render_three_views(surfaces_gt, None, gt_base)
-                pc_paths = render_three_views(None, pc[0, ..., :3].detach().cpu().float().numpy(), pc_base)
                 
-                # Create 3x3 grid combining all views
+                # Render high-res point cloud (10240 points, no noise, with rotation)
+                if points_highres is not None:
+                    pc_highres_numpy = points_highres[0].detach().cpu().float().numpy()
+                    pc_highres_paths = render_three_views(None, pc_highres_numpy, pc_highres_base)
+                else:
+                    # Fallback to using low-res if high-res not available
+                    pc_highres_numpy = pc[0, ..., :3].detach().cpu().float().numpy()
+                    pc_highres_paths = render_three_views(None, pc_highres_numpy, pc_highres_base)
+                
+                # Render low-res point cloud (4096 points, with noise, with rotation)
+                pc_lowres_numpy = pc[0, ..., :3].detach().cpu().float().numpy()
+                pc_lowres_paths = render_three_views(None, pc_lowres_numpy, pc_lowres_base)
+                
+                # Create 4x3 grid combining all views
                 grid_output_path = output_dir / f'{idx}_batch_{j}_grid_iter_{num_iter}.jpg'
-                create_three_views_grid(pc_paths, gt_paths, pred_paths, str(grid_output_path))
+                create_three_views_grid(pc_highres_paths, pc_lowres_paths, gt_paths, pred_paths, str(grid_output_path))
 
 
     print(f"\n批量处理完成! 结果保存在 {output_dir}")

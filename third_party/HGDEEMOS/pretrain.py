@@ -311,7 +311,7 @@ def setup(
     global eval_step_interval, num_extrapol, weight_decay, beta1, beta2
     global grad_clip, decay_lr, min_lr, num_epochs, batch_size
     global gradient_accumulation_steps, log_iter_interval
-    global find_unused_parameters
+    global find_unused_parameters, uncond_prob
     
     if config_dict is not None and "trainer" in config_dict:
         trainer_cfg = config_dict.trainer
@@ -375,11 +375,16 @@ def setup(
             find_unused_parameters = trainer_cfg.find_unused_parameters
         else:
             find_unused_parameters = False
+        if "uncond_prob" in trainer_cfg:
+            uncond_prob = float(trainer_cfg.uncond_prob)
+        else:
+            uncond_prob = 0.0  # 默认不做 unconditioned 训练
         print(f"   ✓ Loaded {len([k for k in trainer_cfg.keys()])} trainer parameters")
     else:
         print("⚠️  No 'trainer' section in config, using default values")
         # 使用默认值计算
         warmup_tokens = int(max_tokens * 0.05)
+        uncond_prob = 0.0  # 默认不做 unconditioned 训练
     
     # ========== 计算派生参数 ==========
     # 计算 name（如果未设置）
@@ -414,6 +419,7 @@ def setup(
     print(f"   - Gradient accumulation steps: {gradient_accumulation_steps}")
     print(f"   - Learning rate: {learning_rate}, Max tokens: {max_tokens}")
     print(f"   - Warmup tokens: {warmup_tokens}")
+    print(f"   - Uncond prob: {uncond_prob} (CFG training)")
     
     # ========== 创建 hparams 字典（用于保存 checkpoint） ==========
     global hparams
@@ -452,6 +458,7 @@ def setup(
         "gradient_accumulation_steps": gradient_accumulation_steps,
         "log_iter_interval": log_iter_interval,
         "find_unused_parameters": find_unused_parameters,
+        "uncond_prob": uncond_prob,
     }
     
     wandb_logger = WandbLogger(project=train_config, name=name)
@@ -915,11 +922,17 @@ def train(fabric, state, train_dataloader, val_dataloader, monitor, resume):
 
             is_accumulating = (state["iter_num"] + 1) % gradient_accumulation_steps != 0
             
+            # 🔥 Classifier-Free Guidance (CFG) 训练：随机 drop conditioning
+            # 根据 uncond_prob 概率决定是否使用 conditioning
+            use_conditioning = True
+            if uncond_prob > 0 and random.random() < uncond_prob:
+                use_conditioning = False
+            
             # 监控 condition embeddings 统计信息（每 500 步）
             # monitor_condition = (state["iter_num"] % 500 == 0) and fabric.global_rank == 0
             
             with fabric.no_backward_sync(model, enabled=is_accumulating):
-                logits = model(input_token, pc=pc, window_size=9000).logits
+                logits = model(input_token, pc=pc, window_size=9000, use_conditioning=use_conditioning).logits
 
                 
                 # 使用位置 mask 计算 loss（不依赖 token id）
@@ -1049,10 +1062,11 @@ def train(fabric, state, train_dataloader, val_dataloader, monitor, resume):
             elapsed_iters = max(1, state['iter_num'] - initial_iter)
             remaining_hours = (t1 - total_t0) / elapsed_iters * max(0, (max_iters - state['iter_num'])) / 3600
             
-            # 打印训练信息（包含 CD loss）
-            
+            # 打印训练信息（包含 conditioning 状态）
+            cond_status = "✓" if use_conditioning else "✗"
             fabric.print(
                 f"iter {state['iter_num']} step {state['step_count']}: loss {loss.item():.4f}, acc {acc_per_sample.mean().item():.4f}, "
+                f"cond {cond_status}, "
                 f"iter: {idddx}/{len(train_dataloader)} , epoch: {state['epoch']}, gap: {maxL-minL}, lr: {lr}, iter time:"
                 f" {(t1 - iter_t0) * 1000:.2f}ms{' (optimizer.step)' if not is_accumulating else ''}"
                 f" remaining time: {remaining_hours:.2f} hours. "
