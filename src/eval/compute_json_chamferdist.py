@@ -56,16 +56,17 @@ def surface_to_samples(surface: Dict, resolution: int = 16) -> np.ndarray:
 
 
 
-def compute_chamfer_distance_fast(pred_points, gt_points):
+def compute_chamfer_distance_fast(pred_points, gt_points, bidirectional=False):
     """
     快速计算两个点云之间的 Chamfer Distance
     
     Args:
         pred_points: (N, 3) numpy array 或 torch tensor
         gt_points: (M, 3) numpy array 或 torch tensor
+        bidirectional: 是否计算双向 Chamfer Distance (默认False，只计算 pred->gt)
     
     Returns:
-        chamfer_dist: 双向 Chamfer Distance
+        chamfer_dist: 单向或双向 Chamfer Distance
     """
     try:
         # 转换为 torch tensor（在 GPU 上）
@@ -74,22 +75,30 @@ def compute_chamfer_distance_fast(pred_points, gt_points):
         if not torch.is_tensor(gt_points):
             gt_points = torch.from_numpy(gt_points).float()
         
-        # 确保在 GPU 上
-        if not pred_points.is_cuda:
-            pred_points = pred_points.cuda()
-        if not gt_points.is_cuda:
-            gt_points = gt_points.cuda()
+        # 确保在 GPU 上（如果可用）
+        if torch.cuda.is_available():
+            if not pred_points.is_cuda:
+                pred_points = pred_points.cuda()
+            if not gt_points.is_cuda:
+                gt_points = gt_points.cuda()
         
-        # 计算双向 Chamfer Distance
-        # pred -> gt
+        # 计算距离矩阵
         dist_matrix = torch.cdist(pred_points.unsqueeze(0), gt_points.unsqueeze(0), p=2).squeeze(0)  # (N, M)
+        
+        # pred -> gt
         min_dist_pred_to_gt = dist_matrix.min(dim=1)[0]  # (N,)
+        pred_to_gt_mean = min_dist_pred_to_gt.mean()
         
-        # gt -> pred
-        min_dist_gt_to_pred = dist_matrix.min(dim=0)[0]  # (M,)
-        
-        # Chamfer Distance (双向平均)
-        chamfer_dist = (min_dist_pred_to_gt.mean() + min_dist_gt_to_pred.mean()).item()
+        if bidirectional:
+            # gt -> pred
+            min_dist_gt_to_pred = dist_matrix.min(dim=0)[0]  # (M,)
+            gt_to_pred_mean = min_dist_gt_to_pred.mean()
+            
+            # Chamfer Distance (双向求和)
+            chamfer_dist = (pred_to_gt_mean + gt_to_pred_mean).item()
+        else:
+            # 单向 Chamfer Distance (pred -> gt)
+            chamfer_dist = pred_to_gt_mean.item()
         
         return chamfer_dist
     
@@ -97,18 +106,18 @@ def compute_chamfer_distance_fast(pred_points, gt_points):
         return float('inf')
 
 
-def compute_chamfer_distance(pred_samples: np.ndarray, gt_samples: np.ndarray) -> float:
+def compute_chamfer_distance(pred_samples: np.ndarray, gt_samples: np.ndarray, bidirectional: bool = False) -> float:
     pred_tensor = torch.from_numpy(pred_samples).float().unsqueeze(0)
     gt_tensor = torch.from_numpy(gt_samples).float().unsqueeze(0)
     # chamfer_dist_fn = ChamferDistance()
     # dist = chamfer_dist_fn(pred_tensor, gt_tensor)
-    return compute_chamfer_distance_fast(pred_samples, gt_samples)
+    return compute_chamfer_distance_fast(pred_samples, gt_samples, bidirectional=bidirectional)
 
 
 def get_bbox(points: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     return points.min(axis=0), points.max(axis=0)
 
-def process_json_pair(pred_surfaces: List[Dict], gt_surfaces: List[Dict], resolution: int = 16) -> Tuple[float, np.ndarray, np.ndarray]:
+def process_json_pair(pred_surfaces: List[Dict], gt_surfaces: List[Dict], resolution: int = 16, bidirectional: bool = False) -> Tuple[float, np.ndarray, np.ndarray]:
     try:
         pred_points_list = []
         for pred_surf in pred_surfaces:
@@ -123,7 +132,7 @@ def process_json_pair(pred_surfaces: List[Dict], gt_surfaces: List[Dict], resolu
         pred_all = np.concatenate(pred_points_list, axis=0)
         gt_all = np.concatenate(gt_points_list, axis=0)
         
-        chamfer_dist = compute_chamfer_distance(pred_all, gt_all)
+        chamfer_dist = compute_chamfer_distance(pred_all, gt_all, bidirectional=bidirectional)
         
         return chamfer_dist, pred_all, gt_all
     
@@ -164,7 +173,8 @@ def compute_chamfer_distances_for_checkpoint(
     checkpoint: str, 
     resolution: int = 16,
     range_min: int = None,
-    range_max: int = None
+    range_max: int = None,
+    bidirectional: bool = False
 ) -> Tuple[Dict[str, float], List[Dict]]:
     pairs_by_idx = find_json_pairs(test_dir, checkpoint)
     
@@ -200,7 +210,7 @@ def compute_chamfer_distances_for_checkpoint(
             pred_surfaces = load_json_surfaces(pred_path)
             gt_surfaces = load_json_surfaces(gt_path)
             
-            chamfer_dist, pred_points, gt_points = process_json_pair(pred_surfaces, gt_surfaces, resolution)
+            chamfer_dist, pred_points, gt_points = process_json_pair(pred_surfaces, gt_surfaces, resolution, bidirectional=bidirectional)
             
             if chamfer_dist is not None and pred_points is not None and gt_points is not None:
                 gt_bbox_min, gt_bbox_max = get_bbox(gt_points)
@@ -265,17 +275,22 @@ def main():
     parser.add_argument('--output', type=str, default='chamfer_results.json')
     parser.add_argument('--range_min', type=int, default=None, help='Minimum idx to process (inclusive)')
     parser.add_argument('--range_max', type=int, default=None, help='Maximum idx to process (inclusive)')
+    parser.add_argument('--bidirectional', action='store_true', 
+                        help='Calculate bidirectional Chamfer Distance (pred<->gt); default is unidirectional (pred->gt)')
     
     args = parser.parse_args()
     
-    print(f"Checkpoint: {args.checkpoint}, Resolution: {args.resolution}x{args.resolution}\n")
+    cd_mode = "Bidirectional (pred<->gt)" if args.bidirectional else "Unidirectional (pred->gt)"
+    print(f"Checkpoint: {args.checkpoint}, Resolution: {args.resolution}x{args.resolution}")
+    print(f"Chamfer Distance Mode: {cd_mode}\n")
     
     stats, idx_results = compute_chamfer_distances_for_checkpoint(
         args.test_dir, 
         args.checkpoint, 
         args.resolution,
         args.range_min,
-        args.range_max
+        args.range_max,
+        args.bidirectional
     )
     
     if stats:
@@ -293,6 +308,7 @@ def main():
             output_data = {
                 'checkpoint': args.checkpoint,
                 'resolution': args.resolution,
+                'bidirectional': args.bidirectional,
                 'statistics': stats,
                 'results_sorted_by_cd': idx_results
             }
