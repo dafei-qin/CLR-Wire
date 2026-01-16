@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(os.path.dirname(__file__)).parent.parent))
 from occwl.solid import Solid
 from occwl.graph import face_adjacency
 from occwl.compound import Compound
+from occwl.io import save_step
 from OCC.Core.BRep import BRep_Tool
 from OCC.Core.GeomLProp import GeomLProp_SLProps
 from OCC.Core.gp import gp_Pnt2d
@@ -313,10 +314,19 @@ def filter_unique_solids(solids, verbose=False):
     return unique_solids, unique_indices
 
 
-def step_to_pointcloud(step_filename, ply_filename, num_samples=1000, debug=True, fps=True, num_fps=81920):
+def step_to_pointcloud(step_filename, ply_filename, num_samples=1000, debug=True, fps=True, num_fps=81920, save_step_file=False):
     """
     Debug 版本：逻辑与 `sample_step_to_pc.step_to_pointcloud` 保持同步，
     但单线程、带更多打印信息。
+    
+    Args:
+        step_filename: 输入STEP文件路径
+        ply_filename: 输出NPZ文件路径
+        num_samples: 每个面的采样点数
+        debug: 是否输出调试信息
+        fps: 是否使用FPS采样
+        num_fps: FPS采样点数
+        save_step_file: 是否保存处理后的solid为STEP文件
     """
     import warnings
     warnings.filterwarnings('ignore', category=DeprecationWarning)
@@ -466,6 +476,16 @@ def step_to_pointcloud(step_filename, ply_filename, num_samples=1000, debug=True
             masks=np.array(all_masks_per_face, dtype=object),
         )
         json.dump(jsons_data, open(save_name.replace('.npz', '.json'), 'w'), ensure_ascii=False, indent=2)
+        
+        # Save the solid as STEP file if requested
+        if save_step_file:
+            step_save_path = save_name.replace('.npz', '.step')
+            try:
+                save_step([solid], step_save_path)
+                print(f"✓ [DEBUG] Successfully saved solid to {step_save_path}")
+            except Exception as e:
+                print(f"✗ [WARNING] Failed to save STEP file {step_save_path}: {e}")
+        
         print(f"\n✓ [DEBUG] Successfully saved {len(all_points)} surfaces/points to {save_name}")
 
 
@@ -488,6 +508,8 @@ def main():
                         help='Disable debug output')
     parser.add_argument('--single-file', action='store_true',
                         help='Process input as a single STEP file (for bash parallel usage)')
+    parser.add_argument('--save_step', action='store_true',
+                        help='Save the processed solid as STEP file (same name as .npz, default: False)')
     
     args = parser.parse_args()
 
@@ -526,6 +548,7 @@ def main():
                 debug=not args.no_debug,
                 fps=args.fps,
                 num_fps=args.num_fps,
+                save_step_file=args.save_step,
             )
             return 0
         except Exception as e:
@@ -551,6 +574,7 @@ def main():
     print(f"Random samples per face: {args.num_samples}")
     print(f"FPS enabled: {args.fps}, num_fps: {args.num_fps}")
     print(f"Debug output: {'disabled' if args.no_debug else 'enabled'}")
+    print(f"Save STEP files: {'enabled' if args.save_step else 'disabled'}")
     print(f"Total STEP files found (rglob): {len(stepfiles)}")
     print(f"{'='*60}\n")
 
@@ -571,6 +595,7 @@ def main():
                 debug=not args.no_debug,
                 fps=args.fps,
                 num_fps=args.num_fps,
+                save_step_file=args.save_step,
             )
         except Exception as e:
             print(f"[ERROR] Failed to process {stepfile}: {e}")
