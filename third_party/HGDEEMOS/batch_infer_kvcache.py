@@ -657,8 +657,8 @@ def main():
             npz_path = dataset.npz_path[idx % len(dataset.npz_path)]
             json_path = npz_path.replace('.npz', '.json')
             
-            # copy json to the output folder
-            shutil.copy(json_path, output_dir / f'{idx}_gt_data.json')
+            # copy raw json to the output folder
+            shutil.copy(json_path, output_dir / f'{idx}_raw_gt.json')
             
             # Load and save graph topology (nodes and edges)
             npz_data_graph = np.load(npz_path, allow_pickle=True)
