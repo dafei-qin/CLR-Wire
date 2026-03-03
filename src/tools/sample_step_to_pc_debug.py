@@ -22,8 +22,8 @@ sys.path.insert(0, str(Path(os.path.dirname(__file__)).parent.parent))
 from occwl.solid import Solid
 from occwl.graph import face_adjacency
 from occwl.compound import Compound
-from occwl.io import save_step
 from OCC.Core.BRep import BRep_Tool
+from OCC.Core.BRepTools import breptools
 from OCC.Core.GeomLProp import GeomLProp_SLProps
 from OCC.Core.gp import gp_Pnt2d
 from OCC.Core.TopAbs import TopAbs_IN, TopAbs_ON, TopAbs_OUT
@@ -477,14 +477,16 @@ def step_to_pointcloud(step_filename, ply_filename, num_samples=1000, debug=True
         )
         json.dump(jsons_data, open(save_name.replace('.npz', '.json'), 'w'), ensure_ascii=False, indent=2)
         
-        # Save the solid as STEP file if requested
+        # Save the solid as .brep file (OCC native format) if requested
+        # Using .brep instead of STEP to avoid memory issues and improve stability
         if save_step_file:
-            step_save_path = save_name.replace('.npz', '.step')
+            brep_save_path = save_name.replace('.npz', '.brep')
             try:
-                save_step([solid], step_save_path)
-                print(f"✓ [DEBUG] Successfully saved solid to {step_save_path}")
+                # Use BRepTools.Write() for stable and direct brep file writing
+                breptools.Write(solid.topods_shape(), str(brep_save_path))
+                print(f"✓ [DEBUG] Successfully saved solid to {brep_save_path} (OCC native .brep format)")
             except Exception as e:
-                print(f"✗ [WARNING] Failed to save STEP file {step_save_path}: {e}")
+                print(f"✗ [WARNING] Failed to save .brep file {brep_save_path}: {e}")
         
         print(f"\n✓ [DEBUG] Successfully saved {len(all_points)} surfaces/points to {save_name}")
 
@@ -509,7 +511,7 @@ def main():
     parser.add_argument('--single-file', action='store_true',
                         help='Process input as a single STEP file (for bash parallel usage)')
     parser.add_argument('--save_step', action='store_true',
-                        help='Save the processed solid as STEP file (same name as .npz, default: False)')
+                        help='Save the processed solid as .brep file (OCC native format, same name as .npz, default: False)')
     
     args = parser.parse_args()
 
@@ -574,7 +576,7 @@ def main():
     print(f"Random samples per face: {args.num_samples}")
     print(f"FPS enabled: {args.fps}, num_fps: {args.num_fps}")
     print(f"Debug output: {'disabled' if args.no_debug else 'enabled'}")
-    print(f"Save STEP files: {'enabled' if args.save_step else 'disabled'}")
+    print(f"Save .brep files: {'enabled' if args.save_step else 'disabled'}")
     print(f"Total STEP files found (rglob): {len(stepfiles)}")
     print(f"{'='*60}\n")
 
