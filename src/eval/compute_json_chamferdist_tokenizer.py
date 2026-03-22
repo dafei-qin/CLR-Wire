@@ -11,14 +11,14 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-# Import chamferdist library
-try:
-    from chamferdist import ChamferDistance
-except ImportError:
-    print("Installing chamferdist library...")
-    import subprocess
-    subprocess.check_call(["pip", "install", "chamferdist"])
-    from chamferdist import ChamferDistance
+# # Import chamferdist library
+# try:
+#     from chamferdist import ChamferDistance
+# except ImportError:
+#     print("Installing chamferdist library...")
+#     import subprocess
+#     subprocess.check_call(["pip", "install", "chamferdist"])
+#     from chamferdist import ChamferDistance
 
 # Import params_to_samples from surface_tools
 from src.utils.surface_tools import params_to_samples
@@ -141,6 +141,40 @@ def process_json_pair(pred_surfaces: List[Dict], gt_surfaces: List[Dict], resolu
         return None, None, None
 
 
+def parse_filename_ablation(filename: str) -> str:
+    """Parse filename to extract idx. Returns idx."""
+    # Format: 000000_raw_gt.json or 000000_tokenized_gt.json
+    idx = filename.split('_')[0]
+    return idx
+
+def find_json_pairs_ablation(output_dir: str) -> Dict[str, Tuple[str, str]]:
+    """Find all raw_gt/tokenized_gt pairs for tokenizer ablation."""
+    output_path = Path(output_dir)
+    raw_gt_dir = output_path / "raw_gt"
+    tokenized_gt_dir = output_path / "tokenized_gt"
+    
+    if not raw_gt_dir.exists():
+        print(f"Error: raw_gt directory not found: {raw_gt_dir}")
+        return {}
+    if not tokenized_gt_dir.exists():
+        print(f"Error: tokenized_gt directory not found: {tokenized_gt_dir}")
+        return {}
+    
+    # Find all tokenized_gt files
+    tokenized_files = sorted(tokenized_gt_dir.glob("*_tokenized_gt.json"))
+    
+    pairs_by_idx = {}
+    for tokenized_file in tokenized_files:
+        idx = parse_filename_ablation(tokenized_file.name)
+        raw_gt_file = raw_gt_dir / f"{idx}_raw_gt.json"
+        
+        if raw_gt_file.exists():
+            pairs_by_idx[idx] = (str(raw_gt_file), str(tokenized_file))
+        else:
+            print(f"Warning: No raw_gt file found for {tokenized_file.name}")
+    
+    return pairs_by_idx
+
 def parse_filename(filename: str) -> Tuple[str, str]:
     """Parse filename to extract idx and batch_idx. Returns (idx, batch_idx)."""
     parts = filename.split('_batch_')
@@ -166,6 +200,78 @@ def find_json_pairs(test_dir: str, checkpoint: str) -> Dict[str, List[Tuple[str,
             print(f"Warning: No raw_gt file found for {gt_file.name} (looking for {raw_gt_file.name})")
     
     return pairs_by_idx
+
+
+def compute_chamfer_distances_for_ablation(
+    output_dir: str,
+    resolution: int = 16,
+    range_min: int = None,
+    range_max: int = None,
+    bidirectional: bool = False
+) -> Tuple[Dict[str, float], List[Dict]]:
+    """Compute Chamfer distances for tokenizer ablation (raw_gt vs tokenized_gt)."""
+    pairs_by_idx = find_json_pairs_ablation(output_dir)
+    
+    if not pairs_by_idx:
+        print(f"No valid raw_gt/tokenized_gt pairs found in {output_dir}")
+        return {}, []
+    
+    # Filter indices by range if specified
+    if range_min is not None or range_max is not None:
+        filtered_pairs = {}
+        for idx in pairs_by_idx:
+            idx_int = int(idx)
+            if range_min is not None and idx_int < range_min:
+                continue
+            if range_max is not None and idx_int > range_max:
+                continue
+            filtered_pairs[idx] = pairs_by_idx[idx]
+        pairs_by_idx = filtered_pairs
+        print(f"Filtering indices: range_min={range_min}, range_max={range_max}")
+    
+    total_pairs = len(pairs_by_idx)
+    print(f"Found {total_pairs} valid pairs")
+    
+    idx_results = []
+    
+    for idx in tqdm(sorted(pairs_by_idx.keys(), key=lambda x: int(x)), desc="Processing pairs"):
+        raw_gt_path, tokenized_gt_path = pairs_by_idx[idx]
+        
+        raw_gt_surfaces = load_json_surfaces(raw_gt_path)
+        tokenized_gt_surfaces = load_json_surfaces(tokenized_gt_path)
+        
+        chamfer_dist, raw_points, tokenized_points = process_json_pair(
+            tokenized_gt_surfaces, raw_gt_surfaces, resolution, bidirectional=bidirectional
+        )
+        
+        if chamfer_dist is not None and raw_points is not None and tokenized_points is not None:
+            idx_results.append({
+                'idx': idx,
+                'chamfer_dist': chamfer_dist,
+                'raw_gt_path': raw_gt_path,
+                'tokenized_gt_path': tokenized_gt_path
+            })
+    
+    if not idx_results:
+        print("No valid Chamfer distances computed!")
+        return {}, []
+    
+    idx_results_sorted = sorted(idx_results, key=lambda x: x['chamfer_dist'])
+    
+    chamfer_array = np.array([r['chamfer_dist'] for r in idx_results])
+    
+    stats = {
+        'mean': float(np.mean(chamfer_array)),
+        'median': float(np.median(chamfer_array)),
+        'std': float(np.std(chamfer_array)),
+        'min': float(np.min(chamfer_array)),
+        'max': float(np.max(chamfer_array)),
+        'percentile_5': float(np.percentile(chamfer_array, 5)),
+        'percentile_95': float(np.percentile(chamfer_array, 95)),
+        'num_pairs': len(idx_results),
+    }
+    
+    return stats, idx_results_sorted
 
 
 def compute_chamfer_distances_for_checkpoint(
@@ -268,9 +374,15 @@ def compute_chamfer_distances_for_checkpoint(
 
 def main():
     parser = argparse.ArgumentParser(description='Compute Chamfer Distance between pred and gt JSON files.')
+    parser.add_argument('--mode', type=str, default='checkpoint', choices=['checkpoint', 'ablation'],
+                        help='Mode: checkpoint (inference results) or ablation (tokenizer ablation)')
     parser.add_argument('--test_dir', type=str,
-        default='/deemos-research-area-d/meshgen/cad/checkpoints/GPT_INIT_142M/train_0110_michel_4096_full/test_00')
-    parser.add_argument('--checkpoint', type=str, default='253500')
+        default='/deemos-research-area-d/meshgen/cad/checkpoints/GPT_INIT_142M/train_0110_michel_4096_full/test_00',
+        help='Test directory for checkpoint mode')
+    parser.add_argument('--ablation_dir', type=str, default=None,
+                        help='Ablation output directory containing raw_gt/ and tokenized_gt/ subdirs')
+    parser.add_argument('--checkpoint', type=str, default='020000',
+                        help='Checkpoint name (for checkpoint mode only)')
     parser.add_argument('--resolution', type=int, default=16)
     parser.add_argument('--output', type=str, default='chamfer_results.json')
     parser.add_argument('--range_min', type=int, default=None, help='Minimum idx to process (inclusive)')
@@ -281,42 +393,89 @@ def main():
     args = parser.parse_args()
     
     cd_mode = "Bidirectional (pred<->gt)" if args.bidirectional else "Unidirectional (pred->gt)"
-    print(f"Checkpoint: {args.checkpoint}, Resolution: {args.resolution}x{args.resolution}")
+    print(f"Resolution: {args.resolution}x{args.resolution}")
     print(f"Chamfer Distance Mode: {cd_mode}\n")
     
-    stats, idx_results = compute_chamfer_distances_for_checkpoint(
-        args.test_dir, 
-        args.checkpoint, 
-        args.resolution,
-        args.range_min,
-        args.range_max,
-        args.bidirectional
-    )
-    
-    if stats:
-        print(f"\n{'='*60}")
-        print(f"Checkpoint {args.checkpoint} - Unique indices: {stats['num_indices']} (from {stats['total_pairs']} pairs)")
-        print(f"Mean: {stats['mean']:.6f} | Median: {stats['median']:.6f} | Std: {stats['std']:.6f}")
-        print(f"Min: {stats['min']:.6f} | Max: {stats['max']:.6f}")
-        print(f"5th: {stats['percentile_5']:.6f} | 95th: {stats['percentile_95']:.6f}")
-        print(f"{'='*60}")
+    if args.mode == 'ablation':
+        if not args.ablation_dir:
+            print("Error: --ablation_dir is required for ablation mode")
+            return
         
-        if args.output:
-            output_path = Path(args.output)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
+        print(f"Mode: Tokenizer Ablation")
+        print(f"Ablation directory: {args.ablation_dir}\n")
+        
+        stats, idx_results = compute_chamfer_distances_for_ablation(
+            args.ablation_dir,
+            args.resolution,
+            args.range_min,
+            args.range_max,
+            args.bidirectional
+        )
+        
+        if stats:
+            print(f"\n{'='*60}")
+            print(f"Tokenizer Ablation - Total pairs: {stats['num_pairs']}")
+            print(f"Mean: {stats['mean']:.6f} | Median: {stats['median']:.6f} | Std: {stats['std']:.6f}")
+            print(f"Min: {stats['min']:.6f} | Max: {stats['max']:.6f}")
+            print(f"5th: {stats['percentile_5']:.6f} | 95th: {stats['percentile_95']:.6f}")
+            print(f"{'='*60}")
             
-            output_data = {
-                'checkpoint': args.checkpoint,
-                'resolution': args.resolution,
-                'bidirectional': args.bidirectional,
-                'statistics': stats,
-                'results_sorted_by_cd': idx_results
-            }
+            if args.output:
+                output_path = Path(args.output)
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                output_data = {
+                    'mode': 'ablation',
+                    'ablation_dir': args.ablation_dir,
+                    'resolution': args.resolution,
+                    'bidirectional': args.bidirectional,
+                    'statistics': stats,
+                    'results_sorted_by_cd': idx_results
+                }
+                
+                with open(output_path, 'w') as f:
+                    json.dump(output_data, f, indent=2)
+                print(f"Saved to: {args.output}")
+                print(f"Saved {len(idx_results)} results sorted by chamfer distance")
+    
+    else:  # checkpoint mode
+        print(f"Mode: Checkpoint Inference")
+        print(f"Checkpoint: {args.checkpoint}\n")
+        
+        stats, idx_results = compute_chamfer_distances_for_checkpoint(
+            args.test_dir, 
+            args.checkpoint, 
+            args.resolution,
+            args.range_min,
+            args.range_max,
+            args.bidirectional
+        )
+        
+        if stats:
+            print(f"\n{'='*60}")
+            print(f"Checkpoint {args.checkpoint} - Unique indices: {stats['num_indices']} (from {stats['total_pairs']} pairs)")
+            print(f"Mean: {stats['mean']:.6f} | Median: {stats['median']:.6f} | Std: {stats['std']:.6f}")
+            print(f"Min: {stats['min']:.6f} | Max: {stats['max']:.6f}")
+            print(f"5th: {stats['percentile_5']:.6f} | 95th: {stats['percentile_95']:.6f}")
+            print(f"{'='*60}")
             
-            with open(output_path, 'w') as f:
-                json.dump(output_data, f, indent=2)
-            print(f"Saved to: {args.output}")
-            print(f"Saved {len(idx_results)} index results sorted by chamfer distance")
+            if args.output:
+                output_path = Path(args.output)
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                output_data = {
+                    'mode': 'checkpoint',
+                    'checkpoint': args.checkpoint,
+                    'resolution': args.resolution,
+                    'bidirectional': args.bidirectional,
+                    'statistics': stats,
+                    'results_sorted_by_cd': idx_results
+                }
+                
+                with open(output_path, 'w') as f:
+                    json.dump(output_data, f, indent=2)
+                print(f"Saved to: {args.output}")
+                print(f"Saved {len(idx_results)} index results sorted by chamfer distance")
 
 
 if __name__ == '__main__':

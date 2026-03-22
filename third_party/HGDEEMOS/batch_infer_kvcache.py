@@ -488,7 +488,8 @@ def generate_with_kvcache(
     # ---- 第一个 token ----
     # input_pos 形状按模型实现可广播；保持 [1] 即可在大多数实现下广播到 batch
     input_pos = torch.tensor([0], dtype=torch.long, device=device)
-    out = model(seq, max_seq_length=max_seq_length, input_pos=input_pos, pc=pc).logits  # [B, 1, V] - Cache PC features
+    # For unconditional: pc=None; For conditional: pc=[B, N, C] - Cache PC features
+    out = model(seq, max_seq_length=max_seq_length, input_pos=input_pos, pc=pc).logits  # [B, 1, V]
     logits = out[:, -1, :]  # [B, V]
 
     if temperature > 0:
@@ -592,6 +593,7 @@ def main():
     parser.add_argument("--output_dir", type=str, default="meshes/TestData_1201_NoScaleUp_50k_no_dynamic_window",
                        help="Output directory")
     parser.add_argument('--aug_num', type=int, default=1, help="Number of augmentations")
+    parser.add_argument('--unconditional', action='store_true', help="Enable unconditional generation (no point cloud conditioning)")
     args = parser.parse_args()
 
     torch.set_float32_matmul_precision("high")
@@ -618,12 +620,15 @@ def main():
     # 加载模型
     print("加载模型...")
     args.do_inference = args.do_inference.lower() == 'true'
-    model = load_model(
-        args.ckpt, 
-        config_dict=config_dict,
-        device=args.device, 
-        dtype=args.dtype
-    )
+    if args.do_inference:
+        model = load_model(
+            args.ckpt, 
+            config_dict=config_dict,
+            device=args.device, 
+            dtype=args.dtype
+        )
+    else:
+        model = None
     vae = load_model_from_config(config_dict, section="vae")
     vae.eval()
     vae.to(args.device)
@@ -725,17 +730,24 @@ def main():
                 o3d.io.write_point_cloud(ply_filename_highres, pcd_highres)
                 print(f"  高分辨率点云保存到: {ply_filename_highres} (点数: {len(vertices_highres)})")
 
-            target_dtype = next(model.conditioner.parameters()).dtype if hasattr(model, "conditioner") and model.conditioner is not None else next(model.parameters()).dtype
-            pc = pc.to(args.device, dtype=target_dtype)
-
-            # ===== 批量推理：把起始 token 和点云在 batch 维复制 4 份，同时解码 =====
-            B = 2
+            
             print('do_inference: ', args.do_inference)
             if args.do_inference:
+
+                # Prepare point cloud for conditional generation
+                if not args.unconditional:
+                    target_dtype = next(model.conditioner.parameters()).dtype if hasattr(model, "conditioner") and model.conditioner is not None else next(model.parameters()).dtype
+                    pc_input = pc.to(args.device, dtype=target_dtype)
+                else:
+                    pc_input = None  # Unconditional generation
+
+                # ===== 批量推理：把起始 token 和点云在 batch 维复制 4 份，同时解码 =====
+                B = 2
+                
                 tokens_batch = generate_with_kvcache(
                     model,
                     start_token_id=dataset.start_id,
-                    pc=pc,  # 函数内部会扩成 [B, N, C]
+                    pc=pc_input,  # None for unconditional, [B, N, C] for conditional
                     max_new_tokens=args.max_new_tokens,
                     max_seq_length=args.max_seq_len,
                     temperature=args.temperature,

@@ -11,14 +11,14 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-# Import chamferdist library
-try:
-    from chamferdist import ChamferDistance
-except ImportError:
-    print("Installing chamferdist library...")
-    import subprocess
-    subprocess.check_call(["pip", "install", "chamferdist"])
-    from chamferdist import ChamferDistance
+# # Import chamferdist library
+# try:
+#     from chamferdist import ChamferDistance
+# except ImportError:
+#     print("Installing chamferdist library...")
+#     import subprocess
+#     subprocess.check_call(["pip", "install", "chamferdist"])
+#     from chamferdist import ChamferDistance
 
 # Import params_to_samples from surface_tools
 from src.utils.surface_tools import params_to_samples
