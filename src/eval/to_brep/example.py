@@ -249,7 +249,7 @@ def process_one(input_path, json_name, ply_name, output_path):
     for f in all_split_faces:
         builder.Add(new_compound, f)
     
-    step_file = os.path.join(output_path, ply_name + ".step")
+    step_file = os.path.join(output_path, ply_name + ".brep")
     breptools.Write(new_compound, step_file)
     
     return step_file
@@ -345,18 +345,18 @@ if __name__ == '__main__':
             # 生成 STEP 文件
             step_file = process_one(input_path, pred, ply, output_path)
             if step_file and os.path.exists(step_file):
-                print(f"  ✓ STEP saved to: {step_file}", flush=True)
+                print(f"  ✓ BREP saved to: {step_file}", flush=True)
                 
                 # 渲染 JPG 图像
                 if renderer is not None:
-                    jpg_file = step_file.replace('.step', '.jpg')
+                    jpg_file = step_file.replace('.brep', '.jpg')
                     print(f"  🎨 Rendering to JPG...", flush=True)
                     if render_step_to_jpg(step_file, jpg_file, renderer):
                         print(f"  ✓ JPG saved to: {jpg_file}", flush=True)
                     else:
                         print(f"  ⚠ Rendering failed", flush=True)
             else:
-                print(f"  ✗ Failed to generate STEP file", flush=True)
+                print(f"  ✗ Failed to generate BREP file", flush=True)
                 
         except Exception as e:
             print(f"  ✗ Exception: {e}", flush=True)

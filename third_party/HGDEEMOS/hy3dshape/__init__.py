@@ -13,5 +13,13 @@
 # by Tencent in accordance with TENCENT HUNYUAN COMMUNITY LICENSE AGREEMENT.
 
 from .pipelines import Hunyuan3DDiTPipeline, Hunyuan3DDiTFlowMatchingPipeline
-from .postprocessors import FaceReducer, FloaterRemover, DegenerateFaceRemover, MeshSimplifier
+# Lazy import postprocessors to avoid pymeshlab dependency during training
+# from .postprocessors import FaceReducer, FloaterRemover, DegenerateFaceRemover, MeshSimplifier
 from .preprocessors import ImageProcessorV2, IMAGE_PROCESSORS, DEFAULT_IMAGEPROCESSOR
+
+# Lazy loading for postprocessors (only needed during inference)
+def __getattr__(name):
+    if name in ['FaceReducer', 'FloaterRemover', 'DegenerateFaceRemover', 'MeshSimplifier']:
+        from .postprocessors import FaceReducer, FloaterRemover, DegenerateFaceRemover, MeshSimplifier
+        return globals()[name]
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")

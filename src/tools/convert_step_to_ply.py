@@ -2,42 +2,67 @@ import os
 import glob
 import concurrent.futures
 import sys
+
 from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
 from OCC.Extend.DataExchange import write_ply_file
 from occwl.compound import Compound
 from OCC.Core.STEPControl import STEPControl_Reader
-from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
 from OCC.Core.StlAPI import StlAPI_Writer
 from OCC.Core.BRep import BRep_Tool
-from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
+from OCC.Core.TopExp import TopExp_Explorer
+from OCC.Core.TopAbs import TopAbs_FACE
+from occwl.solid import Solid
+from occwl.graph import face_adjacency
+from occwl.compound import Compound
+
 import trimesh
 import open3d as o3d
 import numpy as np
 
-def convert_step_to_ply(step_file, ply_file):
-    # Read the STEP file
-    step_reader = STEPControl_Reader()
-    step_reader.ReadFile(step_file)
-    step_reader.TransferRoots()
-    shape = step_reader.OneShape()
+from icecream import ic
 
-    mesh = BRepMesh_IncrementalMesh(shape, 0.1)
-    mesh.Perform()
+def convert_step_to_ply(step_filename, ply_file):
 
-    stl_file = ply_file.replace('.ply', '.stl')
-    stl_writer = StlAPI_Writer()
-    stl_writer.Write(shape, stl_file)
+    solids, attributes = Compound.load_step_with_attributes(step_filename)
+    solids = list(solids.solids())
+   
 
-    mesh = trimesh.load_mesh(stl_file)
-    points, face_indices = trimesh.sample.sample_surface(mesh, 409600)
-    normals = mesh.face_normals[face_indices]
+    for index, solid in enumerate(solids):
 
-    point_cloud = o3d.geometry.PointCloud()
+        ic(f'Processing solid {index:02d}...')
+        if len(list(solid.faces())) > 500:
+            ic(f'Too many faces in the solid: {len(list(solid.faces()))}')
+            raise ValueError("Too many faces in the solid.")
+        solid = solid.topods_shape()
+        solid = Solid(solid)
+        solid = solid.scale_to_unit_box()
 
-    point_cloud.points = o3d.utility.Vector3dVector(points)
-    point_cloud.normals = o3d.utility.Vector3dVector(normals)
+        try:
+            graph = face_adjacency(solid, self_loops=True)
+        except:
+            raise ValueError("Face adjacency failed. The solid may be invalid.")
 
-    o3d.io.write_point_cloud(ply_file, point_cloud)
+
+        shape = solid.topods_shape()
+        mesh = BRepMesh_IncrementalMesh(shape, 0.1)
+        mesh.Perform()
+
+        stl_file = ply_file.replace('.ply', f'_{index}.stl')
+        stl_writer = StlAPI_Writer()
+        stl_writer.Write(shape, stl_file)
+
+        mesh = trimesh.load_mesh(stl_file)
+        points, face_indices = trimesh.sample.sample_surface(mesh, 409600)
+        normals = mesh.face_normals[face_indices]
+
+        point_cloud = o3d.geometry.PointCloud()
+        point_cloud.points = o3d.utility.Vector3dVector(points)
+        point_cloud.normals = o3d.utility.Vector3dVector(normals)
+        o3d.io.write_point_cloud(ply_file.replace('.ply', f'_{index}.ply'), point_cloud)
+
+    
+
+
 
 def convert_step_to_numpy(step_file, numpy_file, normalize=True, num_points=409600):
     step_reader = STEPControl_Reader()

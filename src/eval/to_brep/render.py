@@ -1,5 +1,6 @@
 import os
 import glob
+import argparse
 from PIL import Image
 
 from OCC.Core.BRepTools import breptools
@@ -10,6 +11,7 @@ from OCC.Core.V3d import V3d_Xneg, V3d_Yneg, V3d_Zpos, V3d_XposYnegZpos,V3d_View
 from OCC.Core.Quantity import Quantity_Color,Quantity_TOC_RGB 
 
 # =================配置区域=================
+# 默认数据路径（可被命令行参数覆盖）
 data_paths=[
     ("F:\\aa-test-data\\0-test\\","F:\\aa-test-data\\0-res\\"),
     ("F:\\aa-test-data\\1-results_23k_1e-2\\","F:\\aa-test-data\\1-brep_results\\"),
@@ -19,8 +21,8 @@ data_paths=[
     ("F:\\aa-test-data\\5-highres-part\\","F:\\aa-test-data\\5-res\\"),
 ]
 data_idx=4
-_,INPUT_DIR=data_paths[data_idx]
-OUTPUT_DIR = INPUT_DIR
+_,DEFAULT_INPUT_DIR=data_paths[data_idx]
+DEFAULT_OUTPUT_DIR = DEFAULT_INPUT_DIR
 
 IMG_SIZE = (800, 600)  # 单张子图的分辨率 (宽, 高)
 BG_COLOR1 = Quantity_Color(1.0, 1.0, 1.0,Quantity_TOC_RGB) # 背景渐变色顶部 (RGB)
@@ -113,6 +115,17 @@ def create_grid_image(images):
     return grid_img
 
 def main():
+    # 解析命令行参数
+    parser = argparse.ArgumentParser(description='渲染 BREP 文件为多视角图像')
+    parser.add_argument('-i', '--input', type=str, default=DEFAULT_INPUT_DIR,
+                        help=f'输入文件夹路径（包含 .brep 文件），默认: {DEFAULT_INPUT_DIR}')
+    parser.add_argument('-o', '--output', type=str, default=None,
+                        help='输出文件夹路径（保存 .jpg 文件），默认: 与输入文件夹相同')
+    args = parser.parse_args()
+    
+    INPUT_DIR = args.input
+    OUTPUT_DIR = args.output if args.output else INPUT_DIR
+    
     # 1. 确保目录存在
     if not os.path.exists(INPUT_DIR):
         os.makedirs(INPUT_DIR)

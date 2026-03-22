@@ -5,10 +5,10 @@ MAX_PARALLEL=96 # 最大并发数，可以根据需要修改
 NUM_SAMPLES=2048
 FPS=True
 NUM_FPS=10240
-SAVE_STEP=true  # 是否保存处理后的STEP文件，true/false
-INPUT_BASE="/data/ssd/CAD/data/abc/9/0090"
-OUTPUT_BASE="/data/ssd/CAD/data/abc_step_pc_correct_normal/0090_step"
-LOG_DIR="/data/ssd/CAD/data/abc_step_pc_correct_normal/logs/batch_step_to_pc_new/2"
+SAVE_STEP=true  # 是否保存处理后的solid文件（.brep格式），true/false
+INPUT_BASE="/data/ssd/CAD/data/abc/9/"
+OUTPUT_BASE="/data/ssd/CAD/data/abc_step_pc_correct_normal/_step"
+LOG_DIR="/data/ssd/CAD/data/abc_step_pc_correct_normal/logs/batch_step_to_pc_new/9_step"
 SCRIPT_PATH="src/tools/sample_step_to_pc_debug.py"
 
 # 创建日志目录
@@ -44,7 +44,7 @@ echo "找到 $TOTAL 个 STEP 文件需要处理"
 echo "最大并发数: $MAX_PARALLEL"
 echo "Num samples: $NUM_SAMPLES"
 echo "FPS: $FPS, Num FPS: $NUM_FPS"
-echo "Save STEP: $SAVE_STEP"
+echo "Save .brep: $SAVE_STEP"
 echo "----------------------------------------"
 
 # 计数器
