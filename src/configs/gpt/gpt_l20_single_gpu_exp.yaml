@@ -2,6 +2,8 @@ trainer:
     model_name: "GPT_INIT_142M"
     train_config: "train_0105_small_vae_excl_2"
     train_name: "train_l20_single_gpu_exp"
+    wandb_project: "Experiment-Placeholder_mask"
+    wandb_run_name: "use_mask"
     out_dir: "/deemos-research-area-d/meshgen/cad/checkpoints/GPT_INIT_142M/train_l20_single_gpu_exp/"
 
     use_sample_dataset: false

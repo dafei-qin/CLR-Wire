@@ -304,7 +304,7 @@ def setup(
         print(f"⚠️  Config file not found: {config_path}, using default settings")
     
     # ========== 从配置文件读取训练参数 ==========
-    global model_name, train_config, train_name, name, out_dir, devices, num_nodes, total_gpus, use_sample_dataset
+    global model_name, train_config, train_name, name, wandb_project_override, wandb_run_name_override, out_dir, devices, num_nodes, total_gpus, use_sample_dataset
     global freeze_conditioner, conditioner_lr_scale, fsdp_state_dict_type
     global max_tokens, global_batch_size, micro_batch_size, learning_rate
     global total_evals, warmup_tokens, log_step_interval, save_step_interval
@@ -324,6 +324,10 @@ def setup(
             train_config = trainer_cfg.train_config
         if 'train_name' in trainer_cfg:
             train_name = trainer_cfg.train_name
+        if 'wandb_project' in trainer_cfg:
+            train_config = trainer_cfg.wandb_project
+        if 'wandb_run_name' in trainer_cfg:
+            name = trainer_cfg.wandb_run_name
         if "out_dir" in trainer_cfg:
             out_dir = Path(trainer_cfg.out_dir)
         if "use_sample_dataset" in trainer_cfg:
@@ -461,7 +465,16 @@ def setup(
         "uncond_prob": uncond_prob,
     }
     
-    wandb_logger = WandbLogger(project=train_config, name=name)
+    # 允许 config 通过 wandb_project / wandb_run_name 覆盖 project/run name
+    if "wandb_project" in config_dict.get("trainer", {}):
+        wandb_project_val = config_dict["trainer"]["wandb_project"]
+    else:
+        wandb_project_val = train_config
+    if "wandb_run_name" in config_dict.get("trainer", {}):
+        wandb_run_name_val = config_dict["trainer"]["wandb_run_name"]
+    else:
+        wandb_run_name_val = name
+    wandb_logger = WandbLogger(project=wandb_project_val, name=wandb_run_name_val)
 
     # ========== 加载模型 ==========
     if config_dict is not None and "model" in config_dict:
