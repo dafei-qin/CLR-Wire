@@ -81,6 +81,7 @@ warnings.filterwarnings("ignore", message="When using.*NO_SHARD.*")
 # num_epochs = 20
 # batch_size = None  # 将在 setup 中计算
 # gradient_accumulation_steps = None  # 将在 setup 中计算
+enable_placeholder_mask = True  # 默认开启 placeholder mask
 # log_iter_interval = None  # 将在 setup 中计算
 
 # hparams 将在 setup 函数中从配置读取后创建
@@ -304,7 +305,7 @@ def setup(
         print(f"⚠️  Config file not found: {config_path}, using default settings")
     
     # ========== 从配置文件读取训练参数 ==========
-    global model_name, train_config, train_name, name, wandb_project_override, wandb_run_name_override, out_dir, devices, num_nodes, total_gpus, use_sample_dataset
+    global model_name, train_config, train_name, name, wandb_project_override, wandb_run_name_override, enable_placeholder_mask, out_dir, devices, num_nodes, total_gpus, use_sample_dataset
     global freeze_conditioner, conditioner_lr_scale, fsdp_state_dict_type
     global max_tokens, global_batch_size, micro_batch_size, learning_rate
     global total_evals, warmup_tokens, log_step_interval, save_step_interval
@@ -328,6 +329,8 @@ def setup(
             train_config = trainer_cfg.wandb_project
         if 'wandb_run_name' in trainer_cfg:
             name = trainer_cfg.wandb_run_name
+        if 'enable_placeholder_mask' in trainer_cfg:
+            enable_placeholder_mask = trainer_cfg.enable_placeholder_mask
         if "out_dir" in trainer_cfg:
             out_dir = Path(trainer_cfg.out_dir)
         if "use_sample_dataset" in trainer_cfg:
@@ -932,12 +935,16 @@ def train(fabric, state, train_dataloader, val_dataloader, monitor, resume):
             pos = torch.arange(seq_len, device=fabric.device).unsqueeze(0)  # (1, T)
             pad_mask = (pos < valid_lens.unsqueeze(1)).to(torch.float32)  # (B, T), True 表示有效位置
 
-            # 🔧 Placeholder mask：不对 placeholder 位置计算 loss
+            # 🔧 Placeholder mask：不对 placeholder 位置计算 loss（可通过 config 的 enable_placeholder_mask 控制）
             # placeholder_id = codebook_size + 2 = 1026，这些位置语义已知（类型决定），无需学习预测
-            placeholder_id = train_dataloader.dataset.placeholder_id
-            placeholder_mask = (target_token != placeholder_id).to(torch.float32)  # (B, T)
-            combined_mask = pad_mask * placeholder_mask  # (B, T)
-            valid_lens_combined = combined_mask.sum(dim=1).clamp(min=1)  # (B,)
+            if enable_placeholder_mask:
+                placeholder_id = train_dataloader.dataset.placeholder_id
+                placeholder_mask = (target_token != placeholder_id).to(torch.float32)  # (B, T)
+                combined_mask = pad_mask * placeholder_mask  # (B, T)
+                valid_lens_combined = combined_mask.sum(dim=1).clamp(min=1)  # (B,)
+            else:
+                combined_mask = pad_mask  # (B, T)，不屏蔽 placeholder
+                valid_lens_combined = valid_lens  # (B,)
 
 
             is_accumulating = (state["iter_num"] + 1) % gradient_accumulation_steps != 0
