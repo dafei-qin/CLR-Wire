@@ -919,6 +919,13 @@ def train(fabric, state, train_dataloader, val_dataloader, monitor, resume):
             pos = torch.arange(seq_len, device=fabric.device).unsqueeze(0)  # (1, T)
             pad_mask = (pos < valid_lens.unsqueeze(1)).to(torch.float32)  # (B, T), True 表示有效位置
 
+            # 🔧 Placeholder mask：不对 placeholder 位置计算 loss
+            # placeholder_id = codebook_size + 2 = 1026，这些位置语义已知（类型决定），无需学习预测
+            placeholder_id = train_dataloader.dataset.placeholder_id
+            placeholder_mask = (target_token != placeholder_id).to(torch.float32)  # (B, T)
+            combined_mask = pad_mask * placeholder_mask  # (B, T)
+            valid_lens_combined = combined_mask.sum(dim=1).clamp(min=1)  # (B,)
+
 
             is_accumulating = (state["iter_num"] + 1) % gradient_accumulation_steps != 0
             
@@ -943,15 +950,15 @@ def train(fabric, state, train_dataloader, val_dataloader, monitor, resume):
                     reduction='none'
                 ).view(batch_size, seq_len)  # (B, T)
                 
-                # 只对有效位置计算 loss（使用位置 mask）
-                masked_loss = per_token_loss * pad_mask  # (B, T)
-                per_sample_loss = masked_loss.sum(dim=1) / valid_lens.to(masked_loss.dtype)  # (B,)
+                # 只对有效且非 placeholder 位置计算 loss
+                masked_loss = per_token_loss * combined_mask  # (B, T)
+                per_sample_loss = masked_loss.sum(dim=1) / valid_lens_combined.to(masked_loss.dtype)  # (B,)
                 loss = per_sample_loss.mean()  # scalar
                 
                 with torch.no_grad():
                     pred_tokens = torch.argmax(logits, dim=-1)
-                    acc = (pred_tokens == target_token) * pad_mask
-                    acc_per_sample = acc.sum(dim=1) / valid_lens.to(acc.dtype)
+                    acc = (pred_tokens == target_token) * combined_mask
+                    acc_per_sample = acc.sum(dim=1) / valid_lens_combined.to(acc.dtype)
                     acc = acc.mean()
 
                 
