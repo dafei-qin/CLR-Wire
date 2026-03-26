@@ -393,9 +393,10 @@ class dataset_compound(Dataset):
         self.canonical = canonical   
         print('canonical: ', self.canonical)     
         self.bspline_fit_threshold = bspline_fit_threshold
-        # Discover all JSON files in directory and subdirectories
+        # Discover all JSON files in directory and subdirectories (exclude .misc.json)
         self.json_names = sorted([
             str(p) for p in self.json_dir.rglob("*.json")
+            if not str(p).endswith('.misc.json')
         ])
         
         if not self.json_names:
