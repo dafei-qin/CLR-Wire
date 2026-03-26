@@ -63,6 +63,8 @@ def render_single_view(surfaces, all_points, view_name, output_path, width=1920,
             if 'vertices' in surface_data and 'faces' in surface_data:
                 vertices = surface_data['vertices']
                 faces = surface_data['faces']
+                if len(vertices) == 0 or len(faces) == 0:
+                    continue  # Skip empty meshes
                 surface_index = surface_data.get('surface_index', 0)
                 surface_type = surface_data.get('surface_type', 'unknown')
                 ps.register_surface_mesh(
@@ -176,6 +178,9 @@ def process_sample(dataset, index, output_dir, vae_model, width=1920, height=108
         print(
             f"  Applied VAE FSQ quantization on {bspline_poles.shape[0]} bspline surfaces"
         )
+    
+    # Remove padding tokens before detokenize (same as batch_infer_kvcache.py)
+    tokens = tokens[tokens != dataset.pad_id]
     
     # Detokenize using (potentially) quantized bspline poles
     detok_surfaces = dataset.detokenize(tokens, bspline_poles_for_detok)

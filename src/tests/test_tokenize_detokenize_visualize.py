@@ -127,12 +127,12 @@ def process_sample(idx: int):
     if (
         vae_model is not None
         and isinstance(bspline_poles, np.ndarray)
-        and bspline_poles.size > 0
+        and bspline_valid_mask.any()
     ):
 
-        # bspline_poles: (B, 4, 4, 4) where last dim is [x, y, z, w]
-        # We take (4, 4, 3) as patches for DCAE-FSQ
-        patches_np = bspline_poles[..., :3]  # (B, 4, 4, 3)
+        # Only process valid bspline poles
+        valid_poles = bspline_poles[bspline_valid_mask]
+        patches_np = valid_poles[..., :3]  # (B, 4, 4, 3)
         patches = torch.from_numpy(patches_np).float()  # to torch
         patches = einops.rearrange(patches, "b h w c -> b c h w")  # (B, 3, 4, 4)
 
@@ -169,8 +169,8 @@ def process_sample(idx: int):
 
         # Rebuild poles: (x, y, z) from recon, w=1
         new_poles = np.array(bspline_poles, copy=True)
-        new_poles[..., :3] = x_recon_np
-        new_poles[..., 3] = 1.0
+        new_poles[bspline_valid_mask][..., :3] = x_recon_np
+        new_poles[bspline_valid_mask][..., 3] = 1.0
 
         bspline_poles_for_detok = new_poles
         print(
@@ -178,6 +178,9 @@ def process_sample(idx: int):
         )
 
 
+    # Remove padding tokens before detokenize (same as batch_infer_kvcache.py)
+    tokens = tokens[tokens != dataset.pad_id]
+    
     # Detokenize using (potentially) quantized bspline poles
     detok_surfaces = dataset.detokenize(tokens, bspline_poles_for_detok)
 
