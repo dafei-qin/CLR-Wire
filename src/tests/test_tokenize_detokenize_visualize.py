@@ -169,8 +169,9 @@ def process_sample(idx: int):
 
         # Rebuild poles: (x, y, z) from recon, w=1
         new_poles = np.array(bspline_poles, copy=True)
-        new_poles[bspline_valid_mask][..., :3] = x_recon_np
-        new_poles[bspline_valid_mask][..., 3] = 1.0
+        valid_indices = np.where(bspline_valid_mask)[0]
+        new_poles[valid_indices, ..., :3] = x_recon_np
+        new_poles[valid_indices, ..., 3] = 1.0
 
         bspline_poles_for_detok = new_poles
         print(
