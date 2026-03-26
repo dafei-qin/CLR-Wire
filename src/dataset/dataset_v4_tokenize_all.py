@@ -559,7 +559,8 @@ class dataset_compound_tokenize_all(Dataset):
                         poles_canonical, _rotation, _shift, _scale = self.dataset_compound.dataset_compound._canonicalize_bspline_poles(fitted_poles.copy(), fitted_surface)
 
 
-                        surface = surface_template['bspline_surface']
+                        from copy import deepcopy
+                        surface = deepcopy(surface_template['bspline_surface'])
                         surface['poles'] = np.concatenate(
                         [poles_canonical, np.ones((4, 4, 1))], axis=-1
                     ).tolist()
