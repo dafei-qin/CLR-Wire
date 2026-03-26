@@ -32,7 +32,7 @@ project_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(project_root))
 from src.dataset.dataset_v4_tokenize_all import dataset_compound_tokenize_all
 from src.utils.import_tools import load_model_from_config
-from utils.surface import visualize_json_interset
+from myutils.surface import visualize_json_interset
 
 
 def load_raw_json(json_path: Path):
@@ -118,7 +118,7 @@ def process_sample(dataset, index, output_dir, vae_model, width=1920, height=108
     raw_surfaces = load_raw_json(json_path)
     
     # Tokenize and detokenize
-    all_points, all_normals, tokens, bspline_poles, valid = dataset[index]
+    all_points, all_normals, tokens, bspline_poles, bspline_valid_mask, valid = dataset[index]
     if not valid:
         print(f"  Sample {index} marked invalid, skipping...")
         return False
@@ -129,11 +129,11 @@ def process_sample(dataset, index, output_dir, vae_model, width=1920, height=108
     if (
         vae_model is not None
         and isinstance(bspline_poles, np.ndarray)
-        and bspline_poles.size > 0
+        and bspline_valid_mask.any()
     ):
-        # bspline_poles: (B, 4, 4, 4) where last dim is [x, y, z, w]
-        # We take (4, 4, 3) as patches for DCAE-FSQ
-        patches_np = bspline_poles[..., :3]  # (B, 4, 4, 3)
+        # Only process valid bspline poles
+        valid_poles = bspline_poles[bspline_valid_mask]
+        patches_np = valid_poles[..., :3]  # (B, 4, 4, 3)
         patches = torch.from_numpy(patches_np).float()  # to torch
         patches = einops.rearrange(patches, "b h w c -> b c h w")  # (B, 3, 4, 4)
 
@@ -169,8 +169,8 @@ def process_sample(dataset, index, output_dir, vae_model, width=1920, height=108
 
         # Rebuild poles: (x, y, z) from recon, w=1
         new_poles = np.array(bspline_poles, copy=True)
-        new_poles[..., :3] = x_recon_np
-        new_poles[..., 3] = 1.0
+        new_poles[bspline_valid_mask][..., :3] = x_recon_np
+        new_poles[bspline_valid_mask][..., 3] = 1.0
 
         bspline_poles_for_detok = new_poles
         print(
@@ -304,8 +304,8 @@ def main():
     
     # Initialize virtual display
     print("Initializing virtual display...")
-    display = Display(visible=False, size=(args.width, args.height))
-    display.start()
+    # display = Display(visible=False, size=(args.width, args.height))
+    # display.start()
     
     try:
         # Initialize polyscope
@@ -324,7 +324,7 @@ def main():
         
     finally:
         # Clean up
-        display.stop()
+        # display.stop()
         ps.shutdown()
 
 
