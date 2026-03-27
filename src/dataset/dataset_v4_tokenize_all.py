@@ -511,11 +511,14 @@ class dataset_compound_tokenize_all(Dataset):
 
         all_shifts_diff = np.abs(self.translation_codebook.decode(all_shifts_code) - all_shifts).sum(axis=1)
         all_scales_diff = np.abs(self.scale_codebook.decode(all_scales_code) - all_scales)
-        flag_bspline_replacement = (all_scales_diff > 1e-2) | (all_shifts_diff > 1e-2)
+        flag_bspline_replacement = (all_scales_diff > self.bspline_fit_threshold) | (all_shifts_diff > self.bspline_fit_threshold)
 
         # If params too large, try use bspline fitting.
         for s_idx in range(len(flag_bspline_replacement)):
             if flag_bspline_replacement[s_idx]:
+                # Skip bspline surfaces — they are already bspline, no replacement needed
+                if int(types_tensor[s_idx]) == 5:
+                    continue
                 surface = all_recon_surfaces[s_idx]
 
                 # Try bspline fitting in the original space
