@@ -1,0 +1,27 @@
+vae:
+  name: src.vae.vae_v4_dcae_fsq.DCAE_FSQ_VAE
+  pred_is_closed: true
+  load_ckpt: true
+  params:
+      input_size: 4
+      in_channels: 3
+      latent_channels: 3
+      width_base: 64
+      fsq_levels: [4, 4, 4, 4]
+      num_codebooks: 6
+  
+  checkpoint_folder: checkpoints/train_vae_v4_bspline_only_dcae_fsq_6tokens_256
+  checkpoint_file_name: model-10.pt
+
+data_train:
+  name: src.dataset.dataset_v4_tokenize_all.dataset_compound_tokenize_all
+  params:
+    json_dir: /home/node/data/ssd/CAD/data/abc_1m_matched/train
+    rts_codebook_dir: assets/codebook_256
+    max_tokens: 1000
+    canonical: true
+    detect_closed: false
+    bspline_fit_threshold: 0.015
+    codebook_size: 256
+    replica: 1
+    rotation_augment: false
