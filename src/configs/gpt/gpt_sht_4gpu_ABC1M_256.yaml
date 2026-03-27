@@ -1,0 +1,123 @@
+trainer:
+    # Model and training config names
+    model_name: "GPT_SHT_4GPU_ABC1M_256"
+    train_config: "CLR-Wire-GPT"  # WandB project name
+    train_name: "sht_4gpu_abc1m_256codebook"  # WandB run name
+    # Output directory
+    out_dir: "/home/node/CAD/CLR-Wire/checkpoints/GPT_SHT_4GPU_ABC1M_256/"
+    
+    use_sample_dataset: false
+    
+    # ShapeVAE Conditioner 训练配置
+    freeze_conditioner: false
+    conditioner_lr_scale: 1.0
+    
+    # Checkpoint 配置
+    fsdp_state_dict_type: "full"
+    
+    # Training hyperparameters
+    max_tokens: 1e9
+    global_batch_size: 80   # 4 devices × 4 × 5 accumulation
+    micro_batch_size: 4     # 每张卡 4（平衡显存和效率）
+    learning_rate: 1e-4
+    total_evals: 400
+    warmup_tokens: null
+    log_step_interval: 10
+    save_step_interval: 2500
+    eval_step_interval: 100000000000000
+    num_extrapol: 4
+    
+    # Optimizer parameters
+    weight_decay: 1e-1
+    beta1: 0.9
+    beta2: 0.95
+    grad_clip: 1.0
+    decay_lr: true
+    min_lr: 1e-5
+    
+    # Training epochs
+    num_epochs: 200
+    
+    # DDP configuration
+    find_unused_parameters: true  # 允许 Michelangelo 参数不接收梯度
+    
+    use_michelangelo_grad: false
+
+model: 
+  name: lit_gpt.model.GPT
+  params:
+    config:
+      org: Lightning-AI
+      name: Diff_LLaMA_142M
+      block_size: 1000
+      vocab_size: 260         # 256 codebook + 4 special tokens (start/end/placeholder/pad)
+      padding_multiple: 64
+      padded_vocab_size: 260
+      n_layer: 15
+      n_head: 12
+      n_embd: 768
+      rotary_percentage: 1.0
+      parallel_residual: false
+      bias: false
+      n_query_groups: 12
+      shared_attention_norm: false
+      _norm_class: FusedRMSNorm
+      norm_eps: 1.0e-5
+      _mlp_class: LLaMAMLP
+      intermediate_size: 3072
+      condense_ratio: 1
+    use_michelangelo: true
+    michelangelo_config_path: ../../third_party/Michelangelo/configs/aligned_shape_latents/shapevae-256-sht.yaml
+    michelangelo_ckpt_path: ../../third_party/Michelangelo/checkpoints/aligned_shape_latents/shapevae-256.ckpt
+
+    build_conditioner: false
+    freeze_conditioner: false
+
+vae:
+  name: src.vae.vae_v4_dcae_fsq.DCAE_FSQ_VAE
+  pred_is_closed: true
+  load_ckpt: true
+  params:
+      input_size: 4
+      in_channels: 3
+      latent_channels: 3
+      width_base: 64
+      fsq_levels: [4, 4, 4, 4]   # 256 codebook: 4^4 = 256
+      num_codebooks: 6
+  
+  checkpoint_folder: ../../checkpoints/train_vae_v4_bspline_only_dcae_fsq_6tokens_256
+  checkpoint_file_name: model-10.pt
+
+data_train:
+  name: src.dataset.dataset_v4_tokenize_all.dataset_compound_tokenize_all
+  params:
+    json_dir: /home/node/data/ssd/CAD/data/abc_1m_matched/train
+    rts_codebook_dir: ../../assets/codebook_256
+    max_tokens: 1000
+    canonical: true
+    detect_closed: false
+    bspline_fit_threshold: 0.015    # relaxed for 256 codebook (was 1e-2)
+    codebook_size: 256
+    replica: 1
+    rotation_augment: true
+    point_augment: true
+    point_augment_intensity: 0.005
+    pc_shape: 4096
+    use_dfs: false
+
+data_val:
+  name: src.dataset.dataset_v4_tokenize_all.dataset_compound_tokenize_all
+  params:
+    json_dir: /home/node/data/ssd/CAD/data/abc_1m_matched/val
+    rts_codebook_dir: ../../assets/codebook_256
+    max_tokens: 1000
+    canonical: true
+    detect_closed: false
+    bspline_fit_threshold: 0.015    # relaxed for 256 codebook (was 1e-2)
+    codebook_size: 256
+    replica: 1
+    rotation_augment: false
+    point_augment: false
+    point_augment_intensity: 0.005
+    pc_shape: 4096
+    use_dfs: false
